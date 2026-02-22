@@ -140,6 +140,16 @@ func wireManagedExtras(
 			}
 		}
 	}
+	if editTool, ok := toolsReg.Get("edit"); ok {
+		if ia, ok := editTool.(tools.InterceptorAware); ok {
+			if contextFileInterceptor != nil {
+				ia.SetContextFileInterceptor(contextFileInterceptor)
+			}
+			if stores.Memory != nil {
+				ia.SetMemoryInterceptor(tools.NewMemoryInterceptor(stores.Memory, workspace))
+			}
+		}
+	}
 
 	// Wire memory store on memory tools (search + get)
 	if stores.Memory != nil {

@@ -10,23 +10,29 @@ export interface CronSchedule {
   tz?: string;
 }
 
+export interface CronPayload {
+  kind: string;
+  message: string;
+  deliver: boolean;
+  channel: string;
+  to: string;
+}
+
 export interface CronJob {
   id: string;
   name: string;
   agentId?: string;
   enabled: boolean;
   schedule: CronSchedule;
-  message: string;
-  deliver: boolean;
-  channel: string;
-  to: string;
+  payload: CronPayload;
   createdAtMs: number;
   updatedAtMs: number;
   deleteAfterRun?: boolean;
   state?: {
-    lastRunMs?: number;
-    nextRunMs?: number;
-    runCount?: number;
+    nextRunAtMs?: number;
+    lastRunAtMs?: number;
+    lastStatus?: string;
+    lastError?: string;
   };
 }
 

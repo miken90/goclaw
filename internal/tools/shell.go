@@ -33,6 +33,25 @@ var defaultDenyPatterns = []*regexp.Regexp{
 	// Dangerous eval from untrusted sources
 	regexp.MustCompile(`\beval\s*\$`),                      // eval $(...)
 	regexp.MustCompile(`\bbase64\s+-d\b.*\|\s*(ba)?sh\b`),  // base64 -d | sh
+
+	// Bypass-resistant patterns (long flags)
+	regexp.MustCompile(`\brm\s+.*--recursive`), // rm --recursive (bypasses rm -rf check)
+	regexp.MustCompile(`\brm\s+.*--force`),     // rm --force
+
+	// Privilege escalation
+	regexp.MustCompile(`\bsudo\b`),    // sudo
+	regexp.MustCompile(`\bsu\s+-`),    // su - (switch user)
+	regexp.MustCompile(`\bnsenter\b`), // namespace escape
+	regexp.MustCompile(`\bunshare\b`), // namespace manipulation
+
+	// Dangerous path operations on root filesystem
+	regexp.MustCompile(`\bchmod\s+[0-7]{3,4}\s+/`), // chmod 777 /...
+	regexp.MustCompile(`\bchown\b.*\s+/`),           // chown ... /...
+
+	// Environment variable injection
+	regexp.MustCompile(`\bLD_PRELOAD\s*=`),               // Linux library injection
+	regexp.MustCompile(`\bDYLD_INSERT_LIBRARIES\s*=`),     // macOS library injection
+	regexp.MustCompile(`\bLD_LIBRARY_PATH\s*=`),           // library path hijack
 }
 
 // ExecTool executes shell commands, optionally inside a sandbox container.

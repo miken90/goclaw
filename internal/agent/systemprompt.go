@@ -58,8 +58,14 @@ var coreToolSummaries = map[string]string{
 	"web_fetch":     "Fetch and extract content from a URL",
 	"cron":          "Manage scheduled jobs and reminders",
 	"skill_search":  "Search available skills by keyword (weather, translate, github, etc.)",
-	"browser":       "Browse web pages interactively",
-	"tts":           "Convert text to speech audio",
+	"browser":          "Browse web pages interactively",
+	"tts":              "Convert text to speech audio",
+	"edit":             "Edit a file by replacing exact text matches",
+	"message":          "Send a message to a channel (Telegram, Discord, etc.)",
+	"sessions_list":    "List sessions for this agent",
+	"session_status":   "Show session status (model, tokens, compaction count)",
+	"sessions_history": "Fetch message history for a session",
+	"sessions_send":    "Send a message into another session",
 }
 
 // BuildSystemPrompt constructs the full system prompt with all sections.

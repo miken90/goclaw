@@ -51,6 +51,10 @@ func Default() *Config {
 				Enabled:  true,
 				Headless: true,
 			},
+			ExecApproval: ExecApprovalCfg{
+				Security: "full",
+				Ask:      "off",
+			},
 		},
 		Sessions: SessionsConfig{
 			Storage: "~/.goclaw/sessions",

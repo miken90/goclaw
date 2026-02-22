@@ -171,6 +171,42 @@ func (s *PGCronStore) UpdateJob(jobID string, patch store.CronJobPatch) (*store.
 	if patch.DeleteAfterRun != nil {
 		updates["delete_after_run"] = *patch.DeleteAfterRun
 	}
+
+	// Update agent_id column
+	if patch.AgentID != nil {
+		if *patch.AgentID == "" {
+			updates["agent_id"] = nil
+		} else if aid, parseErr := uuid.Parse(*patch.AgentID); parseErr == nil {
+			updates["agent_id"] = aid
+		}
+	}
+
+	// Update payload JSONB — fetch current, merge patch fields, re-serialize
+	needsPayloadUpdate := patch.Message != "" || patch.Deliver != nil || patch.Channel != nil || patch.To != nil
+	if needsPayloadUpdate {
+		var payloadJSON []byte
+		if scanErr := s.db.QueryRow("SELECT payload FROM cron_jobs WHERE id = $1", id).Scan(&payloadJSON); scanErr == nil {
+			var payload store.CronPayload
+			json.Unmarshal(payloadJSON, &payload)
+
+			if patch.Message != "" {
+				payload.Message = patch.Message
+			}
+			if patch.Deliver != nil {
+				payload.Deliver = *patch.Deliver
+			}
+			if patch.Channel != nil {
+				payload.Channel = *patch.Channel
+			}
+			if patch.To != nil {
+				payload.To = *patch.To
+			}
+
+			merged, _ := json.Marshal(payload)
+			updates["payload"] = merged
+		}
+	}
+
 	updates["updated_at"] = time.Now()
 
 	if err := execMapUpdate(context.Background(), s.db, "cron_jobs", id, updates); err != nil {

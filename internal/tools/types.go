@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 
+	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
@@ -62,6 +63,25 @@ type ApprovalAware interface {
 // PathAllowable tools can allow extra path prefixes for read access.
 type PathAllowable interface {
 	AllowPaths(...string)
+}
+
+// SessionStoreAware tools can receive a SessionStore for session queries.
+type SessionStoreAware interface {
+	SetSessionStore(store.SessionStore)
+}
+
+// BusAware tools can receive a MessageBus for publishing messages.
+type BusAware interface {
+	SetMessageBus(*bus.MessageBus)
+}
+
+// ChannelSender abstracts sending a message to a channel.
+// Implemented by channels.Manager.SendToChannel.
+type ChannelSender func(ctx context.Context, channel, chatID, content string) error
+
+// ChannelSenderAware tools can receive a channel sender function.
+type ChannelSenderAware interface {
+	SetChannelSender(ChannelSender)
 }
 
 // ToProviderDef converts a Tool to a providers.ToolDefinition for LLM APIs.

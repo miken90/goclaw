@@ -210,6 +210,10 @@ func saveCleanConfig(cfgPath string, cfg *config.Config) error {
 			"enabled":  cfg.Tools.Browser.Enabled,
 			"headless": cfg.Tools.Browser.Headless,
 		},
+		"execApproval": map[string]interface{}{
+			"security": nonEmpty(cfg.Tools.ExecApproval.Security, "full"),
+			"ask":      nonEmpty(cfg.Tools.ExecApproval.Ask, "off"),
+		},
 	}
 
 	// Build agents section.

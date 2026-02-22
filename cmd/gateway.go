@@ -127,11 +127,13 @@ func runGateway() {
 		toolsReg.Register(tools.NewSandboxedReadFileTool(workspace, agentCfg.RestrictToWorkspace, sandboxMgr))
 		toolsReg.Register(tools.NewSandboxedWriteFileTool(workspace, agentCfg.RestrictToWorkspace, sandboxMgr))
 		toolsReg.Register(tools.NewSandboxedListFilesTool(workspace, agentCfg.RestrictToWorkspace, sandboxMgr))
+		toolsReg.Register(tools.NewSandboxedEditTool(workspace, agentCfg.RestrictToWorkspace, sandboxMgr))
 		toolsReg.Register(tools.NewSandboxedExecTool(workspace, agentCfg.RestrictToWorkspace, sandboxMgr))
 	} else {
 		toolsReg.Register(tools.NewReadFileTool(workspace, agentCfg.RestrictToWorkspace))
 		toolsReg.Register(tools.NewWriteFileTool(workspace, agentCfg.RestrictToWorkspace))
 		toolsReg.Register(tools.NewListFilesTool(workspace, agentCfg.RestrictToWorkspace))
+		toolsReg.Register(tools.NewEditTool(workspace, agentCfg.RestrictToWorkspace))
 		toolsReg.Register(tools.NewExecTool(workspace, agentCfg.RestrictToWorkspace))
 	}
 
@@ -239,20 +241,20 @@ func runGateway() {
 		slog.Info("subagent system enabled", "tools", []string{"spawn", "subagent"})
 	}
 
-	// Exec approval system (matching TS exec-approval.ts)
+	// Exec approval system — always active (deny patterns + safe bins + configurable ask mode)
 	var execApprovalMgr *tools.ExecApprovalManager
-	if eaCfg := cfg.Tools.ExecApproval; eaCfg.Security != "" || eaCfg.Ask != "" {
-		approvalCfg := tools.ExecApprovalConfig{
-			Security: tools.ExecSecurity(eaCfg.Security),
-			Ask:      tools.ExecAskMode(eaCfg.Ask),
+	{
+		approvalCfg := tools.DefaultExecApprovalConfig()
+		// Override from user config (backward compat: explicit values take precedence)
+		if eaCfg := cfg.Tools.ExecApproval; eaCfg.Security != "" {
+			approvalCfg.Security = tools.ExecSecurity(eaCfg.Security)
 		}
-		if approvalCfg.Security == "" {
-			approvalCfg.Security = tools.ExecSecurityFull
+		if eaCfg := cfg.Tools.ExecApproval; eaCfg.Ask != "" {
+			approvalCfg.Ask = tools.ExecAskMode(eaCfg.Ask)
 		}
-		if approvalCfg.Ask == "" {
-			approvalCfg.Ask = tools.ExecAskOff
+		if len(cfg.Tools.ExecApproval.Allowlist) > 0 {
+			approvalCfg.Allowlist = cfg.Tools.ExecApproval.Allowlist
 		}
-		approvalCfg.Allowlist = eaCfg.Allowlist
 		execApprovalMgr = tools.NewExecApprovalManager(approvalCfg)
 
 		// Wire approval to exec tools in the registry
@@ -261,7 +263,7 @@ func runGateway() {
 				aa.SetApprovalManager(execApprovalMgr, "default")
 			}
 		}
-		slog.Info("exec approval enabled", "security", eaCfg.Security, "ask", eaCfg.Ask)
+		slog.Info("exec approval enabled", "security", string(approvalCfg.Security), "ask", string(approvalCfg.Ask))
 	}
 
 	// --- Enforcement: Policy engines ---
@@ -454,6 +456,20 @@ func runGateway() {
 		}
 	}
 
+	// Cron tool (agent-facing, matching TS cron-tool.ts)
+	toolsReg.Register(tools.NewCronTool(cronStore))
+	slog.Info("cron tool registered")
+
+	// Session tools (list, status, history, send)
+	toolsReg.Register(tools.NewSessionsListTool())
+	toolsReg.Register(tools.NewSessionStatusTool())
+	toolsReg.Register(tools.NewSessionsHistoryTool())
+	toolsReg.Register(tools.NewSessionsSendTool())
+
+	// Message tool (send to channels)
+	toolsReg.Register(tools.NewMessageTool())
+	slog.Info("session + message tools registered")
+
 	// Allow read_file to access skills directories (outside workspace).
 	// Skills can live in ~/.goclaw/skills/, ~/.agents/skills/, etc.
 	homeDir, _ := os.UserHomeDir()
@@ -468,6 +484,24 @@ func runGateway() {
 
 	// Memory detection
 	hasMemory := memMgr != nil
+
+	// Wire SessionStoreAware + BusAware on tools that need them
+	for _, name := range []string{"sessions_list", "session_status", "sessions_history", "sessions_send"} {
+		if t, ok := toolsReg.Get(name); ok {
+			if sa, ok := t.(tools.SessionStoreAware); ok {
+				sa.SetSessionStore(sessStore)
+			}
+			if ba, ok := t.(tools.BusAware); ok {
+				ba.SetMessageBus(msgBus)
+			}
+		}
+	}
+	// Wire BusAware on message tool
+	if t, ok := toolsReg.Get("message"); ok {
+		if ba, ok := t.(tools.BusAware); ok {
+			ba.SetMessageBus(msgBus)
+		}
+	}
 
 	// Create all agents
 	agentRouter := agent.NewRouter()
@@ -563,6 +597,13 @@ func runGateway() {
 
 	// Channel manager
 	channelMgr := channels.NewManager(msgBus)
+
+	// Wire channel sender on message tool (now that channelMgr exists)
+	if t, ok := toolsReg.Get("message"); ok {
+		if cs, ok := t.(tools.ChannelSenderAware); ok {
+			cs.SetChannelSender(channelMgr.SendToChannel)
+		}
+	}
 
 	// Managed mode: load channel instances from DB first.
 	var instanceLoader *channels.InstanceLoader

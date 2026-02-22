@@ -53,23 +53,27 @@ func DefaultExecApprovalConfig() ExecApprovalConfig {
 }
 
 // safeBins are command names that are always considered safe.
-// Matching TS exec-approval.ts safeBins list.
+// Only includes read-only, text processing, and dev tools.
+// Infrastructure/network tools (docker, kubectl, terraform, ansible,
+// curl, wget, ssh, scp, rsync) are excluded — they require approval
+// when ask mode is "on-miss".
 var safeBins = map[string]bool{
+	// Read-only / info tools
 	"cat": true, "echo": true, "ls": true, "pwd": true, "head": true,
 	"tail": true, "wc": true, "sort": true, "uniq": true, "grep": true,
 	"find": true, "which": true, "whoami": true, "date": true, "env": true,
 	"printenv": true, "uname": true, "id": true, "hostname": true,
 	"df": true, "du": true, "free": true, "uptime": true, "file": true,
 	"stat": true, "dirname": true, "basename": true, "realpath": true,
+	// Text processing
 	"jq": true, "yq": true, "sed": true, "awk": true, "tr": true,
 	"cut": true, "diff": true, "patch": true, "tee": true, "xargs": true,
+	// Dev tools (core purpose of a coding agent)
 	"git": true, "node": true, "npm": true, "npx": true, "yarn": true,
 	"pnpm": true, "bun": true, "deno": true, "python": true, "python3": true,
 	"pip": true, "pip3": true, "go": true, "cargo": true, "rustc": true,
 	"make": true, "cmake": true, "gcc": true, "g++": true, "clang": true,
 	"java": true, "javac": true, "mvn": true, "gradle": true,
-	"docker": true, "kubectl": true, "terraform": true, "ansible": true,
-	"curl": true, "wget": true, "ssh": true, "scp": true, "rsync": true,
 }
 
 // ApprovalDecision is the user's response to an approval request.

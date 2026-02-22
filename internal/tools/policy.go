@@ -62,6 +62,7 @@ var toolAliases = map[string]string{
 
 // Subagent deny lists — tools subagents cannot use.
 var subagentDenyList = []string{
+	"exec", // subagents should not shell out — main agent can still exec
 	"gateway", "agents_list", "whatsapp_login", "session_status",
 	"cron", "memory_search", "memory_get", "sessions_send",
 }

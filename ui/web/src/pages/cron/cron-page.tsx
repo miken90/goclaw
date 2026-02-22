@@ -104,7 +104,7 @@ export function CronPage() {
                       <Badge variant="outline">{formatSchedule(job)}</Badge>
                     </td>
                     <td className="max-w-[200px] truncate px-4 py-3 text-muted-foreground">
-                      {job.message}
+                      {job.payload?.message}
                     </td>
                     <td className="px-4 py-3">
                       {job.agentId ? (
