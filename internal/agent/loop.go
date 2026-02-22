@@ -43,9 +43,10 @@ type Loop struct {
 
 	eventPub   bus.EventPublisher // currently unused by Loop; kept for future use
 	sessions   store.SessionStore
-	tools      *tools.Registry
-	toolPolicy *tools.PolicyEngine // optional: filters tools sent to LLM
-	running    atomic.Bool
+	tools           *tools.Registry
+	toolPolicy      *tools.PolicyEngine    // optional: filters tools sent to LLM
+	agentToolPolicy *config.ToolPolicySpec // per-agent tool policy from DB (nil = no restrictions)
+	running         atomic.Bool
 	mu         sync.Mutex // protects concurrent runs
 
 	// Bootstrap/persona context (loaded at startup, injected into system prompt)
@@ -101,9 +102,10 @@ type LoopConfig struct {
 	Workspace     string
 	Bus           bus.EventPublisher
 	Sessions      store.SessionStore
-	Tools         *tools.Registry
-	ToolPolicy    *tools.PolicyEngine // optional: filters tools sent to LLM
-	OnEvent       func(AgentEvent)
+	Tools           *tools.Registry
+	ToolPolicy      *tools.PolicyEngine    // optional: filters tools sent to LLM
+	AgentToolPolicy *config.ToolPolicySpec // per-agent tool policy from DB (nil = no restrictions)
+	OnEvent         func(AgentEvent)
 
 	// Bootstrap/persona context
 	OwnerIDs       []string
@@ -174,9 +176,10 @@ func NewLoop(cfg LoopConfig) *Loop {
 		workspace:     cfg.Workspace,
 		eventPub:      cfg.Bus,
 		sessions:      cfg.Sessions,
-		tools:         cfg.Tools,
-		toolPolicy:    cfg.ToolPolicy,
-		onEvent:       cfg.OnEvent,
+		tools:           cfg.Tools,
+		toolPolicy:      cfg.ToolPolicy,
+		agentToolPolicy: cfg.AgentToolPolicy,
+		onEvent:         cfg.OnEvent,
 		ownerIDs:      cfg.OwnerIDs,
 		skillsLoader:   cfg.SkillsLoader,
 		skillAllowList: cfg.SkillAllowList,
@@ -403,7 +406,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 		// Build provider request with policy-filtered tools
 		var toolDefs []providers.ToolDefinition
 		if l.toolPolicy != nil {
-			toolDefs = l.toolPolicy.FilterTools(l.tools, l.id, l.provider.Name(), nil, nil, false, false)
+			toolDefs = l.toolPolicy.FilterTools(l.tools, l.id, l.provider.Name(), l.agentToolPolicy, nil, false, false)
 		} else {
 			toolDefs = l.tools.ProviderDefs()
 		}

@@ -87,6 +87,17 @@ func (c *Channel) Send(_ context.Context, msg bus.OutboundMessage) error {
 
 	content := msg.Content
 
+	// NO_REPLY cleanup: content is empty when agent suppresses reply.
+	// Delete placeholder and return without sending any message.
+	if content == "" {
+		if pID, ok := c.placeholders.Load(channelID); ok {
+			c.placeholders.Delete(channelID)
+			msgID := pID.(string)
+			_ = c.session.ChannelMessageDelete(channelID, msgID)
+		}
+		return nil
+	}
+
 	// Try to edit the placeholder "Thinking..." message
 	if pID, ok := c.placeholders.Load(channelID); ok {
 		c.placeholders.Delete(channelID)

@@ -136,6 +136,7 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			Sessions:          deps.Sessions,
 			Tools:             toolsReg,
 			ToolPolicy:        deps.ToolPolicy,
+			AgentToolPolicy:   ag.ParseToolsConfig(),
 			SkillsLoader:      deps.Skills,
 			HasMemory:         deps.HasMemory,
 			ContextFiles:      contextFiles,

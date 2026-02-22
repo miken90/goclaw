@@ -68,8 +68,10 @@ func createAgentLoop(agentID string, cfg *config.Config, router *agent.Router, p
 	// Per-agent skill allowlist.
 	// AgentSpec.Skills: nil = all skills, [] = none, ["x","y"] = only those.
 	var skillAllowList []string
+	var agentToolPolicy *config.ToolPolicySpec
 	if spec, ok := cfg.Agents.List[agentID]; ok {
 		skillAllowList = spec.Skills
+		agentToolPolicy = spec.Tools
 	}
 
 	loop := agent.NewLoop(agent.LoopConfig{
@@ -82,7 +84,8 @@ func createAgentLoop(agentID string, cfg *config.Config, router *agent.Router, p
 		Bus:            msgBus,
 		Sessions:       sess,
 		Tools:          toolsReg,
-		ToolPolicy:     toolPE,
+		ToolPolicy:      toolPE,
+		AgentToolPolicy: agentToolPolicy,
 		OwnerIDs:       cfg.Gateway.OwnerIDs,
 		SkillsLoader:   skillsLoader,
 		SkillAllowList: skillAllowList,

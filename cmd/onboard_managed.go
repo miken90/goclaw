@@ -112,16 +112,17 @@ func seedManagedData(dsn string, cfg *config.Config) error {
 	// 4. Seed default agent (skip if already exists)
 	workspace := config.ExpandHome(cfg.Agents.Defaults.Workspace)
 	agent := &store.AgentData{
-		AgentKey:        "default",
-		DisplayName:     "Default Agent",
-		OwnerID:         "system",
-		AgentType:       "open",
-		Provider:        defaultProvider,
-		Model:           modelID,
-		Workspace:       workspace,
-		IsDefault:       true,
-		Status:          "active",
-		SubagentsConfig: json.RawMessage(`{"maxSpawnDepth":1,"maxConcurrent":20}`),
+		AgentKey:            "default",
+		DisplayName:         "Default Agent",
+		OwnerID:             "system",
+		AgentType:           "open",
+		Provider:            defaultProvider,
+		Model:               modelID,
+		Workspace:           workspace,
+		RestrictToWorkspace: true,
+		IsDefault:           true,
+		Status:              "active",
+		SubagentsConfig:     json.RawMessage(`{"maxSpawnDepth":1,"maxConcurrent":20}`),
 	}
 
 	if err := stores.Agents.Create(ctx, agent); err != nil {

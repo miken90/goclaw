@@ -62,7 +62,7 @@ var safeBins = map[string]bool{
 	"cat": true, "echo": true, "ls": true, "pwd": true, "head": true,
 	"tail": true, "wc": true, "sort": true, "uniq": true, "grep": true,
 	"find": true, "which": true, "whoami": true, "date": true,
-	"uname": true, "id": true, "hostname": true,
+	"uname": true, "hostname": true,
 	"df": true, "du": true, "free": true, "uptime": true, "file": true,
 	"stat": true, "dirname": true, "basename": true, "realpath": true,
 	// Text processing

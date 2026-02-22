@@ -57,6 +57,16 @@ func (c *Channel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 		c.stopThinking.Delete(localKey)
 	}
 
+	// NO_REPLY cleanup: content is empty when agent suppresses reply (prompt injection, etc.).
+	// Clean up placeholder, then return without sending any message.
+	if msg.Content == "" && len(msg.Media) == 0 {
+		if pID, ok := c.placeholders.Load(localKey); ok {
+			c.placeholders.Delete(localKey)
+			_ = c.deleteMessage(ctx, chatID, pID.(int))
+		}
+		return nil
+	}
+
 	// Handle media attachments if present
 	if len(msg.Media) > 0 {
 		// Delete placeholder since we're sending media
