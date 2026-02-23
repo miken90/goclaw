@@ -305,15 +305,19 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 	_, thinkCancel := context.WithCancel(ctx)
 	c.stopThinking.Store(localKey, &thinkingCancel{fn: thinkCancel})
 
-	// Send placeholder message (TS ref: General topic must omit MessageThreadID in send calls).
-	thinkMsg := tu.Message(chatIDObj, "Thinking...")
-	sendThreadID := resolveThreadIDForSend(messageThreadID)
-	if sendThreadID > 0 {
-		thinkMsg.MessageThreadID = sendThreadID
-	}
-	pMsg, err := c.bot.SendMessage(ctx, thinkMsg)
-	if err == nil {
-		c.placeholders.Store(localKey, pMsg.MessageID)
+	// Send placeholder message only for DMs.
+	// In groups the placeholder drifts away as new messages arrive;
+	// instead the response will be sent as a reply to the sender's message.
+	if !isGroup {
+		thinkMsg := tu.Message(chatIDObj, "Thinking...")
+		sendThreadID := resolveThreadIDForSend(messageThreadID)
+		if sendThreadID > 0 {
+			thinkMsg.MessageThreadID = sendThreadID
+		}
+		pMsg, err := c.bot.SendMessage(ctx, thinkMsg)
+		if err == nil {
+			c.placeholders.Store(localKey, pMsg.MessageID)
+		}
 	}
 
 	metadata := map[string]string{
