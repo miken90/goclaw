@@ -246,20 +246,28 @@ func (b *ContextFileInterceptor) WriteFile(ctx context.Context, path, content st
 	agentType := store.AgentTypeFromContext(ctx)
 
 	// Permission check: protected files in group context require allowlist membership.
+	// Exception: during bootstrap onboarding (BOOTSTRAP.md still exists for this user),
+	// USER.md writes are allowed so the bot can complete the first-run ritual.
 	if strings.HasPrefix(userID, "group:") && protectedFileSet[fileName] {
-		senderID := store.SenderIDFromContext(ctx)
-		if senderID != "" {
-			numericID := strings.SplitN(senderID, "|", 2)[0]
-			isWriter, err := b.agentStore.IsGroupFileWriter(ctx, agentID, userID, numericID)
-			if err != nil {
-				slog.Warn("security.group_file_writer_check_failed",
-					"error", err, "sender", numericID, "file", fileName, "group", userID)
-				// fail open: allow write if DB check fails
-			} else if !isWriter {
-				return true, fmt.Errorf("permission denied: you are not authorized to modify %s in this group. Ask a group file writer to add you with /addwriter", fileName)
-			}
+		skipCheck := false
+		if fileName == "USER.md" && b.hasBootstrapFile(ctx, agentID, userID) {
+			skipCheck = true // onboarding in progress — allow USER.md write
 		}
-		// senderID empty = system context (cron, subagent) → fail open
+		if !skipCheck {
+			senderID := store.SenderIDFromContext(ctx)
+			if senderID != "" {
+				numericID := strings.SplitN(senderID, "|", 2)[0]
+				isWriter, err := b.agentStore.IsGroupFileWriter(ctx, agentID, userID, numericID)
+				if err != nil {
+					slog.Warn("security.group_file_writer_check_failed",
+						"error", err, "sender", numericID, "file", fileName, "group", userID)
+					// fail open: allow write if DB check fails
+				} else if !isWriter {
+					return true, fmt.Errorf("permission denied: you are not authorized to modify %s in this group. Ask a group file writer to add you with /addwriter", fileName)
+				}
+			}
+			// senderID empty = system context (cron, subagent) → fail open
+		}
 	}
 
 	// BOOTSTRAP.md deletion: empty content = first-run completed → delete row.
@@ -422,6 +430,14 @@ func (b *ContextFileInterceptor) InvalidateAll() {
 	defer b.mu.Unlock()
 	b.cache = make(map[uuid.UUID]*contextCacheEntry)
 	b.userCache = make(map[string]*contextCacheEntry)
+}
+
+// hasBootstrapFile checks if BOOTSTRAP.md still exists in user_context_files,
+// indicating the user is still in onboarding. Used to exempt USER.md writes
+// from group permission checks during the first-run ritual.
+func (b *ContextFileInterceptor) hasBootstrapFile(ctx context.Context, agentID uuid.UUID, userID string) bool {
+	content, _, err := b.readUserFile(ctx, agentID, userID, "BOOTSTRAP.md")
+	return err == nil && content != ""
 }
 
 func (b *ContextFileInterceptor) invalidateUser(agentID uuid.UUID, userID string) {
