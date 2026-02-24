@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -247,8 +248,9 @@ func (c *Channel) OnReactionEvent(ctx context.Context, chatID string, messageID 
 		return err
 	}
 
-	// Get or create reaction controller for this message
-	key := chatID
+	// Get or create reaction controller for this message.
+	// Key by messageID so concurrent runs in the same chat don't clash.
+	key := fmt.Sprintf("%s:%d", chatID, messageID)
 	val, _ := c.reactions.LoadOrStore(key, newStatusReactionController(c.bot, id, messageID))
 	rc := val.(*StatusReactionController)
 
@@ -270,7 +272,7 @@ func (c *Channel) ClearReaction(ctx context.Context, chatID string, messageID in
 	}
 
 	// Stop and remove controller if exists
-	key := chatID
+	key := fmt.Sprintf("%s:%d", chatID, messageID)
 	if val, ok := c.reactions.LoadAndDelete(key); ok {
 		rc := val.(*StatusReactionController)
 		rc.Stop()

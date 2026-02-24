@@ -34,6 +34,8 @@ GoClaw is OpenClaw, reimagined in Go. It preserves the powerful gateway architec
 ### Parallel Execution
 
 - **Lane-based scheduler** — Main / subagent / cron lane isolation
+- **Concurrent agent runs** — Multiple users in a group chat get parallel responses (configurable `maxConcurrent`, default 3 for groups). Adaptive throttle reduces concurrency when session history nears summarization threshold
+- **Session history isolation** — Concurrent runs buffer messages locally and flush atomically on completion, preventing cross-run context pollution
 - **Concurrent subagents** — Depth limits, count limits, model override
 - **Batched announce queue** — Debounced result delivery
 
@@ -81,7 +83,7 @@ Standalone mode shares everything across users (same as OpenClaw). Managed mode 
 | Security hardening         | ✅ (SSRF, path traversal, injection) | ✅ (sandbox, rate limit, injection, pairing) | Basic (workspace restrict, exec deny) | ✅ 5-layer defense             |
 | OTel observability         | ✅ (opt-in extension)                | ✅ (Prometheus + OTLP)                       | —                                     | ✅ OTLP (opt-in build tag)     |
 | Skill system               | ✅ Embeddings/semantic               | ✅ SKILL.md + TOML                           | ✅ Basic                              | ✅ BM25 + pgvector hybrid      |
-| Lane-based scheduler       | ✅                                   | Bounded concurrency                          | —                                     | ✅ (main/subagent/cron)        |
+| Lane-based scheduler       | ✅                                   | Bounded concurrency                          | —                                     | ✅ (main/subagent/cron + concurrent group runs) |
 | Messaging channels         | 37+                                  | 15+                                          | 10+                                   | 5+                             |
 | Companion apps             | macOS, iOS, Android                  | Python SDK                                   | —                                     | Web dashboard                  |
 | Live Canvas / Voice        | ✅ (A2UI + TTS/STT)                  | —                                            | Voice transcription                   | TTS (4 providers)              |
@@ -96,7 +98,7 @@ Standalone mode shares everything across users (same as OpenClaw). Managed mode 
 - **Multi-provider LLM support** — OpenRouter, Anthropic, OpenAI, Groq, DeepSeek, Gemini, Mistral, xAI, MiniMax, Cohere, Perplexity, and any OpenAI-compatible endpoint
 - **Agent loop** — Think-act-observe cycle with tool use, session history, and auto-summarization
 - **Subagents** — Spawn child agents with different models for parallel task execution
-- **Messaging channels** — Telegram, Discord, Zalo, Feishu/Lark, WhatsApp
+- **Messaging channels** — Telegram, Discord, Zalo, Feishu/Lark, WhatsApp. `/stop` cancels the current task, `/stopall` cancels all running tasks in a chat
 - **Memory system** — Long-term memory with SQLite FTS5 + vector embeddings (standalone) or pgvector hybrid search (managed)
 - **Skills** — SKILL.md-based knowledge base with BM25 search + embedding hybrid search (managed mode)
 - **Custom tools** — Define shell-based tools at runtime via HTTP API with JSON Schema parameters, auto shell-escaping, and encrypted environment variables (managed mode)
@@ -636,7 +638,7 @@ GOCLAW_OPENROUTER_API_KEY=sk-or-xxx go test -v ./tests/integration/ -timeout 120
 - **WebSocket RPC protocol (v3)** — Connect handshake, chat streaming, event push all tested with web dashboard and integration tests.
 - **Store layer (PostgreSQL)** — All PG stores (sessions, agents, providers, skills, cron, pairing, tracing, memory) implemented and running in managed mode.
 - **Browser automation** — Rod/CDP integration for headless Chrome, tested in production agent workflows.
-- **Lane-based scheduler** — Main/subagent/cron lane isolation with concurrent execution tested.
+- **Lane-based scheduler** — Main/subagent/cron lane isolation with concurrent execution tested. Group chats support up to 3 concurrent agent runs per session with adaptive throttle and deferred session writes for history isolation.
 - **Security hardening** — Rate limiting, prompt injection detection, CORS, shell deny patterns, SSRF protection, credential scrubbing all implemented and verified.
 - **Web dashboard (core)** — Channel management, agent management, pairing approval, traces & spans viewer all implemented and working well.
 

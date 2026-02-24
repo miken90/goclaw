@@ -28,7 +28,7 @@ func (l *Loop) ID() string { return l.id }
 func (l *Loop) Model() string { return l.model }
 
 // IsRunning returns whether the agent is currently processing.
-func (l *Loop) IsRunning() bool { return l.running.Load() }
+func (l *Loop) IsRunning() bool { return l.activeRuns.Load() > 0 }
 
 // emitLLMSpan records an LLM call span if tracing is active.
 // When GOCLAW_TRACE_VERBOSE is set, messages are serialized as InputPreview.
@@ -184,7 +184,9 @@ func truncateStr(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
-func estimateTokens(messages []providers.Message) int {
+// EstimateTokens returns a rough token estimate for a slice of messages.
+// Used internally for summarization thresholds and externally for adaptive throttle.
+func EstimateTokens(messages []providers.Message) int {
 	total := 0
 	for _, m := range messages {
 		total += utf8.RuneCountInString(m.Content) / 3

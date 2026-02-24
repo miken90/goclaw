@@ -209,7 +209,7 @@ func TestEstimateTokens(t *testing.T) {
 		{Role: "user", Content: "Hello world!"},             // 12 chars → ~4 tokens
 		{Role: "assistant", Content: "Hi there, how are you?"}, // 22 chars → ~7 tokens
 	}
-	got := estimateTokens(msgs)
+	got := EstimateTokens(msgs)
 	if got <= 0 {
 		t.Errorf("expected positive token estimate, got %d", got)
 	}

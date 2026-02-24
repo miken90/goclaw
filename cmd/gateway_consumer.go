@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -97,9 +98,19 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 		)
 
 		// Enable streaming when the channel supports it (so agent emits chunk events).
+		// Group chats: streaming disabled (concurrent runs would interleave chunks).
 		enableStream := channelMgr != nil && channelMgr.IsStreamingChannel(msg.Channel)
+		if peerKind == string(sessions.PeerGroup) {
+			enableStream = false
+		}
 
-		runID := fmt.Sprintf("inbound-%s-%s", msg.Channel, msg.ChatID)
+		// Group chats allow concurrent runs (multiple users can chat simultaneously).
+		maxConcurrent := 1
+		if peerKind == string(sessions.PeerGroup) {
+			maxConcurrent = 3
+		}
+
+		runID := fmt.Sprintf("inbound-%s-%s-%s", msg.Channel, msg.ChatID, uuid.NewString()[:8])
 
 		// Register run with channel manager for streaming/reaction event forwarding.
 		// Use localKey (composite key with topic suffix) so streaming/reaction events
@@ -126,8 +137,8 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 				"- Address the group naturally. If the history shows a multi-person conversation, consider the full context before answering."
 		}
 
-		// Schedule through main lane (per-session serialization + lane concurrency)
-		outCh := sched.Schedule(ctx, "main", agent.RunRequest{
+		// Schedule through main lane (per-session concurrency controlled by maxConcurrent)
+		outCh := sched.ScheduleWithOpts(ctx, "main", agent.RunRequest{
 			SessionKey:        sessionKey,
 			Message:           msg.Content,
 			Channel:           msg.Channel,
@@ -139,6 +150,8 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			Stream:            enableStream,
 			HistoryLimit:      msg.HistoryLimit,
 			ExtraSystemPrompt: extraPrompt,
+		}, scheduler.ScheduleOpts{
+			MaxConcurrent: maxConcurrent,
 		})
 
 		// Build outbound metadata for reply-to + thread routing.
@@ -163,6 +176,18 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			}
 
 			if outcome.Err != nil {
+				// Don't send error for cancelled runs (/stop command) —
+				// publish empty outbound to clean up thinking/typing indicators.
+				if errors.Is(outcome.Err, context.Canceled) {
+					slog.Info("inbound: run cancelled", "channel", channel, "session", session)
+					msgBus.PublishOutbound(bus.OutboundMessage{
+						Channel:  channel,
+						ChatID:   chatID,
+						Content:  "",
+						Metadata: meta,
+					})
+					return
+				}
 				slog.Error("inbound: agent run failed", "error", outcome.Err, "channel", channel)
 				msgBus.PublishOutbound(bus.OutboundMessage{
 					Channel:  channel,
@@ -314,6 +339,37 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 					Content: outcome.Result.Content,
 				})
 			}(origChannel, msg.ChatID, msg.SenderID, msg.Metadata["subagent_label"])
+			continue
+		}
+
+		// --- Command: /stop — cancel oldest active run for this session ---
+		// --- Command: /stopall — cancel ALL active runs + drain queue ---
+		if cmd := msg.Metadata["command"]; cmd == "stop" || cmd == "stopall" {
+			agentID := msg.AgentID
+			if agentID == "" {
+				agentID = resolveAgentRoute(cfg, msg.Channel, msg.ChatID, msg.PeerKind)
+			}
+			peerKind := msg.PeerKind
+			if peerKind == "" {
+				peerKind = string(sessions.PeerDirect)
+			}
+			sessionKey := sessions.BuildScopedSessionKey(agentID, msg.Channel, sessions.PeerKind(peerKind), msg.ChatID, cfg.Sessions.Scope, cfg.Sessions.DmScope, cfg.Sessions.MainKey)
+			if msg.Metadata["is_forum"] == "true" && peerKind == string(sessions.PeerGroup) {
+				var topicID int
+				fmt.Sscanf(msg.Metadata["message_thread_id"], "%d", &topicID)
+				if topicID > 0 {
+					sessionKey = sessions.BuildGroupTopicSessionKey(agentID, msg.Channel, msg.ChatID, topicID)
+				}
+			}
+
+			var cancelled bool
+			if cmd == "stopall" {
+				cancelled = sched.CancelSession(sessionKey)
+				slog.Info("inbound: /stopall command", "session", sessionKey, "cancelled", cancelled)
+			} else {
+				cancelled = sched.CancelOneSession(sessionKey)
+				slog.Info("inbound: /stop command", "session", sessionKey, "cancelled", cancelled)
+			}
 			continue
 		}
 

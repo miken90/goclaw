@@ -765,6 +765,14 @@ func runGateway() {
 	)
 	defer sched.Stop()
 
+	// Adaptive throttle: reduce per-session concurrency when nearing the summary threshold.
+	// This prevents concurrent runs from racing with summarization.
+	sched.SetTokenEstimateFunc(func(sessionKey string) (int, int) {
+		history := sessStore.GetHistory(sessionKey)
+		tokens := agent.EstimateTokens(history)
+		return tokens, 200000 // default context window
+	})
+
 	// Subscribe to agent events for channel streaming/reaction forwarding.
 	// Events emitted by agent loops are broadcast to the bus; we forward them
 	// to the channel manager which routes to StreamingChannel/ReactionChannel.

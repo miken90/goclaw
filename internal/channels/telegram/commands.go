@@ -67,6 +67,8 @@ func (c *Channel) handleBotCommand(ctx context.Context, message *telego.Message,
 		helpText := "Available commands:\n" +
 			"/start — Start chatting with the bot\n" +
 			"/help — Show this help message\n" +
+			"/stop — Stop current running task\n" +
+			"/stopall — Stop all running tasks\n" +
 			"/reset — Reset conversation history\n" +
 			"/status — Show bot status\n" +
 			"/writers — List file writers for this group\n" +
@@ -100,6 +102,56 @@ func (c *Channel) handleBotCommand(ctx context.Context, message *telego.Message,
 			},
 		})
 		msg := tu.Message(chatIDObj, "Conversation history has been reset.")
+		setThread(msg)
+		c.bot.SendMessage(ctx, msg)
+		return true
+
+	case "/stop":
+		peerKind := "direct"
+		if isGroup {
+			peerKind = "group"
+		}
+		c.Bus().PublishInbound(bus.InboundMessage{
+			Channel:  c.Name(),
+			SenderID: senderID,
+			ChatID:   chatIDStr,
+			Content:  "/stop",
+			PeerKind: peerKind,
+			AgentID:  c.AgentID(),
+			UserID:   strings.SplitN(senderID, "|", 2)[0],
+			Metadata: map[string]string{
+				"command":           "stop",
+				"local_key":         localKey,
+				"is_forum":          fmt.Sprintf("%t", isForum),
+				"message_thread_id": fmt.Sprintf("%d", messageThreadID),
+			},
+		})
+		msg := tu.Message(chatIDObj, "Stopping current task…")
+		setThread(msg)
+		c.bot.SendMessage(ctx, msg)
+		return true
+
+	case "/stopall":
+		peerKind := "direct"
+		if isGroup {
+			peerKind = "group"
+		}
+		c.Bus().PublishInbound(bus.InboundMessage{
+			Channel:  c.Name(),
+			SenderID: senderID,
+			ChatID:   chatIDStr,
+			Content:  "/stopall",
+			PeerKind: peerKind,
+			AgentID:  c.AgentID(),
+			UserID:   strings.SplitN(senderID, "|", 2)[0],
+			Metadata: map[string]string{
+				"command":           "stopall",
+				"local_key":         localKey,
+				"is_forum":          fmt.Sprintf("%t", isForum),
+				"message_thread_id": fmt.Sprintf("%d", messageThreadID),
+			},
+		})
+		msg := tu.Message(chatIDObj, "Stopping all tasks…")
 		setThread(msg)
 		c.bot.SendMessage(ctx, msg)
 		return true
@@ -376,6 +428,8 @@ func DefaultMenuCommands() []telego.BotCommand {
 	return []telego.BotCommand{
 		{Command: "start", Description: "Start chatting with the bot"},
 		{Command: "help", Description: "Show available commands"},
+		{Command: "stop", Description: "Stop current running task"},
+		{Command: "stopall", Description: "Stop all running tasks"},
 		{Command: "reset", Description: "Reset conversation history"},
 		{Command: "status", Description: "Show bot status"},
 		{Command: "writers", Description: "List file writers for this group"},

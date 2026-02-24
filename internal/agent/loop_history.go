@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -230,32 +231,45 @@ func sanitizeHistory(msgs []providers.Message) []providers.Message {
 
 func (l *Loop) maybeSummarize(ctx context.Context, sessionKey string) {
 	history := l.sessions.GetHistory(sessionKey)
-	tokenEstimate := estimateTokens(history)
+	tokenEstimate := EstimateTokens(history)
 	threshold := l.contextWindow * 75 / 100
 
 	if len(history) <= 50 && tokenEstimate <= threshold {
 		return
 	}
 
-	// Memory flush: run BEFORE compaction so agent can save important context.
-	// Matching TS: memory flush is a separate embedded agent turn before summarization.
+	// Per-session lock: prevent concurrent summarize+flush goroutines for the same session.
+	// TryLock is non-blocking — if another run is already summarizing this session, skip.
+	// The next run will trigger summarization again if still needed.
+	muI, _ := l.summarizeMu.LoadOrStore(sessionKey, &sync.Mutex{})
+	sessionMu := muI.(*sync.Mutex)
+	if !sessionMu.TryLock() {
+		slog.Debug("summarization already in progress, skipping", "session", sessionKey)
+		return
+	}
+
+	// Memory flush runs synchronously INSIDE the guard
+	// (so concurrent runs don't both trigger flush for the same compaction cycle).
 	flushSettings := ResolveMemoryFlushSettings(l.compactionCfg)
 	if l.shouldRunMemoryFlush(sessionKey, tokenEstimate, flushSettings) {
-		// Run flush synchronously before compaction (so writes happen before truncation)
 		l.runMemoryFlush(ctx, sessionKey, flushSettings)
 	}
 
-	// Summarize in background
+	// Summarize in background (holds the per-session lock until done)
 	go func() {
-		sctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-		defer cancel()
+		defer sessionMu.Unlock()
 
-		summary := l.sessions.GetSummary(sessionKey)
-
+		// Re-check: history may have been truncated by a concurrent summarize
+		// that finished between our threshold check and acquiring the lock.
+		history := l.sessions.GetHistory(sessionKey)
 		if len(history) <= 4 {
 			return
 		}
 
+		sctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+
+		summary := l.sessions.GetSummary(sessionKey)
 		toSummarize := history[:len(history)-4]
 
 		var sb string

@@ -48,8 +48,10 @@ type Loop struct {
 	tools           *tools.Registry
 	toolPolicy      *tools.PolicyEngine    // optional: filters tools sent to LLM
 	agentToolPolicy *config.ToolPolicySpec // per-agent tool policy from DB (nil = no restrictions)
-	running         atomic.Bool
-	mu         sync.Mutex // protects concurrent runs
+	activeRuns atomic.Int32 // number of currently executing runs
+
+	// Per-session summarization lock: prevents concurrent summarize goroutines for the same session.
+	summarizeMu sync.Map // sessionKey → *sync.Mutex
 
 	// Bootstrap/persona context (loaded at startup, injected into system prompt)
 	ownerIDs       []string
@@ -229,8 +231,8 @@ type RunResult struct {
 // Run processes a single message through the agent loop.
 // It blocks until completion and returns the final response.
 func (l *Loop) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
+	l.activeRuns.Add(1)
+	defer l.activeRuns.Add(-1)
 
 	l.emit(AgentEvent{Type: "run.started", AgentID: l.id, RunID: req.RunID})
 
@@ -294,8 +296,16 @@ func (l *Loop) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 			Payload: map[string]string{"error": err.Error()},
 		})
 		// Only finish trace for root runs; child traces don't own the trace lifecycle.
+		// Use background context when the run context is cancelled (/stop command)
+		// so the DB update still succeeds.
 		if !isChildTrace && l.traceCollector != nil && traceID != uuid.Nil {
-			l.traceCollector.FinishTrace(ctx, traceID, "error", err.Error(), "")
+			traceCtx := ctx
+			traceStatus := "error"
+			if ctx.Err() != nil {
+				traceCtx = context.Background()
+				traceStatus = "cancelled"
+			}
+			l.traceCollector.FinishTrace(traceCtx, traceID, traceStatus, err.Error(), "")
 		}
 		return nil, err
 	}
@@ -399,8 +409,10 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 
 	messages := l.buildMessages(ctx, history, summary, req.Message, req.ExtraSystemPrompt, req.SessionKey, req.Channel, req.UserID, req.HistoryLimit)
 
-	// 2. Save user message to session
-	l.sessions.AddMessage(req.SessionKey, providers.Message{
+	// 2. Buffer new messages — write to session only AFTER the run completes.
+	// This prevents concurrent runs from seeing each other's in-progress messages.
+	var pendingMsgs []providers.Message
+	pendingMsgs = append(pendingMsgs, providers.Message{
 		Role:    "user",
 		Content: req.Message,
 	})
@@ -481,7 +493,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 			ToolCalls: resp.ToolCalls,
 		}
 		messages = append(messages, assistantMsg)
-		l.sessions.AddMessage(req.SessionKey, assistantMsg)
+		pendingMsgs = append(pendingMsgs, assistantMsg)
 
 		// Execute tool calls (parallel when multiple, sequential when single)
 		if len(resp.ToolCalls) == 1 {
@@ -531,7 +543,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 				ToolCallID: tc.ID,
 			}
 			messages = append(messages, toolMsg)
-			l.sessions.AddMessage(req.SessionKey, toolMsg)
+			pendingMsgs = append(pendingMsgs, toolMsg)
 		} else {
 			// Multiple tools: parallel execution via goroutines.
 			// Tool instances are immutable (context-based) so concurrent access is safe.
@@ -617,7 +629,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 					ToolCallID: r.tc.ID,
 				}
 				messages = append(messages, toolMsg)
-				l.sessions.AddMessage(req.SessionKey, toolMsg)
+				pendingMsgs = append(pendingMsgs, toolMsg)
 			}
 		}
 	}
@@ -639,10 +651,16 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 		}
 	}
 
-	l.sessions.AddMessage(req.SessionKey, providers.Message{
+	pendingMsgs = append(pendingMsgs, providers.Message{
 		Role:    "assistant",
 		Content: finalContent,
 	})
+
+	// Flush all buffered messages to session atomically.
+	// This ensures concurrent runs never see each other's in-progress messages.
+	for _, msg := range pendingMsgs {
+		l.sessions.AddMessage(req.SessionKey, msg)
+	}
 
 	// Write session metadata (matching TS session entry updates)
 	l.sessions.UpdateMetadata(req.SessionKey, l.model, l.provider.Name(), req.Channel)
