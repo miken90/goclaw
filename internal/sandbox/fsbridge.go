@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -104,16 +105,22 @@ func (b *FsBridge) Stat(ctx context.Context, path string) (string, error) {
 }
 
 // resolvePath resolves a path relative to the container workdir.
+// Validates that absolute paths stay within the workdir (defense in depth).
 func (b *FsBridge) resolvePath(path string) string {
 	if path == "" || path == "." {
 		return b.workdir
 	}
-	// Absolute paths pass through
 	if strings.HasPrefix(path, "/") {
-		return path
+		// Validate absolute paths stay within workdir (defense in depth,
+		// container is already sandboxed with read-only FS + cap-drop ALL).
+		cleaned := filepath.Clean(path)
+		if cleaned == b.workdir || strings.HasPrefix(cleaned, b.workdir+"/") {
+			return cleaned
+		}
+		return b.workdir // fallback to workdir for escapes
 	}
-	// Relative paths resolve against workdir
-	return b.workdir + "/" + path
+	// Relative paths: use filepath.Join for proper normalization
+	return filepath.Clean(filepath.Join(b.workdir, path))
 }
 
 // dockerExec runs a command inside the container and returns stdout, stderr, exit code.

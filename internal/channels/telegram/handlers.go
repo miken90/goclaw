@@ -12,6 +12,7 @@ import (
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/channels"
+	"github.com/nextlevelbuilder/goclaw/internal/channels/typing"
 )
 
 // handleMessage processes an incoming Telegram update.
@@ -286,13 +287,27 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 		}
 	}
 
-	// Send typing indicator (TS ref: buildTypingThreadParams — General topic ID=1 is OK for typing).
+	// Send typing indicator with keepalive + TTL safety net.
+	// Telegram typing expires after 5s, so keepalive every 4s.
+	// TTL auto-stops after 60s to prevent stuck indicators.
 	chatIDObj := tu.ID(chatID)
-	typingAction := tu.ChatAction(chatIDObj, telego.ChatActionTyping)
-	if messageThreadID > 0 {
-		typingAction.MessageThreadID = messageThreadID
+	typingCtrl := typing.New(typing.Options{
+		MaxDuration:       60 * time.Second,
+		KeepaliveInterval: 4 * time.Second,
+		StartFn: func() error {
+			action := tu.ChatAction(chatIDObj, telego.ChatActionTyping)
+			if messageThreadID > 0 {
+				action.MessageThreadID = messageThreadID
+			}
+			return c.bot.SendChatAction(ctx, action)
+		},
+	})
+	// Stop previous typing controller for this chat/topic (if any)
+	if prev, ok := c.typingCtrls.Load(localKey); ok {
+		prev.(*typing.Controller).Stop()
 	}
-	_ = c.bot.SendChatAction(ctx, typingAction)
+	c.typingCtrls.Store(localKey, typingCtrl)
+	typingCtrl.Start()
 
 	// Stop previous thinking animation for this chat/topic
 	if prevStop, ok := c.stopThinking.Load(localKey); ok {

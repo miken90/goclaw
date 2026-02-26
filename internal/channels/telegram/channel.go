@@ -28,6 +28,7 @@ type Channel struct {
 	teamStore        store.TeamStore  // for /tasks, /task_detail commands (nil in standalone)
 	placeholders     sync.Map         // localKey string → messageID int
 	stopThinking     sync.Map         // localKey string → *thinkingCancel
+	typingCtrls      sync.Map         // localKey string → *typing.Controller
 	streams          sync.Map         // localKey string → *DraftStream (streaming preview)
 	reactions        sync.Map         // localKey string → *StatusReactionController
 	pairingReplySent sync.Map         // userID string → time.Time (debounce pairing replies)

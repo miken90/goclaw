@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/nextlevelbuilder/goclaw/internal/sandbox"
 )
@@ -157,12 +158,27 @@ func resolvePathWithAllowed(path, workspace string, restrict bool, allowedPrefix
 		return resolved, nil
 	}
 	// If restricted and denied, check if path falls under an allowed prefix.
+	// Resolve symlinks in the candidate path for safe comparison.
 	cleaned := filepath.Clean(path)
+	absPath, _ := filepath.Abs(cleaned)
+	real, evalErr := filepath.EvalSymlinks(absPath)
+	if evalErr != nil {
+		// Try resolving parent for non-existent files
+		parentReal, parentErr := filepath.EvalSymlinks(filepath.Dir(absPath))
+		if parentErr != nil {
+			return "", err
+		}
+		real = filepath.Join(parentReal, filepath.Base(absPath))
+	}
 	for _, prefix := range allowedPrefixes {
 		absPrefix, _ := filepath.Abs(prefix)
-		if strings.HasPrefix(cleaned, absPrefix) {
-			slog.Debug("read_file: allowed by prefix", "path", cleaned, "prefix", absPrefix)
-			return cleaned, nil
+		prefixReal, prefixErr := filepath.EvalSymlinks(absPrefix)
+		if prefixErr != nil {
+			prefixReal = absPrefix
+		}
+		if isPathInside(real, prefixReal) {
+			slog.Debug("read_file: allowed by prefix", "path", real, "prefix", prefixReal)
+			return real, nil
 		}
 	}
 	slog.Warn("read_file: access denied", "path", cleaned, "workspace", workspace, "allowedPrefixes", allowedPrefixes)
@@ -171,15 +187,21 @@ func resolvePathWithAllowed(path, workspace string, restrict bool, allowedPrefix
 
 // checkDeniedPath returns an error if the resolved path falls under any denied prefix.
 // Denied prefixes are relative to the workspace (e.g. ".goclaw" denies workspace/.goclaw/).
+// The resolved path should already be canonical (from resolvePath with restrict=true).
 func checkDeniedPath(resolved, workspace string, deniedPrefixes []string) error {
 	if len(deniedPrefixes) == 0 {
 		return nil
 	}
 	absResolved, _ := filepath.Abs(resolved)
 	absWorkspace, _ := filepath.Abs(workspace)
+	// Resolve workspace to canonical form for consistent comparison.
+	wsReal, err := filepath.EvalSymlinks(absWorkspace)
+	if err != nil {
+		wsReal = absWorkspace
+	}
 	for _, prefix := range deniedPrefixes {
-		denied := filepath.Join(absWorkspace, prefix)
-		if strings.HasPrefix(absResolved, denied) {
+		denied := filepath.Join(wsReal, prefix)
+		if isPathInside(absResolved, denied) {
 			return fmt.Errorf("access denied: path %s is restricted", prefix)
 		}
 	}
@@ -187,27 +209,101 @@ func checkDeniedPath(resolved, workspace string, deniedPrefixes []string) error 
 }
 
 // resolvePath resolves a path relative to the workspace and validates it.
+// When restrict=true, resolves symlinks to canonical paths and rejects
+// paths that escape the workspace boundary (symlink/hardlink attacks).
 func resolvePath(path, workspace string, restrict bool) (string, error) {
+	var resolved string
 	if filepath.IsAbs(path) {
-		if restrict {
-			absWorkspace, _ := filepath.Abs(workspace)
-			if !strings.HasPrefix(path, absWorkspace) {
-				return "", fmt.Errorf("access denied: path outside workspace")
+		resolved = filepath.Clean(path)
+	} else {
+		resolved = filepath.Clean(filepath.Join(workspace, path))
+	}
+
+	if !restrict {
+		return resolved, nil
+	}
+
+	// Resolve workspace to canonical path (follow symlinks in workspace path itself).
+	absWorkspace, _ := filepath.Abs(workspace)
+	wsReal, err := filepath.EvalSymlinks(absWorkspace)
+	if err != nil {
+		wsReal = absWorkspace // workspace doesn't exist yet — use as-is
+	}
+
+	// Resolve the target path to canonical form (follows all symlinks).
+	absResolved, _ := filepath.Abs(resolved)
+	real, err := filepath.EvalSymlinks(absResolved)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Check if the path itself is a symlink (broken/dangling).
+			// Lstat doesn't follow symlinks, so it succeeds even for broken ones.
+			if linfo, lerr := os.Lstat(absResolved); lerr == nil && linfo.Mode()&os.ModeSymlink != 0 {
+				// It's a broken symlink — read target and validate.
+				target, readErr := os.Readlink(absResolved)
+				if readErr != nil {
+					return "", fmt.Errorf("access denied: cannot resolve symlink")
+				}
+				if !filepath.IsAbs(target) {
+					target = filepath.Join(filepath.Dir(absResolved), target)
+				}
+				target = filepath.Clean(target)
+				if !isPathInside(target, wsReal) {
+					slog.Warn("security.broken_symlink_escape", "path", path, "target", target, "workspace", wsReal)
+					return "", fmt.Errorf("access denied: broken symlink target outside workspace")
+				}
+				real = target
+			} else {
+				// Truly non-existent file (not a symlink): resolve parent and re-validate.
+				parentReal, parentErr := filepath.EvalSymlinks(filepath.Dir(absResolved))
+				if parentErr != nil {
+					return "", fmt.Errorf("access denied: cannot resolve path")
+				}
+				real = filepath.Join(parentReal, filepath.Base(absResolved))
 			}
-		}
-		return filepath.Clean(path), nil
-	}
-
-	resolved := filepath.Join(workspace, path)
-	resolved = filepath.Clean(resolved)
-
-	if restrict {
-		absWorkspace, _ := filepath.Abs(workspace)
-		absResolved, _ := filepath.Abs(resolved)
-		if !strings.HasPrefix(absResolved, absWorkspace) {
-			return "", fmt.Errorf("access denied: path outside workspace")
+		} else {
+			// Permission error or other — reject.
+			slog.Warn("security.path_resolve_failed", "path", path, "error", err)
+			return "", fmt.Errorf("access denied: cannot resolve path")
 		}
 	}
 
-	return resolved, nil
+	// Validate canonical path stays within canonical workspace.
+	if !isPathInside(real, wsReal) {
+		slog.Warn("security.path_escape", "path", path, "resolved", real, "workspace", wsReal)
+		return "", fmt.Errorf("access denied: path outside workspace")
+	}
+
+	// Reject hardlinked files (nlink > 1) to prevent hardlink-based escapes.
+	if err := checkHardlink(real); err != nil {
+		return "", err
+	}
+
+	return real, nil
+}
+
+// isPathInside checks whether child is inside or equal to parent directory.
+func isPathInside(child, parent string) bool {
+	if child == parent {
+		return true
+	}
+	return strings.HasPrefix(child, parent+string(filepath.Separator))
+}
+
+// checkHardlink rejects regular files with nlink > 1 (hardlink attack prevention).
+// Directories naturally have nlink > 1 and are exempt.
+func checkHardlink(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil // non-existent files are OK — will fail at read/write
+	}
+	if info.IsDir() {
+		return nil
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		if stat.Nlink > 1 {
+			slog.Warn("security.hardlink_rejected", "path", path, "nlink", stat.Nlink)
+			return fmt.Errorf("access denied: hardlinked file not allowed")
+		}
+	}
+	return nil
 }

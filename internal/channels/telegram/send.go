@@ -12,6 +12,7 @@ import (
 	tu "github.com/mymmrac/telego/telegoutil"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
+	"github.com/nextlevelbuilder/goclaw/internal/channels/typing"
 )
 
 // Error patterns for graceful handling (matching TS error constants in send.ts).
@@ -55,6 +56,11 @@ func (c *Channel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 			cf.Cancel()
 		}
 		c.stopThinking.Delete(localKey)
+	}
+
+	// Stop typing indicator controller (TTL keepalive)
+	if ctrl, ok := c.typingCtrls.LoadAndDelete(localKey); ok {
+		ctrl.(*typing.Controller).Stop()
 	}
 
 	// NO_REPLY cleanup: content is empty when agent suppresses reply (prompt injection, etc.).

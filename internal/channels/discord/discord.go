@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/channels"
+	"github.com/nextlevelbuilder/goclaw/internal/channels/typing"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 )
 
@@ -20,6 +22,7 @@ type Channel struct {
 	config       config.DiscordConfig
 	botUserID    string   // populated on start
 	placeholders sync.Map // channelID string → messageID string
+	typingCtrls  sync.Map // channelID string → *typing.Controller
 }
 
 // New creates a new Discord channel from config.
@@ -83,6 +86,11 @@ func (c *Channel) Send(_ context.Context, msg bus.OutboundMessage) error {
 	channelID := msg.ChatID
 	if channelID == "" {
 		return fmt.Errorf("empty chat ID for discord send")
+	}
+
+	// Stop typing indicator controller
+	if ctrl, ok := c.typingCtrls.LoadAndDelete(channelID); ok {
+		ctrl.(*typing.Controller).Stop()
 	}
 
 	content := msg.Content
@@ -208,8 +216,22 @@ func (c *Channel) handleMessage(_ *discordgo.Session, m *discordgo.MessageCreate
 		"preview", channels.Truncate(content, 50),
 	)
 
-	// Send typing indicator
-	_ = c.session.ChannelTyping(channelID)
+	// Send typing indicator with keepalive + TTL safety net.
+	// Discord typing expires after 10s, so keepalive every 9s.
+	// TTL auto-stops after 60s to prevent stuck indicators.
+	typingCtrl := typing.New(typing.Options{
+		MaxDuration:       60 * time.Second,
+		KeepaliveInterval: 9 * time.Second,
+		StartFn: func() error {
+			return c.session.ChannelTyping(channelID)
+		},
+	})
+	// Stop previous typing controller for this channel (if any)
+	if prev, ok := c.typingCtrls.Load(channelID); ok {
+		prev.(*typing.Controller).Stop()
+	}
+	c.typingCtrls.Store(channelID, typingCtrl)
+	typingCtrl.Start()
 
 	// Send placeholder "Thinking..." message
 	placeholder, err := c.session.ChannelMessageSend(channelID, "Thinking...")
