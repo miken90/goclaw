@@ -118,4 +118,3 @@ func (s *PGProviderStore) decryptKey(apiKey, providerName string) string {
 	}
 	return apiKey
 }
-

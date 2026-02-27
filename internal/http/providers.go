@@ -64,10 +64,14 @@ func (h *ProvidersHandler) registerInMemory(p *store.LLMProviderData) {
 	if h.providerReg == nil || !p.Enabled || p.APIKey == "" {
 		return
 	}
-	if p.ProviderType == "anthropic_native" {
+	if p.ProviderType == store.ProviderAnthropicNative {
 		h.providerReg.Register(providers.NewAnthropicProvider(p.APIKey))
 	} else {
-		h.providerReg.Register(providers.NewOpenAIProvider(p.Name, p.APIKey, p.APIBase, ""))
+		prov := providers.NewOpenAIProvider(p.Name, p.APIKey, p.APIBase, "")
+		if p.ProviderType == store.ProviderMiniMax {
+			prov.WithChatPath("/text/chatcompletion_v2")
+		}
+		h.providerReg.Register(prov)
 	}
 }
 
@@ -103,8 +107,8 @@ func (h *ProvidersHandler) handleCreateProvider(w http.ResponseWriter, r *http.R
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name must be a valid slug (lowercase letters, numbers, hyphens only)"})
 		return
 	}
-	if p.ProviderType != "anthropic_native" && p.ProviderType != "openai_compat" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "provider_type must be 'anthropic_native' or 'openai_compat'"})
+	if !store.ValidProviderTypes[p.ProviderType] {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported provider_type"})
 		return
 	}
 
@@ -161,8 +165,8 @@ func (h *ProvidersHandler) handleUpdateProvider(w http.ResponseWriter, r *http.R
 
 	// Validate provider_type if being updated
 	if pt, ok := updates["provider_type"]; ok {
-		if s, _ := pt.(string); s != "anthropic_native" && s != "openai_compat" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "provider_type must be 'anthropic_native' or 'openai_compat'"})
+		if s, _ := pt.(string); !store.ValidProviderTypes[s] {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unsupported provider_type"})
 			return
 		}
 	}

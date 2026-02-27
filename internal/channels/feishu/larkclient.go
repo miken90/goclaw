@@ -387,6 +387,27 @@ func (c *LarkClient) UpdateCardElement(ctx context.Context, cardID, elementID, c
 	return nil
 }
 
+// --- Bot API ---
+
+// GetBotInfo fetches the bot's identity from /open-apis/bot/v3/info.
+// Returns the bot's open_id which is needed for mention detection in groups.
+func (c *LarkClient) GetBotInfo(ctx context.Context) (string, error) {
+	resp, err := c.doJSON(ctx, "GET", "/open-apis/bot/v3/info", nil)
+	if err != nil {
+		return "", err
+	}
+	if resp.Code != 0 {
+		return "", fmt.Errorf("get bot info: code=%d msg=%s", resp.Code, resp.Msg)
+	}
+	var result struct {
+		Bot struct {
+			OpenID string `json:"open_id"`
+		} `json:"bot"`
+	}
+	json.Unmarshal(resp.Data, &result)
+	return result.Bot.OpenID, nil
+}
+
 // --- Contact API ---
 
 func (c *LarkClient) GetUser(ctx context.Context, userID, userIDType string) (string, error) {

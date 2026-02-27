@@ -18,20 +18,18 @@ import (
 // protectedFileSet defines files that require group file writer permission in group chats.
 // These files control the agent's identity and behavior — only allowlisted users can modify them.
 var protectedFileSet = map[string]bool{
-	bootstrap.SoulFile:      true,
-	bootstrap.IdentityFile:  true,
-	bootstrap.AgentsFile:    true,
-	bootstrap.HeartbeatFile: true,
-	bootstrap.UserFile:      true,
+	bootstrap.SoulFile:     true,
+	bootstrap.IdentityFile: true,
+	bootstrap.AgentsFile:   true,
+	bootstrap.UserFile:     true,
 }
 
 // contextFileSet is the set of filenames routed to DB in managed mode.
+// TOOLS.md and HEARTBEAT.md excluded — only useful in standalone mode.
 var contextFileSet = map[string]bool{
 	bootstrap.SoulFile:      true,
 	bootstrap.AgentsFile:    true,
-	bootstrap.ToolsFile:     true,
 	bootstrap.IdentityFile:  true,
-	bootstrap.HeartbeatFile: true,
 	bootstrap.UserFile:      true,
 	bootstrap.BootstrapFile: true, // first-run file (deleted after completion)
 }

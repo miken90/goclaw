@@ -34,13 +34,25 @@ function agentSubtitle(agent: { display_name?: string; agent_key: string; id: st
 }
 
 export function AgentDetailPage({ agentId, onBack }: AgentDetailPageProps) {
-  const { agent, files, loading, updateAgent, getFile, setFile, regenerateAgent, refresh } =
+  const { agent, files, loading, updateAgent, getFile, setFile, regenerateAgent, resummonAgent, refresh } =
     useAgentDetail(agentId);
   const [summoningOpen, setSummoningOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState("general");
 
   const handleRegenerate = async (prompt: string) => {
     await regenerateAgent(prompt);
     setSummoningOpen(true);
+  };
+
+  const handleResummon = async () => {
+    await resummonAgent();
+    setSummoningOpen(true);
+  };
+
+  // Refresh data after modal closes (not when completed fires)
+  const handleSummoningClose = (open: boolean) => {
+    setSummoningOpen(open);
+    if (!open) refresh();
   };
 
   if (loading || !agent) {
@@ -97,7 +109,7 @@ export function AgentDetailPage({ agentId, onBack }: AgentDetailPageProps) {
 
       {/* Tabs */}
       <div className="rounded-xl border bg-card p-4 shadow-sm">
-        <Tabs defaultValue="general">
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList>
             <TabsTrigger value="general">General</TabsTrigger>
             <TabsTrigger value="config">Config</TabsTrigger>
@@ -121,6 +133,7 @@ export function AgentDetailPage({ agentId, onBack }: AgentDetailPageProps) {
               onGetFile={getFile}
               onSetFile={setFile}
               onRegenerate={handleRegenerate}
+              onResummon={handleResummon}
             />
           </TabsContent>
 
@@ -136,10 +149,10 @@ export function AgentDetailPage({ agentId, onBack }: AgentDetailPageProps) {
 
       <SummoningModal
         open={summoningOpen}
-        onOpenChange={setSummoningOpen}
+        onOpenChange={handleSummoningClose}
         agentId={agentId}
         agentName={title}
-        onCompleted={refresh}
+        onCompleted={() => {}}
       />
     </div>
   );

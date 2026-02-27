@@ -694,7 +694,7 @@ func runGateway() {
 	}
 
 	if cfg.Channels.Discord.Enabled && cfg.Channels.Discord.Token != "" && instanceLoader == nil {
-		dc, err := discord.New(cfg.Channels.Discord, msgBus)
+		dc, err := discord.New(cfg.Channels.Discord, msgBus, nil)
 		if err != nil {
 			slog.Error("failed to initialize discord channel", "error", err)
 		} else {
@@ -704,7 +704,7 @@ func runGateway() {
 	}
 
 	if cfg.Channels.WhatsApp.Enabled && cfg.Channels.WhatsApp.BridgeURL != "" && instanceLoader == nil {
-		wa, err := whatsapp.New(cfg.Channels.WhatsApp, msgBus)
+		wa, err := whatsapp.New(cfg.Channels.WhatsApp, msgBus, nil)
 		if err != nil {
 			slog.Error("failed to initialize whatsapp channel", "error", err)
 		} else {

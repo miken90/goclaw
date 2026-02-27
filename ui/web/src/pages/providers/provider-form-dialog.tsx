@@ -5,6 +5,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogFooter,
+  DialogDescription,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,8 +29,17 @@ interface ProviderFormDialogProps {
 }
 
 const PROVIDER_TYPES = [
-  { value: "anthropic_native", label: "Anthropic Native" },
-  { value: "openai_compat", label: "OpenAI Compatible" },
+  { value: "anthropic_native", label: "Anthropic (Native)", apiBase: "", placeholder: "https://api.anthropic.com" },
+  { value: "openai_compat", label: "OpenAI Compatible", apiBase: "", placeholder: "https://api.openai.com/v1" },
+  { value: "gemini_native", label: "Google Gemini", apiBase: "https://generativelanguage.googleapis.com/v1beta/openai", placeholder: "" },
+  { value: "openrouter", label: "OpenRouter", apiBase: "https://openrouter.ai/api/v1", placeholder: "" },
+  { value: "groq", label: "Groq", apiBase: "https://api.groq.com/openai/v1", placeholder: "" },
+  { value: "deepseek", label: "DeepSeek", apiBase: "https://api.deepseek.com/v1", placeholder: "" },
+  { value: "mistral", label: "Mistral AI", apiBase: "https://api.mistral.ai/v1", placeholder: "" },
+  { value: "xai", label: "xAI (Grok)", apiBase: "https://api.x.ai/v1", placeholder: "" },
+  { value: "minimax_native", label: "MiniMax (Native)", apiBase: "https://api.minimax.io/v1", placeholder: "" },
+  { value: "cohere", label: "Cohere", apiBase: "https://api.cohere.ai/compatibility/v1", placeholder: "" },
+  { value: "perplexity", label: "Perplexity", apiBase: "https://api.perplexity.ai", placeholder: "" },
 ];
 
 export function ProviderFormDialog({ open, onOpenChange, provider, onSubmit }: ProviderFormDialogProps) {
@@ -41,9 +51,11 @@ export function ProviderFormDialog({ open, onOpenChange, provider, onSubmit }: P
   const [apiKey, setApiKey] = useState("");
   const [enabled, setEnabled] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     if (open) {
+      setError("");
       if (provider) {
         setName(provider.name);
         setDisplayName(provider.display_name || "");
@@ -81,8 +93,8 @@ export function ProviderFormDialog({ open, onOpenChange, provider, onSubmit }: P
 
       await onSubmit(data);
       onOpenChange(false);
-    } catch {
-      // error handled upstream
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save provider");
     } finally {
       setLoading(false);
     }
@@ -93,6 +105,7 @@ export function ProviderFormDialog({ open, onOpenChange, provider, onSubmit }: P
       <DialogContent className="max-h-[85vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit Provider" : "Add Provider"}</DialogTitle>
+          <DialogDescription>Configure an LLM provider connection.</DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-4 overflow-y-auto min-h-0">
           <div className="grid grid-cols-2 gap-4">
@@ -120,7 +133,16 @@ export function ProviderFormDialog({ open, onOpenChange, provider, onSubmit }: P
 
           <div className="space-y-2">
             <Label>Provider Type *</Label>
-            <Select value={providerType} onValueChange={setProviderType}>
+            <Select
+              value={providerType}
+              onValueChange={(v) => {
+                setProviderType(v);
+                if (!isEdit) {
+                  const preset = PROVIDER_TYPES.find((t) => t.value === v);
+                  if (preset?.apiBase) setApiBase(preset.apiBase);
+                }
+              }}
+            >
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
@@ -140,7 +162,7 @@ export function ProviderFormDialog({ open, onOpenChange, provider, onSubmit }: P
               id="apiBase"
               value={apiBase}
               onChange={(e) => setApiBase(e.target.value)}
-              placeholder={providerType === "anthropic_native" ? "https://api.anthropic.com" : "https://openrouter.ai/api"}
+              placeholder={PROVIDER_TYPES.find((t) => t.value === providerType)?.placeholder || PROVIDER_TYPES.find((t) => t.value === providerType)?.apiBase || "https://api.example.com/v1"}
             />
           </div>
 
@@ -164,6 +186,9 @@ export function ProviderFormDialog({ open, onOpenChange, provider, onSubmit }: P
             <Label htmlFor="enabled">Enabled</Label>
             <Switch id="enabled" checked={enabled} onCheckedChange={setEnabled} />
           </div>
+          {error && (
+            <p className="text-sm text-destructive">{error}</p>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>

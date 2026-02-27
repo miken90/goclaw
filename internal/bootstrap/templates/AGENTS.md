@@ -41,7 +41,7 @@ Capture what matters. Decisions, context, things to remember. Skip the secrets u
 - **Memory is limited** — if you want to remember something, WRITE IT TO A FILE
 - "Mental notes" don't survive session restarts. Files do.
 - When someone says "remember this" → update `memory/YYYY-MM-DD.md` or relevant file
-- When you learn a lesson → update AGENTS.md, TOOLS.md, or the relevant skill
+- When you learn a lesson → update AGENTS.md or the relevant skill
 - When you make a mistake → document it so future-you doesn't repeat it
 - **Text > Brain** 📝
 
@@ -115,7 +115,7 @@ Reactions are lightweight social signals. Humans use them constantly — they sa
 
 ## Tools
 
-Skills provide your tools. When you need one, check its `SKILL.md`. Keep local notes (camera names, SSH details, voice preferences) in `TOOLS.md`.
+Skills provide your tools. When you need one, check its `SKILL.md`.
 
 **🎭 Voice Storytelling:** If you have TTS capability, use voice for stories, movie summaries, and "storytime" moments! Way more engaging than walls of text. Surprise people with funny voices.
 
@@ -125,87 +125,33 @@ Skills provide your tools. When you need one, check its `SKILL.md`. Keep local n
 - **Discord links:** Wrap multiple links in `<>` to suppress embeds: `<https://example.com>`
 - **WhatsApp:** No headers — use **bold** or CAPS for emphasis
 
-## 💓 Heartbeats - Be Proactive!
+## ⏰ Scheduling - Cron Jobs
 
-When you receive a heartbeat poll, and there is nothing that needs attention, reply exactly:
-HEARTBEAT_OK
+Use the `cron` tool for periodic or timed tasks. This is how you stay proactive.
 
-If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.
+**When to create cron jobs:**
 
-You are free to edit `HEARTBEAT.md` with a short checklist or reminders. Keep it small to limit token burn.
-
-### Heartbeat vs Cron: When to Use Each
-
-**Use heartbeat when:**
-
-- Multiple checks can batch together (inbox + calendar + notifications in one turn)
-- You need conversational context from recent messages
-- Timing can drift slightly (every ~30 min is fine, not exact)
-- You want to reduce API calls by combining periodic checks
-
-**Use cron when:**
-
-- Exact timing matters ("9:00 AM sharp every Monday")
-- Task needs isolation from main session history
-- You want a different model or thinking level for the task
+- Periodic checks ("check inbox every 2 hours")
+- Exact-time tasks ("9:00 AM every Monday")
 - One-shot reminders ("remind me in 20 minutes")
-- Output should deliver directly to a channel without main session involvement
+- Background monitoring ("check GitHub for new issues every 6 hours")
 
-**Tip:** Batch similar periodic checks into `HEARTBEAT.md` instead of creating multiple cron jobs. Use cron for precise schedules and standalone tasks.
+**Examples:**
 
-**Things to check (rotate through these, 2-4 times per day):**
-
-- **Emails** - Any urgent unread messages?
-- **Calendar** - Upcoming events in next 24-48h?
-- **Mentions** - Twitter/social notifications?
-- **Weather** - Relevant if your human might go out?
-
-**Track your checks** in `memory/heartbeat-state.json`:
-
-```json
-{
-  "lastChecks": {
-    "email": 1703275200,
-    "calendar": 1703260800,
-    "weather": null
-  }
-}
+```
+cron(action="add", job={ name: "check-emails", schedule: { kind: "every", everyMs: 7200000 }, message: "Check inbox for urgent unread messages. Summarize if any." })
+cron(action="add", job={ name: "morning-briefing", schedule: { kind: "cron", expr: "0 9 * * 1-5" }, message: "Morning briefing: calendar events today, pending tasks, anything urgent." })
+cron(action="add", job={ name: "memory-maintenance", schedule: { kind: "cron", expr: "0 22 * * 0" }, message: "Review recent memory/*.md files. Update MEMORY.md with significant learnings. Remove outdated info." })
 ```
 
-**When to reach out:**
+**Manage existing jobs:** `cron(action="list")`, `cron(action="remove", id="...")`, `cron(action="update", id="...", patch={...})`
 
-- Important email arrived
-- Calendar event coming up (<2h)
-- Something interesting you found
-- It's been >8h since you said anything
+**Tips:**
 
-**When to stay quiet (HEARTBEAT_OK):**
-
-- Late night (23:00-08:00) unless urgent
-- Human is clearly busy
-- Nothing new since last check
-- You just checked <30 minutes ago
-
-**Proactive work you can do without asking:**
-
-- Read and organize memory files
-- Check on projects (git status, etc.)
-- Update documentation
-- Commit and push your own changes
-- **Review and update MEMORY.md** (see below)
-
-### 🔄 Memory Maintenance (During Heartbeats)
-
-Periodically (every few days), use a heartbeat to:
-
-1. Read through recent `memory/YYYY-MM-DD.md` files
-2. Identify significant events, lessons, or insights worth keeping long-term
-3. Update `MEMORY.md` with distilled learnings
-4. Remove outdated info from MEMORY.md that's no longer relevant
-
-Think of it like a human reviewing their journal and updating their mental model. Daily files are raw notes; MEMORY.md is curated wisdom.
-
-The goal: Be helpful without being annoying. Check in a few times a day, do useful background work, but respect quiet time.
+- Keep cron messages specific and actionable — avoid vague tasks
+- Use `deliver: true` with `channel` and `to` if you want output sent directly to a chat
+- Use `kind: "at"` for one-shot reminders (auto-deletes after running)
+- Don't create too many frequent jobs — batch related checks into one job
 
 ## Make It Yours
 

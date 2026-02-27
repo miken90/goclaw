@@ -67,13 +67,26 @@ func (c *Channel) handleMessageEvent(ctx context.Context, event *MessageEvent) {
 			return
 		}
 
-		// 5. RequireMention check
+		// 5. RequireMention check — record to history if not mentioned
 		requireMention := true
 		if c.cfg.RequireMention != nil {
 			requireMention = *c.cfg.RequireMention
 		}
 		if requireMention && !mc.MentionedBot {
-			slog.Debug("feishu group message skipped: bot not mentioned", "chat_id", mc.ChatID)
+			historyKey := mc.ChatID
+			if mc.RootID != "" && c.cfg.TopicSessionMode == "enabled" {
+				historyKey = fmt.Sprintf("%s:topic:%s", mc.ChatID, mc.RootID)
+			}
+			c.groupHistory.Record(historyKey, channels.HistoryEntry{
+				Sender:    senderName,
+				Body:      mc.Content,
+				Timestamp: time.Now(),
+				MessageID: messageID,
+			}, c.historyLimit)
+
+			slog.Debug("feishu group message recorded (no mention)",
+				"chat_id", mc.ChatID, "sender", senderName,
+			)
 			return
 		}
 	}
@@ -124,13 +137,23 @@ func (c *Channel) handleMessageEvent(ctx context.Context, event *MessageEvent) {
 		metadata["sender_open_id"] = sender.SenderID.OpenID
 	}
 
-	// Annotate current message with sender name so LLM knows who is talking in groups.
+	// Build final content with group context (pending history + sender annotation).
 	if mc.ChatType == "group" && senderName != "" {
-		content = fmt.Sprintf("[From: %s]\n%s", senderName, content)
+		annotated := fmt.Sprintf("[From: %s]\n%s", senderName, content)
+		if c.historyLimit > 0 {
+			content = c.groupHistory.BuildContext(chatID, annotated, c.historyLimit)
+		} else {
+			content = annotated
+		}
 	}
 
 	// 10. Publish to bus
 	c.HandleMessage(mc.SenderID, chatID, content, nil, metadata, peerKind)
+
+	// Clear pending history after sending to agent.
+	if mc.ChatType == "group" {
+		c.groupHistory.Clear(chatID)
+	}
 }
 
 // --- Parse ---

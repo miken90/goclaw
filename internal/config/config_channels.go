@@ -26,11 +26,13 @@ type TelegramConfig struct {
 }
 
 type DiscordConfig struct {
-	Enabled     bool                `json:"enabled"`
-	Token       string              `json:"token"`
-	AllowFrom   FlexibleStringSlice `json:"allow_from"`
-	DMPolicy    string              `json:"dm_policy,omitempty"`    // "open" (default), "allowlist", "disabled"
-	GroupPolicy string              `json:"group_policy,omitempty"` // "open" (default), "allowlist", "disabled"
+	Enabled        bool                `json:"enabled"`
+	Token          string              `json:"token"`
+	AllowFrom      FlexibleStringSlice `json:"allow_from"`
+	DMPolicy       string              `json:"dm_policy,omitempty"`       // "open" (default), "allowlist", "disabled"
+	GroupPolicy    string              `json:"group_policy,omitempty"`    // "open" (default), "allowlist", "disabled"
+	RequireMention *bool               `json:"require_mention,omitempty"` // require @bot mention in groups (default true)
+	HistoryLimit   int                 `json:"history_limit,omitempty"`   // max pending group messages for context (default 50, 0=disabled)
 }
 
 type SlackConfig struct {

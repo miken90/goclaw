@@ -142,6 +142,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req ChatRequest, onChun
 				acc.Name = tc.Function.Name
 			}
 			acc.rawArgs += tc.Function.Arguments
+			if tc.Function.ThoughtSignature != "" {
+				acc.thoughtSig = tc.Function.ThoughtSignature
+			}
 		}
 
 		if chunk.Choices[0].FinishReason != "" {
@@ -167,6 +170,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req ChatRequest, onChun
 		args := make(map[string]interface{})
 		_ = json.Unmarshal([]byte(acc.rawArgs), &args)
 		acc.Arguments = args
+		if acc.thoughtSig != "" {
+			acc.Metadata = map[string]string{"thought_signature": acc.thoughtSig}
+		}
 		result.ToolCalls = append(result.ToolCalls, acc.ToolCall)
 	}
 
@@ -182,12 +188,20 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req ChatRequest, onChun
 }
 
 func (p *OpenAIProvider) buildRequestBody(model string, req ChatRequest, stream bool) map[string]interface{} {
+	// Gemini 2.5+: collapse old tool_call cycles missing thought_signature into plain text.
+	// Old session messages stored before the thought_signature fix don't have it,
+	// and Gemini rejects them with HTTP 400. Collapse preserves context as text.
+	inputMessages := req.Messages
+	if strings.Contains(strings.ToLower(p.name), "gemini") {
+		inputMessages = collapseToolCallsWithoutSig(inputMessages)
+	}
+
 	// Convert messages to proper OpenAI wire format.
 	// This is necessary because our internal Message/ToolCall structs don't match
 	// the OpenAI API format (tool_calls need type+function wrapper, arguments as JSON string).
 	// Also omits empty content on assistant messages with tool_calls (Gemini compatibility).
-	msgs := make([]map[string]interface{}, 0, len(req.Messages))
-	for _, m := range req.Messages {
+	msgs := make([]map[string]interface{}, 0, len(inputMessages))
+	for _, m := range inputMessages {
 		msg := map[string]interface{}{
 			"role": m.Role,
 		}
@@ -221,13 +235,17 @@ func (p *OpenAIProvider) buildRequestBody(model string, req ChatRequest, stream 
 			toolCalls := make([]map[string]interface{}, len(m.ToolCalls))
 			for i, tc := range m.ToolCalls {
 				argsJSON, _ := json.Marshal(tc.Arguments)
+				fn := map[string]interface{}{
+					"name":      tc.Name,
+					"arguments": string(argsJSON),
+				}
+				if sig := tc.Metadata["thought_signature"]; sig != "" {
+					fn["thought_signature"] = sig
+				}
 				toolCalls[i] = map[string]interface{}{
-					"id":   tc.ID,
-					"type": "function",
-					"function": map[string]interface{}{
-						"name":      tc.Name,
-						"arguments": string(argsJSON),
-					},
+					"id":       tc.ID,
+					"type":     "function",
+					"function": fn,
 				}
 			}
 			msg["tool_calls"] = toolCalls
@@ -312,11 +330,15 @@ func (p *OpenAIProvider) parseResponse(resp *openAIResponse) *ChatResponse {
 		for _, tc := range msg.ToolCalls {
 			args := make(map[string]interface{})
 			_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
-			result.ToolCalls = append(result.ToolCalls, ToolCall{
+			call := ToolCall{
 				ID:        tc.ID,
 				Name:      tc.Function.Name,
 				Arguments: args,
-			})
+			}
+			if tc.Function.ThoughtSignature != "" {
+				call.Metadata = map[string]string{"thought_signature": tc.Function.ThoughtSignature}
+			}
+			result.ToolCalls = append(result.ToolCalls, call)
 		}
 
 		if len(result.ToolCalls) > 0 {
@@ -338,72 +360,3 @@ func (p *OpenAIProvider) parseResponse(resp *openAIResponse) *ChatResponse {
 	return result
 }
 
-// OpenAI API response types (internal)
-
-type openAIResponse struct {
-	Choices []openAIChoice `json:"choices"`
-	Usage   *openAIUsage   `json:"usage,omitempty"`
-}
-
-type openAIChoice struct {
-	Message      openAIMessage `json:"message"`
-	FinishReason string        `json:"finish_reason"`
-}
-
-type openAIMessage struct {
-	Role      string           `json:"role"`
-	Content   string           `json:"content"`
-	ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
-}
-
-type openAIToolCall struct {
-	ID       string             `json:"id"`
-	Type     string             `json:"type"`
-	Function openAIFunctionCall `json:"function"`
-}
-
-type openAIFunctionCall struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
-}
-
-type openAIUsage struct {
-	PromptTokens        int                   `json:"prompt_tokens"`
-	CompletionTokens    int                   `json:"completion_tokens"`
-	TotalTokens         int                   `json:"total_tokens"`
-	PromptTokensDetails *openAIPromptDetails  `json:"prompt_tokens_details,omitempty"`
-}
-
-type openAIPromptDetails struct {
-	CachedTokens int `json:"cached_tokens"`
-}
-
-// Streaming types
-
-type openAIStreamChunk struct {
-	Choices []openAIStreamChoice `json:"choices"`
-	Usage   *openAIUsage         `json:"usage,omitempty"`
-}
-
-type openAIStreamChoice struct {
-	Delta        openAIStreamDelta `json:"delta"`
-	FinishReason string            `json:"finish_reason,omitempty"`
-}
-
-type openAIStreamDelta struct {
-	Content   string                   `json:"content,omitempty"`
-	ToolCalls []openAIStreamToolCall   `json:"tool_calls,omitempty"`
-}
-
-type openAIStreamToolCall struct {
-	Index    int                `json:"index"`
-	ID       string             `json:"id,omitempty"`
-	Function openAIFunctionCall `json:"function"`
-}
-
-// rawArgs is a temporary field for accumulating streamed arguments.
-// We extend ToolCall with it during streaming only.
-type toolCallAccumulator struct {
-	ToolCall
-	rawArgs string
-}

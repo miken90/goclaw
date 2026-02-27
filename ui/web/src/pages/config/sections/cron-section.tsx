@@ -2,8 +2,8 @@ import { useState, useEffect } from "react";
 import { Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { InfoLabel } from "@/components/shared/info-label";
 
 interface CronData {
   max_retries?: number;
@@ -44,7 +44,7 @@ export function CronSection({ data, onSave, saving }: Props) {
       <CardContent className="space-y-4">
         <div className="grid grid-cols-3 gap-4">
           <div className="grid gap-1.5">
-            <Label>Max Retries</Label>
+            <InfoLabel tip="Maximum number of retry attempts for failed cron jobs before giving up.">Max Retries</InfoLabel>
             <Input
               type="number"
               value={draft.max_retries ?? ""}
@@ -54,7 +54,7 @@ export function CronSection({ data, onSave, saving }: Props) {
             />
           </div>
           <div className="grid gap-1.5">
-            <Label>Base Delay</Label>
+            <InfoLabel tip="Initial delay between retries with exponential backoff. Go duration format (e.g. 2s, 500ms).">Base Delay</InfoLabel>
             <Input
               value={draft.retry_base_delay ?? ""}
               onChange={(e) => update({ retry_base_delay: e.target.value })}
@@ -62,7 +62,7 @@ export function CronSection({ data, onSave, saving }: Props) {
             />
           </div>
           <div className="grid gap-1.5">
-            <Label>Max Delay</Label>
+            <InfoLabel tip="Maximum delay cap for exponential backoff. Retries won't wait longer than this. Go duration format.">Max Delay</InfoLabel>
             <Input
               value={draft.retry_max_delay ?? ""}
               onChange={(e) => update({ retry_max_delay: e.target.value })}

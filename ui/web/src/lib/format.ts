@@ -24,7 +24,8 @@ export function formatRelativeTime(date: string | Date): string {
   return formatDate(d);
 }
 
-export function formatTokens(count: number): string {
+export function formatTokens(count: number | null | undefined): string {
+  if (count == null) return "0";
   if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
   if (count >= 1_000) return `${(count / 1_000).toFixed(1)}K`;
   return count.toString();
