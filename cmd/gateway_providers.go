@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"log/slog"
-	"strings"
 
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
@@ -81,12 +80,11 @@ func registerProvidersFromDB(registry *providers.Registry, provStore store.Provi
 		if !p.Enabled || p.APIKey == "" {
 			continue
 		}
-		if p.ProviderType == "anthropic_native" {
+		if p.ProviderType == store.ProviderAnthropicNative {
 			registry.Register(providers.NewAnthropicProvider(p.APIKey))
 		} else {
 			prov := providers.NewOpenAIProvider(p.Name, p.APIKey, p.APIBase, "")
-			// MiniMax native API uses a different chat path for vision support.
-			if p.Name == "minimax" && strings.Contains(p.APIBase, "minimax.io") {
+			if p.ProviderType == store.ProviderMiniMax {
 				prov.WithChatPath("/text/chatcompletion_v2")
 			}
 			registry.Register(prov)

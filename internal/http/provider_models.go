@@ -49,15 +49,15 @@ func (h *ProvidersHandler) handleListProviderModels(w http.ResponseWriter, r *ht
 	switch p.ProviderType {
 	case "anthropic_native":
 		models, err = fetchAnthropicModels(ctx, p.APIKey)
-	case "openai_compat":
+	case "gemini_native":
+		models, err = fetchGeminiModels(ctx, p.APIKey)
+	default:
+		// All other types use OpenAI-compatible /models endpoint
 		apiBase := strings.TrimRight(p.APIBase, "/")
 		if apiBase == "" {
 			apiBase = "https://api.openai.com/v1"
 		}
 		models, err = fetchOpenAIModels(ctx, apiBase, p.APIKey)
-	default:
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("unsupported provider type: %s", p.ProviderType)})
-		return
 	}
 
 	if err != nil {
@@ -103,6 +103,44 @@ func fetchAnthropicModels(ctx context.Context, apiKey string) ([]ModelInfo, erro
 	models := make([]ModelInfo, 0, len(result.Data))
 	for _, m := range result.Data {
 		models = append(models, ModelInfo{ID: m.ID, Name: m.DisplayName})
+	}
+	return models, nil
+}
+
+// fetchGeminiModels calls the Google Gemini models API.
+// Gemini uses a different format: GET /v1beta/models?key=API_KEY
+func fetchGeminiModels(ctx context.Context, apiKey string) ([]ModelInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://generativelanguage.googleapis.com/v1beta/models?key="+apiKey, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("gemini API returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Models []struct {
+			Name        string `json:"name"`        // e.g. "models/gemini-2.0-flash"
+			DisplayName string `json:"displayName"` // e.g. "Gemini 2.0 Flash"
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode gemini response: %w", err)
+	}
+
+	models := make([]ModelInfo, 0, len(result.Models))
+	for _, m := range result.Models {
+		// Strip "models/" prefix to get the usable model ID
+		id := strings.TrimPrefix(m.Name, "models/")
+		models = append(models, ModelInfo{ID: id, Name: m.DisplayName})
 	}
 	return models, nil
 }

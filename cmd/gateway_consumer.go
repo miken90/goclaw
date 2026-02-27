@@ -92,9 +92,15 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 		// context files, memory, traces, and seeding. Individual senderID is
 		// preserved in the InboundMessage for pairing/dedup/mention gate.
 		// Format: "group:{channel}:{chatID}" — e.g., "group:telegram:-1002541239372"
+		// For Discord: use guild_id so all channels in the same server share
+		// context files, memory, and seeding (session key stays per-channel).
 		userID := msg.UserID
 		if peerKind == string(sessions.PeerGroup) && msg.ChatID != "" {
-			userID = fmt.Sprintf("group:%s:%s", msg.Channel, msg.ChatID)
+			groupID := msg.ChatID
+			if guildID := msg.Metadata["guild_id"]; guildID != "" {
+				groupID = guildID
+			}
+			userID = fmt.Sprintf("group:%s:%s", msg.Channel, groupID)
 		}
 
 		slog.Info("inbound: scheduling message (main lane)",
@@ -170,7 +176,7 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 		if mid := msg.Metadata["message_id"]; mid != "" {
 			outMeta["reply_to_message_id"] = mid
 		}
-		for _, k := range []string{"message_thread_id", "local_key"} {
+		for _, k := range []string{"message_thread_id", "local_key", "placeholder_key"} {
 			if v := msg.Metadata[k]; v != "" {
 				outMeta[k] = v
 			}

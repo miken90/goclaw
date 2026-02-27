@@ -127,7 +127,7 @@ export function LlmConfigSection({
               )}
             </div>
             {verifyResult && (
-              <p className={`text-xs ${verifyResult.valid ? "text-emerald-400" : "text-red-400"}`}>
+              <p className={`text-xs ${verifyResult.valid ? "text-success" : "text-destructive"}`}>
                 {verifyResult.valid ? "Model verified" : verifyResult.error || "Verification failed"}
               </p>
             )}

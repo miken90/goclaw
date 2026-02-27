@@ -17,6 +17,15 @@ import { usePagination } from "@/hooks/use-pagination";
 const typeBadge: Record<string, { label: string; variant: "default" | "secondary" | "outline" }> = {
   anthropic_native: { label: "Anthropic", variant: "default" },
   openai_compat: { label: "OpenAI Compat", variant: "secondary" },
+  gemini_native: { label: "Gemini", variant: "secondary" },
+  openrouter: { label: "OpenRouter", variant: "secondary" },
+  groq: { label: "Groq", variant: "secondary" },
+  deepseek: { label: "DeepSeek", variant: "secondary" },
+  mistral: { label: "Mistral", variant: "secondary" },
+  xai: { label: "xAI", variant: "secondary" },
+  minimax_native: { label: "MiniMax", variant: "secondary" },
+  cohere: { label: "Cohere", variant: "secondary" },
+  perplexity: { label: "Perplexity", variant: "secondary" },
 };
 
 export function ProvidersPage() {

@@ -98,5 +98,10 @@ export function useAgentDetail(agentId: string | undefined) {
     [agentId, http],
   );
 
-  return { agent, files, loading, updateAgent, getFile, setFile, regenerateAgent, refresh: load };
+  const resummonAgent = useCallback(async () => {
+    if (!agentId) return;
+    await http.post(`/v1/agents/${agentId}/resummon`);
+  }, [agentId, http]);
+
+  return { agent, files, loading, updateAgent, getFile, setFile, regenerateAgent, resummonAgent, refresh: load };
 }

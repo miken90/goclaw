@@ -194,6 +194,10 @@ func (c *BaseChannel) CheckPolicy(peerKind, dmPolicy, groupPolicy, senderID stri
 		return false
 	case "allowlist":
 		return c.IsAllowed(senderID)
+	case "pairing":
+		// Channels with pairing handle this before CheckPolicy.
+		// If we reach here, no pairing service → still allow if in allowlist.
+		return c.IsAllowed(senderID)
 	default: // "open"
 		return true
 	}

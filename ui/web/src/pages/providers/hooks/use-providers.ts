@@ -5,7 +5,7 @@ export interface ProviderData {
   id: string;
   name: string;
   display_name: string;
-  provider_type: "anthropic_native" | "openai_compat";
+  provider_type: string;
   api_base: string;
   api_key: string; // masked "***" from server
   enabled: boolean;

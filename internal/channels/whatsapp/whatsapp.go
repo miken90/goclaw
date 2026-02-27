@@ -14,23 +14,28 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/channels"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
+	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
+
+const pairingDebounceTime = 60 * time.Second
 
 // Channel connects to a WhatsApp bridge via WebSocket.
 // The bridge (e.g. whatsapp-web.js based) handles the actual WhatsApp
 // protocol; this channel just sends/receives JSON messages over WS.
 type Channel struct {
 	*channels.BaseChannel
-	conn      *websocket.Conn
-	config    config.WhatsAppConfig
-	mu        sync.Mutex
-	connected bool
-	ctx       context.Context
-	cancel    context.CancelFunc
+	conn            *websocket.Conn
+	config          config.WhatsAppConfig
+	mu              sync.Mutex
+	connected       bool
+	ctx             context.Context
+	cancel          context.CancelFunc
+	pairingService  store.PairingStore
+	pairingDebounce sync.Map // senderID → time.Time
 }
 
 // New creates a new WhatsApp channel from config.
-func New(cfg config.WhatsAppConfig, msgBus *bus.MessageBus) (*Channel, error) {
+func New(cfg config.WhatsAppConfig, msgBus *bus.MessageBus, pairingSvc store.PairingStore) (*Channel, error) {
 	if cfg.BridgeURL == "" {
 		return nil, fmt.Errorf("whatsapp bridge_url is required")
 	}
@@ -38,8 +43,9 @@ func New(cfg config.WhatsAppConfig, msgBus *bus.MessageBus) (*Channel, error) {
 	base := channels.NewBaseChannel("whatsapp", msgBus, cfg.AllowFrom)
 
 	return &Channel{
-		BaseChannel: base,
-		config:      cfg,
+		BaseChannel:    base,
+		config:         cfg,
+		pairingService: pairingSvc,
 	}, nil
 }
 
@@ -210,9 +216,15 @@ func (c *Channel) handleIncomingMessage(msg map[string]interface{}) {
 	}
 
 	// DM/Group policy check
-	if !c.CheckPolicy(peerKind, c.config.DMPolicy, c.config.GroupPolicy, senderID) {
-		slog.Debug("whatsapp message rejected by policy", "sender_id", senderID, "peer_kind", peerKind)
-		return
+	if peerKind == "direct" {
+		if !c.checkDMPolicy(senderID, chatID) {
+			return
+		}
+	} else {
+		if !c.CheckPolicy("group", "", c.config.GroupPolicy, senderID) {
+			slog.Debug("whatsapp group message rejected by policy", "sender_id", senderID)
+			return
+		}
 	}
 
 	// Allowlist check
@@ -251,4 +263,85 @@ func (c *Channel) handleIncomingMessage(msg map[string]interface{}) {
 	)
 
 	c.HandleMessage(senderID, chatID, content, media, metadata, peerKind)
+}
+
+// checkDMPolicy evaluates the DM policy for a sender, handling pairing flow.
+func (c *Channel) checkDMPolicy(senderID, chatID string) bool {
+	dmPolicy := c.config.DMPolicy
+	if dmPolicy == "" {
+		dmPolicy = "pairing"
+	}
+
+	switch dmPolicy {
+	case "disabled":
+		slog.Debug("whatsapp DM rejected: disabled", "sender_id", senderID)
+		return false
+	case "open":
+		return true
+	case "allowlist":
+		if !c.IsAllowed(senderID) {
+			slog.Debug("whatsapp DM rejected by allowlist", "sender_id", senderID)
+			return false
+		}
+		return true
+	default: // "pairing"
+		paired := false
+		if c.pairingService != nil {
+			paired = c.pairingService.IsPaired(senderID, c.Name())
+		}
+		inAllowList := c.HasAllowList() && c.IsAllowed(senderID)
+
+		if paired || inAllowList {
+			return true
+		}
+
+		c.sendPairingReply(senderID, chatID)
+		return false
+	}
+}
+
+// sendPairingReply sends a pairing code to the user via the WS bridge.
+func (c *Channel) sendPairingReply(senderID, chatID string) {
+	if c.pairingService == nil {
+		return
+	}
+
+	// Debounce
+	if lastSent, ok := c.pairingDebounce.Load(senderID); ok {
+		if time.Since(lastSent.(time.Time)) < pairingDebounceTime {
+			return
+		}
+	}
+
+	code, err := c.pairingService.RequestPairing(senderID, c.Name(), chatID, "default")
+	if err != nil {
+		slog.Debug("whatsapp pairing request failed", "sender_id", senderID, "error", err)
+		return
+	}
+
+	replyText := fmt.Sprintf(
+		"GoClaw: access not configured.\n\nYour WhatsApp ID: %s\n\nPairing code: %s\n\nAsk the bot owner to approve with:\n  goclaw pairing approve %s",
+		senderID, code, code,
+	)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.conn == nil {
+		slog.Warn("whatsapp bridge not connected, cannot send pairing reply")
+		return
+	}
+
+	payload, _ := json.Marshal(map[string]interface{}{
+		"type":    "message",
+		"to":      chatID,
+		"content": replyText,
+	})
+
+	if err := c.conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+		slog.Warn("failed to send whatsapp pairing reply", "error", err)
+	} else {
+		c.pairingDebounce.Store(senderID, time.Now())
+		slog.Info("whatsapp pairing reply sent", "sender_id", senderID, "code", code)
+	}
 }

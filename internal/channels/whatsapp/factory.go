@@ -24,7 +24,7 @@ type whatsappInstanceConfig struct {
 
 // Factory creates a WhatsApp channel from DB instance data.
 func Factory(name string, creds json.RawMessage, cfg json.RawMessage,
-	msgBus *bus.MessageBus, _ store.PairingStore) (channels.Channel, error) {
+	msgBus *bus.MessageBus, pairingSvc store.PairingStore) (channels.Channel, error) {
 
 	var c whatsappCreds
 	if len(creds) > 0 {
@@ -56,7 +56,7 @@ func Factory(name string, creds json.RawMessage, cfg json.RawMessage,
 		waCfg.GroupPolicy = "pairing"
 	}
 
-	ch, err := New(waCfg, msgBus)
+	ch, err := New(waCfg, msgBus, pairingSvc)
 	if err != nil {
 		return nil, err
 	}

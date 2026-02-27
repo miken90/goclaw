@@ -31,17 +31,19 @@ const (
 // Channel connects to Feishu/Lark via native HTTP + WebSocket.
 type Channel struct {
 	*channels.BaseChannel
-	cfg            config.FeishuConfig
-	client         *LarkClient
-	botOpenID      string
-	pairingService store.PairingStore
-	senderCache    sync.Map // open_id → *senderCacheEntry
-	dedup          sync.Map // message_id → struct{}
+	cfg             config.FeishuConfig
+	client          *LarkClient
+	botOpenID       string
+	pairingService  store.PairingStore
+	senderCache     sync.Map // open_id → *senderCacheEntry
+	dedup           sync.Map // message_id → struct{}
 	pairingDebounce sync.Map // senderID → time.Time
-	groupAllowList []string
-	stopCh         chan struct{}
-	httpServer     *http.Server
-	wsClient       *WSClient
+	groupAllowList  []string
+	groupHistory    *channels.PendingHistory
+	historyLimit    int
+	stopCh          chan struct{}
+	httpServer      *http.Server
+	wsClient        *WSClient
 }
 
 type senderCacheEntry struct {
@@ -62,12 +64,19 @@ func New(cfg config.FeishuConfig, msgBus *bus.MessageBus, pairingSvc store.Pairi
 
 	base := channels.NewBaseChannel("feishu", msgBus, cfg.AllowFrom)
 
+	historyLimit := cfg.HistoryLimit
+	if historyLimit == 0 {
+		historyLimit = channels.DefaultGroupHistoryLimit
+	}
+
 	return &Channel{
 		BaseChannel:    base,
 		cfg:            cfg,
 		client:         client,
 		pairingService: pairingSvc,
 		groupAllowList: cfg.GroupAllowFrom,
+		groupHistory:   channels.NewPendingHistory(),
+		historyLimit:   historyLimit,
 		stopCh:         make(chan struct{}),
 	}, nil
 }
@@ -233,7 +242,14 @@ func (c *Channel) startWebhook(ctx context.Context) error {
 // --- Bot probe ---
 
 func (c *Channel) probeBotInfo(ctx context.Context) error {
-	// Bot open_id will be resolved from first message event if needed
+	openID, err := c.client.GetBotInfo(ctx)
+	if err != nil {
+		return fmt.Errorf("fetch bot info: %w", err)
+	}
+	if openID == "" {
+		return fmt.Errorf("bot open_id is empty")
+	}
+	c.botOpenID = openID
 	return nil
 }
 

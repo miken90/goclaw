@@ -2,11 +2,11 @@ import { useState, useEffect } from "react";
 import { Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
+import { InfoLabel } from "@/components/shared/info-label";
+import { KeyValueEditor } from "@/components/shared/key-value-editor";
 
 interface TelemetryData {
   enabled?: boolean;
@@ -27,12 +27,12 @@ interface Props {
 
 export function TelemetrySection({ data, onSave, saving }: Props) {
   const [draft, setDraft] = useState<TelemetryData>(data ?? DEFAULT);
-  const [headersText, setHeadersText] = useState("");
+  const [headers, setHeaders] = useState<Record<string, string>>({});
   const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
     setDraft(data ?? DEFAULT);
-    setHeadersText(data?.headers ? JSON.stringify(data.headers, null, 2) : "{}");
+    setHeaders(data?.headers ?? {});
     setDirty(false);
   }, [data]);
 
@@ -42,13 +42,7 @@ export function TelemetrySection({ data, onSave, saving }: Props) {
   };
 
   const handleSave = () => {
-    let headers: Record<string, string> | undefined;
-    try {
-      headers = JSON.parse(headersText);
-    } catch {
-      headers = draft.headers;
-    }
-    onSave({ ...draft, headers });
+    onSave({ ...draft, headers: Object.keys(headers).length > 0 ? headers : undefined });
   };
 
   if (!data) return null;
@@ -61,13 +55,13 @@ export function TelemetrySection({ data, onSave, saving }: Props) {
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex items-center justify-between">
-          <Label>Enabled</Label>
+          <InfoLabel tip="Enable OpenTelemetry export of LLM call traces and spans.">Enabled</InfoLabel>
           <Switch checked={draft.enabled ?? false} onCheckedChange={(v) => update({ enabled: v })} />
         </div>
 
         <div className="grid grid-cols-2 gap-4">
           <div className="grid gap-1.5">
-            <Label>Endpoint</Label>
+            <InfoLabel tip="OTel collector endpoint address (host:port). E.g. localhost:4317 for gRPC or localhost:4318 for HTTP.">Endpoint</InfoLabel>
             <Input
               value={draft.endpoint ?? ""}
               onChange={(e) => update({ endpoint: e.target.value })}
@@ -75,7 +69,7 @@ export function TelemetrySection({ data, onSave, saving }: Props) {
             />
           </div>
           <div className="grid gap-1.5">
-            <Label>Protocol</Label>
+            <InfoLabel tip="Transport protocol for exporting traces. gRPC is recommended for most setups.">Protocol</InfoLabel>
             <Select value={draft.protocol ?? "grpc"} onValueChange={(v) => update({ protocol: v })}>
               <SelectTrigger>
                 <SelectValue />
@@ -90,7 +84,7 @@ export function TelemetrySection({ data, onSave, saving }: Props) {
 
         <div className="grid grid-cols-2 gap-4">
           <div className="grid gap-1.5">
-            <Label>Service Name</Label>
+            <InfoLabel tip="Service name reported in trace spans. Useful for distinguishing multiple gateway instances.">Service Name</InfoLabel>
             <Input
               value={draft.service_name ?? ""}
               onChange={(e) => update({ service_name: e.target.value })}
@@ -98,21 +92,19 @@ export function TelemetrySection({ data, onSave, saving }: Props) {
             />
           </div>
           <div className="flex items-center justify-between">
-            <Label>Insecure (no TLS)</Label>
+            <InfoLabel tip="Disable TLS for the connection to the OTel collector. Use only for local/trusted networks.">Insecure (no TLS)</InfoLabel>
             <Switch checked={draft.insecure ?? false} onCheckedChange={(v) => update({ insecure: v })} />
           </div>
         </div>
 
         <div className="grid gap-1.5">
-          <Label>Headers (JSON)</Label>
-          <Textarea
-            value={headersText}
-            onChange={(e) => {
-              setHeadersText(e.target.value);
-              setDirty(true);
-            }}
-            className="min-h-[80px] font-mono text-xs"
-            placeholder='{"Authorization": "Bearer ..."}'
+          <InfoLabel tip="Additional HTTP headers sent with each export request. Useful for authentication tokens or routing metadata.">Headers</InfoLabel>
+          <KeyValueEditor
+            value={headers}
+            onChange={(v) => { setHeaders(v); setDirty(true); }}
+            keyPlaceholder="Header name"
+            valuePlaceholder="Header value"
+            addLabel="Add Header"
           />
         </div>
 
