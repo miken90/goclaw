@@ -35,3 +35,4 @@ tmp
 deploy-*.sh
 
 docs/technical-diaries
+history/
