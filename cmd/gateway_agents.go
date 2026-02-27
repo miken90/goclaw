@@ -237,7 +237,12 @@ func createEmbeddingProvider(name string, cfg *config.Config, memCfg *config.Mem
 		if cfg.Providers.Gemini.APIKey == "" {
 			return nil
 		}
-		return memory.NewOpenAIEmbeddingProvider("gemini", cfg.Providers.Gemini.APIKey, "https://generativelanguage.googleapis.com/v1beta/openai", "text-embedding-004")
+		geminiModel := "gemini-embedding-001"
+		if memCfg != nil && memCfg.EmbeddingModel != "" {
+			geminiModel = memCfg.EmbeddingModel
+		}
+		return memory.NewOpenAIEmbeddingProvider("gemini", cfg.Providers.Gemini.APIKey, "https://generativelanguage.googleapis.com/v1beta/openai", geminiModel).
+			WithDimensions(1536)
 	}
 	return nil
 }
