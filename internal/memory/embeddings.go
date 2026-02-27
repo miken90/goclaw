@@ -25,10 +25,11 @@ type EmbeddingProvider interface {
 // OpenAIEmbeddingProvider uses the OpenAI-compatible embedding API.
 // Works with OpenAI, OpenRouter, and any compatible endpoint.
 type OpenAIEmbeddingProvider struct {
-	name   string
-	model  string
-	apiKey string
-	apiURL string
+	name       string
+	model      string
+	apiKey     string
+	apiURL     string
+	dimensions int // optional: truncate output to this many dimensions (0 = use model default)
 }
 
 // NewOpenAIEmbeddingProvider creates a provider for OpenAI-compatible embedding APIs.
@@ -48,6 +49,12 @@ func NewOpenAIEmbeddingProvider(name, apiKey, apiURL, model string) *OpenAIEmbed
 	}
 }
 
+// WithDimensions sets the output dimensions for models that support dimension truncation.
+func (p *OpenAIEmbeddingProvider) WithDimensions(d int) *OpenAIEmbeddingProvider {
+	p.dimensions = d
+	return p
+}
+
 func (p *OpenAIEmbeddingProvider) Name() string  { return p.name }
 func (p *OpenAIEmbeddingProvider) Model() string { return p.model }
 
@@ -55,6 +62,9 @@ func (p *OpenAIEmbeddingProvider) Embed(ctx context.Context, texts []string) ([]
 	reqBody := map[string]interface{}{
 		"input": texts,
 		"model": p.model,
+	}
+	if p.dimensions > 0 {
+		reqBody["dimensions"] = p.dimensions
 	}
 
 	bodyJSON, err := json.Marshal(reqBody)
