@@ -73,7 +73,7 @@ export function AgentConfigTab({ agent, onUpdate }: AgentConfigTabProps) {
     try {
       const updates: Record<string, unknown> = {
         subagents_config: subEnabled ? sub : null,
-        tools_config: toolsEnabled ? tools : null,
+        tools_config: toolsEnabled ? tools : {},
         compaction_config: compEnabled ? comp : null,
         context_pruning: pruneEnabled ? prune : null,
         sandbox_config: sbEnabled ? sb : null,
@@ -87,7 +87,7 @@ export function AgentConfigTab({ agent, onUpdate }: AgentConfigTabProps) {
       if (qgEnabled && qualityGates.length > 0) {
         otherBase.quality_gates = qualityGates;
       }
-      updates.other_config = Object.keys(otherBase).length > 0 ? otherBase : null;
+      updates.other_config = Object.keys(otherBase).length > 0 ? otherBase : {};
       await onUpdate(updates);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
