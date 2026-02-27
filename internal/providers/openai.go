@@ -188,9 +188,10 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req ChatRequest, onChun
 }
 
 func (p *OpenAIProvider) buildRequestBody(model string, req ChatRequest, stream bool) map[string]interface{} {
-	// Gemini 2.5+: collapse old tool_call cycles missing thought_signature into plain text.
-	// Old session messages stored before the thought_signature fix don't have it,
-	// and Gemini rejects them with HTTP 400. Collapse preserves context as text.
+	// Gemini 2.5+: collapse tool_call cycles missing thought_signature.
+	// Gemini requires thought_signature echoed back on every tool_call; models that
+	// don't return it (e.g. gemini-3-flash) will cause HTTP 400 if sent as-is.
+	// Tool results are folded into plain user messages to preserve context.
 	inputMessages := req.Messages
 	if strings.Contains(strings.ToLower(p.name), "gemini") {
 		inputMessages = collapseToolCallsWithoutSig(inputMessages)

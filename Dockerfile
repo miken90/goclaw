@@ -52,7 +52,7 @@ COPY docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
 # Create data directories (owned by goclaw user)
-RUN mkdir -p /app/workspace /app/data /app/sessions /app/skills /app/tsnet-state \
+RUN mkdir -p /app/workspace /app/data /app/sessions /app/skills /app/tsnet-state /app/.goclaw \
     && chown -R goclaw:goclaw /app
 
 # Default environment

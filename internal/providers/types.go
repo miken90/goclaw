@@ -21,9 +21,9 @@ type Provider interface {
 
 // ChatRequest contains the input for a Chat/ChatStream call.
 type ChatRequest struct {
-	Messages []Message        `json:"messages"`
-	Tools    []ToolDefinition `json:"tools,omitempty"`
-	Model    string           `json:"model,omitempty"`
+	Messages []Message              `json:"messages"`
+	Tools    []ToolDefinition       `json:"tools,omitempty"`
+	Model    string                 `json:"model,omitempty"`
 	Options  map[string]interface{} `json:"options,omitempty"`
 }
 

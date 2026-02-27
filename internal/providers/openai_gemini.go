@@ -3,8 +3,8 @@ package providers
 import "strings"
 
 // collapseToolCallsWithoutSig rewrites tool_call cycles that lack thought_signature
-// (required by Gemini 2.5+). Old session history stored before the thought_signature
-// capture fix doesn't have it, and Gemini rejects those messages with HTTP 400.
+// (required by Gemini 2.5+). Gemini requires thought_signature echoed back on every
+// tool_call; models that don't return it cause HTTP 400 if sent as-is.
 //
 // The assistant's tool_calls are stripped, and the corresponding tool-result messages
 // are folded into a single user message with the tool output content. This preserves

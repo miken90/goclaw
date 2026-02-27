@@ -104,15 +104,15 @@ func buildProjectContextSection(files []bootstrap.ContextFile) []string {
 	for _, f := range files {
 		base := filepath.Base(f.Path)
 
-		// During bootstrap (first run), skip delegation/team files — they add noise
+		// During bootstrap (first run), skip delegation/team/availability files — they add noise
 		// and waste tokens when the agent should only be introducing itself.
-		if hasBootstrap && (base == bootstrap.DelegationFile || base == bootstrap.TeamFile) {
+		if hasBootstrap && (base == bootstrap.DelegationFile || base == bootstrap.TeamFile || base == "AVAILABILITY.md") {
 			continue
 		}
 
-		// Virtual files (DELEGATION.md, TEAM.md) are system-injected, not on disk.
+		// Virtual files (DELEGATION.md, TEAM.md, AVAILABILITY.md) are system-injected, not on disk.
 		// Render with <system_context> so the LLM doesn't try to read/write them as files.
-		if base == bootstrap.DelegationFile || base == bootstrap.TeamFile {
+		if base == bootstrap.DelegationFile || base == bootstrap.TeamFile || base == "AVAILABILITY.md" {
 			lines = append(lines,
 				fmt.Sprintf("<system_context name=%q>", base),
 				f.Content,

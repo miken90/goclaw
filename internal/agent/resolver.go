@@ -102,6 +102,7 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 		// Inject DELEGATION.md from delegation links (only if not already present in DB).
 		// Uses DELEGATION.md (not AGENTS.md) to avoid collision with per-user AGENTS.md
 		// which contains workspace instructions for open agents.
+		hasDelegation := false
 		if deps.AgentLinkStore != nil {
 			hasDelegationMD := false
 			for _, cf := range contextFiles {
@@ -118,23 +119,28 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 					targets := filterManualLinks(allTargets)
 					if len(targets) > 0 && len(targets) <= 15 {
 						// Static list: all targets directly
+						hasDelegation = true
 						contextFiles = append(contextFiles, bootstrap.ContextFile{
 							Path:    bootstrap.DelegationFile,
 							Content: buildDelegateAgentsMD(targets),
 						})
 					} else if len(targets) > 15 {
 						// Too many targets: instruct agent to use delegate_search tool
+						hasDelegation = true
 						contextFiles = append(contextFiles, bootstrap.ContextFile{
 							Path:    bootstrap.DelegationFile,
 							Content: buildDelegateSearchInstruction(len(targets)),
 						})
 					}
 				}
+			} else {
+				hasDelegation = true
 			}
 		}
 
 		// Inject TEAM.md for all team members (lead + members) so every agent
 		// knows the team workflow: create/claim/complete tasks via team_tasks tool.
+		hasTeam := false
 		if deps.TeamStore != nil {
 			hasTeamMD := false
 			for _, cf := range contextFiles {
@@ -146,13 +152,32 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			if !hasTeamMD {
 				if team, err := deps.TeamStore.GetTeamForAgent(ctx, ag.ID); err == nil && team != nil {
 					if members, err := deps.TeamStore.ListMembers(ctx, team.ID); err == nil {
+						hasTeam = true
 						contextFiles = append(contextFiles, bootstrap.ContextFile{
 							Path:    bootstrap.TeamFile,
 							Content: buildTeamMD(team, members, ag.ID),
 						})
 					}
 				}
+			} else {
+				hasTeam = true
 			}
+		}
+
+		// Inject negative context so the model doesn't waste iterations probing
+		// unavailable capabilities (team_tasks, delegate_search, etc.).
+		if !hasTeam || !hasDelegation {
+			var notes []string
+			if !hasTeam {
+				notes = append(notes, "You are NOT part of any team. Do not use team_tasks or team_message tools.")
+			}
+			if !hasDelegation {
+				notes = append(notes, "You have NO delegation targets. Do not use delegate or delegate_search tools.")
+			}
+			contextFiles = append(contextFiles, bootstrap.ContextFile{
+				Path:    "AVAILABILITY.md",
+				Content: strings.Join(notes, "\n"),
+			})
 		}
 
 		contextWindow := ag.ContextWindow

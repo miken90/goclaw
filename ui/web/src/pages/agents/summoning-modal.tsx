@@ -21,7 +21,6 @@ interface SummoningModalProps {
 const SUMMONING_FILES = [
   { name: "SOUL.md", label: "Soul & Personality" },
   { name: "IDENTITY.md", label: "Identity Card" },
-  { name: "AGENTS.md", label: "Operating Instructions" },
 ];
 
 export function SummoningModal({

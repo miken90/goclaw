@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -330,10 +331,14 @@ func (c *Channel) handleMessage(_ *discordgo.Session, m *discordgo.MessageCreate
 		c.placeholders.Store(m.ID, placeholder.ID)
 	}
 
+	// Strip bot @mention from content — it's just the trigger, not meaningful.
+	content = strings.ReplaceAll(content, "<@"+c.botUserID+">", "")
+	content = strings.TrimSpace(content)
+
 	// Build final content with group context.
 	finalContent := content
 	if peerKind == "group" {
-		annotated := fmt.Sprintf("[From: %s]\n%s", senderName, content)
+		annotated := fmt.Sprintf("[From: %s (<@%s>)]\n%s", senderName, senderID, content)
 		if c.historyLimit > 0 {
 			finalContent = c.groupHistory.BuildContext(channelID, annotated, c.historyLimit)
 		} else {
