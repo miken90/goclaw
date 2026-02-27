@@ -1,11 +1,14 @@
 package providers
 
-// collapseToolCallsWithoutSig strips tool_call cycles that lack thought_signature
+import "strings"
+
+// collapseToolCallsWithoutSig rewrites tool_call cycles that lack thought_signature
 // (required by Gemini 2.5+). Old session history stored before the thought_signature
 // capture fix doesn't have it, and Gemini rejects those messages with HTTP 400.
 //
-// The assistant's original text content (if any) is preserved; only the tool_calls
-// and their corresponding tool-result messages are dropped.
+// The assistant's tool_calls are stripped, and the corresponding tool-result messages
+// are folded into a single user message with the tool output content. This preserves
+// context for the model without using a format that triggers tool-call imitation.
 func collapseToolCallsWithoutSig(msgs []Message) []Message {
 	// Collect tool_call IDs that need collapsing.
 	collapseIDs := make(map[string]bool)
@@ -39,9 +42,19 @@ func collapseToolCallsWithoutSig(msgs []Message) []Message {
 				})
 			}
 
-			// Skip consecutive tool results belonging to these tool_calls.
+			// Collect consecutive tool results → fold into one user message.
+			var parts []string
 			for i+1 < len(msgs) && msgs[i+1].Role == "tool" && collapseIDs[msgs[i+1].ToolCallID] {
 				i++
+				if content := strings.TrimSpace(msgs[i].Content); content != "" {
+					parts = append(parts, content)
+				}
+			}
+			if len(parts) > 0 {
+				result = append(result, Message{
+					Role:    "user",
+					Content: strings.Join(parts, "\n\n"),
+				})
 			}
 			continue
 		}
