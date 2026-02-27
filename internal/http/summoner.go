@@ -29,12 +29,11 @@ const (
 const frontmatterKey = "__frontmatter__"
 
 // summoningFiles is the ordered list of context files the LLM should generate.
+// Only personality files — operational files (AGENTS.md, TOOLS.md, HEARTBEAT.md)
+// are kept as fixed templates from bootstrap.SeedToStore().
 var summoningFiles = []string{
 	bootstrap.SoulFile,
 	bootstrap.IdentityFile,
-	bootstrap.AgentsFile,
-	bootstrap.ToolsFile,
-	bootstrap.HeartbeatFile,
 }
 
 // fileTagRe parses <file name="SOUL.md">content</file> from LLM output.
@@ -82,8 +81,12 @@ func (s *AgentSummoner) SummonAgent(agentID uuid.UUID, providerName, model, desc
 
 	s.storeFiles(ctx, agentID, files)
 
-	// Auto-generate frontmatter from description if LLM included it
-	if fm, ok := files[frontmatterKey]; ok && fm != "" {
+	// Save frontmatter — use LLM-generated if available, otherwise fallback to truncated description
+	fm := files[frontmatterKey]
+	if fm == "" {
+		fm = truncateUTF8(description, 200)
+	}
+	if fm != "" {
 		if err := s.agents.Update(ctx, agentID, map[string]any{"frontmatter": fm}); err != nil {
 			slog.Warn("summoning: failed to save frontmatter", "agent", agentID, "error", err)
 		}
@@ -125,6 +128,14 @@ func (s *AgentSummoner) RegenerateAgent(agentID uuid.UUID, providerName, model, 
 	}
 
 	s.storeFiles(ctx, agentID, files)
+
+	// Update frontmatter if LLM generated one
+	if fm, ok := files[frontmatterKey]; ok && fm != "" {
+		if err := s.agents.Update(ctx, agentID, map[string]any{"frontmatter": fm}); err != nil {
+			slog.Warn("summoning: failed to save frontmatter", "agent", agentID, "error", err)
+		}
+	}
+
 	s.setAgentStatus(ctx, agentID, store.AgentStatusActive)
 	s.emitEvent(agentID, SummonEventCompleted, "", "")
 
@@ -222,89 +233,113 @@ func (s *AgentSummoner) emitEvent(agentID uuid.UUID, eventType, fileName, errMsg
 	})
 }
 
-// buildCreatePrompt constructs the system + user prompt for initial file generation.
-// Includes the full template files as reference so the LLM preserves core operational structure.
+// buildCreatePrompt constructs the prompt for initial SOUL.md + IDENTITY.md generation.
+// Only personality files are LLM-generated; operational files stay as fixed templates.
 func (s *AgentSummoner) buildCreatePrompt(description string) string {
-	// Load templates as reference material
-	templates := make(map[string]string)
-	for _, name := range summoningFiles {
-		content, err := bootstrap.ReadTemplate(name)
-		if err != nil {
-			slog.Warn("summoning: failed to read template for prompt", "file", name, "error", err)
-			continue
-		}
-		templates[name] = content
-	}
-
 	var sb strings.Builder
-	sb.WriteString("You are setting up a new AI assistant. Based on the description below, generate customized content for each context file.\n\n")
+	sb.WriteString("You are setting up a new AI assistant. Based on the description below, generate TWO files: SOUL.md and IDENTITY.md.\n\n")
 
 	fmt.Fprintf(&sb, "<description>\n%s\n</description>\n\n", description)
 
-	sb.WriteString("Below are the DEFAULT TEMPLATES for each file. Use them as the foundation — preserve the core structure and operational rules, but customize the content to match the agent's purpose and personality.\n\n")
+	// Load SOUL.md template as reference
+	soulTemplate, err := bootstrap.ReadTemplate(bootstrap.SoulFile)
+	if err != nil {
+		slog.Warn("summoning: failed to read SOUL.md template", "error", err)
+	}
+	identityTemplate, err := bootstrap.ReadTemplate(bootstrap.IdentityFile)
+	if err != nil {
+		slog.Warn("summoning: failed to read IDENTITY.md template", "error", err)
+	}
 
 	sb.WriteString("<templates>\n")
-	for _, name := range summoningFiles {
-		if content, ok := templates[name]; ok {
-			fmt.Fprintf(&sb, "<file name=%q>\n%s\n</file>\n", name, content)
-		}
+	if soulTemplate != "" {
+		fmt.Fprintf(&sb, "<file name=\"SOUL.md\">\n%s\n</file>\n", soulTemplate)
+	}
+	if identityTemplate != "" {
+		fmt.Fprintf(&sb, "<file name=\"IDENTITY.md\">\n%s\n</file>\n", identityTemplate)
 	}
 	sb.WriteString("</templates>\n\n")
 
-	sb.WriteString(`IMPORTANT — Language rule: You MUST write ALL file content in the SAME LANGUAGE as the <description> above. If the description is in Vietnamese, write in Vietnamese. If in English, write in English. The templates below are in English — translate and adapt them to match the description's language. Only keep technical terms (file names, code, commands) in English.
+	sb.WriteString(`IMPORTANT RULES:
 
-Instructions for each file:
+1. Language: Write ALL content in the SAME LANGUAGE as the <description>. If description is in Vietnamese, write in Vietnamese. If in English, write in English. BUT keep ALL headings and section titles in English exactly as in the templates.
 
-- **SOUL.md**: Rewrite to reflect this agent's unique personality, values, communication style, and boundaries. Keep the spirit of the template (genuine helpfulness, opinions, resourcefulness) but make it specific to this agent's role.
-- **IDENTITY.md**: Fill in the identity card fields (Name, Creature, Vibe, Emoji) based on the description. Leave Avatar blank.
-- **AGENTS.md**: This is CRITICAL — you MUST preserve the core operational sections (First Run, Every Session, Memory, Safety, External vs Internal, Group Chats, Heartbeats). Customize the content within each section to fit the agent's purpose, but do NOT remove any section. The operational structure is required for the system to function.
-- **TOOLS.md**: Customize with tool notes relevant to this agent's role. Keep the structure.
-- **HEARTBEAT.md**: Add periodic tasks if relevant to the agent's role. Leave minimal if not applicable.
+2. SOUL.md rules:
+   - KEEP the exact English headings: "# SOUL.md - Who You Are", "## Core Truths", "## Boundaries", "## Vibe", "## Continuity"
+   - KEEP the general advice in "## Core Truths" — do NOT inject agent-specific references there. Core Truths are universal personality traits.
+   - CUSTOMIZE "## Vibe" to reflect this agent's unique personality and communication style.
+   - CUSTOMIZE "## Boundaries" if the agent has specific boundaries mentioned in the description.
+   - Keep "## Continuity" as-is (just translate if needed).
+   - Do NOT add the agent's name or role references into Core Truths or Boundaries.
 
-First, generate a short expertise summary (1-2 sentences, under 200 characters) describing what this agent specializes in. This is used for delegation discovery — other agents use it to decide whether to delegate tasks here.
+3. IDENTITY.md rules:
+   - KEEP the exact English heading: "# IDENTITY.md - Who Am I?"
+   - Fill in ONLY the field values: Name, Creature, Purpose, Vibe, Emoji based on the description.
+   - Purpose: mission statement — what this agent does, key resources, focus areas. Can be multiple lines. Include URLs or references mentioned in the description.
+   - REMOVE all template placeholder/instruction text (the italic hints in parentheses).
+   - Leave Avatar blank.
+   - Keep the footer note section as-is.
+
+4. Generate a short expertise summary (1-2 sentences, under 200 characters) for delegation discovery.
+
+Output format — generate in this EXACT order:
 
 <frontmatter>
 (short expertise summary here)
 </frontmatter>
 
-Then generate each file inside XML tags:
-
 <file name="SOUL.md">
-(generate here)
+(content here)
 </file>
+
 <file name="IDENTITY.md">
-(generate here)
-</file>
-<file name="AGENTS.md">
-(generate here)
-</file>
-<file name="TOOLS.md">
-(generate here)
-</file>
-<file name="HEARTBEAT.md">
-(generate here)
+(content here)
 </file>`)
 
 	return sb.String()
 }
 
-// buildEditPrompt constructs the prompt for editing existing files.
+// buildEditPrompt constructs the prompt for editing existing SOUL.md + IDENTITY.md.
 func (s *AgentSummoner) buildEditPrompt(existing []store.AgentContextFileData, editPrompt string) string {
 	var sb strings.Builder
-	sb.WriteString("You are updating an existing AI assistant's configuration files.\n\nHere are the current files:\n\n<current_files>\n")
+	sb.WriteString("You are updating an existing AI assistant's personality files (SOUL.md and IDENTITY.md only).\n\nHere are the current files:\n\n<current_files>\n")
 	for _, f := range existing {
 		if f.Content == "" {
+			continue
+		}
+		// Only include personality files for editing
+		if f.FileName != bootstrap.SoulFile && f.FileName != bootstrap.IdentityFile {
 			continue
 		}
 		fmt.Fprintf(&sb, "<file name=%q>\n%s\n</file>\n", f.FileName, f.Content)
 	}
 	sb.WriteString("</current_files>\n\n")
 	fmt.Fprintf(&sb, "<edit_instructions>\n%s\n</edit_instructions>\n\n", editPrompt)
-	sb.WriteString("IMPORTANT — Language rule: Write ALL content in the SAME LANGUAGE as the existing files above. If the current files are in Vietnamese, write in Vietnamese. Only keep technical terms (file names, code, commands) in English.\n\n")
-	sb.WriteString("Generate updated files. Only include files that need changes. Keep the same XML format:\n\n")
-	sb.WriteString("<file name=\"SOUL.md\">\n(updated content, or omit if unchanged)\n</file>\n")
-	sb.WriteString("...\n")
+	sb.WriteString(`IMPORTANT RULES:
+1. Write ALL content in the SAME LANGUAGE as the existing files. Only keep headings and technical terms in English.
+2. Keep ALL English headings exactly as they are (e.g. "## Core Truths", "## Vibe").
+3. Only output files that need changes. Omit unchanged files.
+
+Output format:
+
+<file name="SOUL.md">
+(updated content, or omit if unchanged)
+</file>
+
+<file name="IDENTITY.md">
+(updated content, or omit if unchanged)
+</file>
+`)
 	return sb.String()
+}
+
+// truncateUTF8 truncates s to at most maxLen runes, appending "…" if truncated.
+func truncateUTF8(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen]) + "…"
 }
 
 // parseFileResponse extracts file contents and frontmatter from XML-tagged LLM output.

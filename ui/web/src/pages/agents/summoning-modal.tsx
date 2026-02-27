@@ -22,8 +22,6 @@ const SUMMONING_FILES = [
   { name: "SOUL.md", label: "Soul & Personality" },
   { name: "IDENTITY.md", label: "Identity Card" },
   { name: "AGENTS.md", label: "Operating Instructions" },
-  { name: "TOOLS.md", label: "Tool Notes" },
-  { name: "HEARTBEAT.md", label: "Heartbeat Tasks" },
 ];
 
 export function SummoningModal({
@@ -48,6 +46,14 @@ export function SummoningModal({
     }
   }, [open]);
 
+  // Auto-close modal after completion
+  useEffect(() => {
+    if (status === "completed") {
+      const timer = setTimeout(() => onOpenChange(false), 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [status, onOpenChange]);
+
   const handleSummoningEvent = useCallback(
     (payload: unknown) => {
       const data = payload as Record<string, string>;
@@ -60,6 +66,7 @@ export function SummoningModal({
         );
       }
       if (data.type === "completed") {
+        setGeneratedFiles(SUMMONING_FILES.map((f) => f.name));
         setStatus("completed");
         onCompleted();
       }

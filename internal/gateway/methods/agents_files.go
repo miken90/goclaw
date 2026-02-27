@@ -14,9 +14,10 @@ import (
 )
 
 // allowedAgentFiles is the list of files exposed via agents.files.* RPCs.
+// TOOLS.md and HEARTBEAT.md excluded — only useful in standalone mode.
 var allowedAgentFiles = []string{
-	bootstrap.AgentsFile, bootstrap.SoulFile, bootstrap.ToolsFile, bootstrap.IdentityFile,
-	bootstrap.UserFile, bootstrap.HeartbeatFile, bootstrap.BootstrapFile, bootstrap.MemoryJSONFile,
+	bootstrap.AgentsFile, bootstrap.SoulFile, bootstrap.IdentityFile,
+	bootstrap.UserFile, bootstrap.BootstrapFile, bootstrap.MemoryJSONFile,
 }
 
 // --- agents.files.list ---

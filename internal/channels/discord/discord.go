@@ -18,11 +18,12 @@ import (
 // Channel connects to Discord via the Bot API using gateway events.
 type Channel struct {
 	*channels.BaseChannel
-	session      *discordgo.Session
-	config       config.DiscordConfig
-	botUserID    string   // populated on start
-	placeholders sync.Map // channelID string → messageID string
-	typingCtrls  sync.Map // channelID string → *typing.Controller
+	session        *discordgo.Session
+	config         config.DiscordConfig
+	botUserID      string   // populated on start
+	requireMention bool     // require @bot mention in groups (default true)
+	placeholders   sync.Map // placeholderKey string → messageID string
+	typingCtrls    sync.Map // channelID string → *typing.Controller
 }
 
 // New creates a new Discord channel from config.
@@ -39,10 +40,16 @@ func New(cfg config.DiscordConfig, msgBus *bus.MessageBus) (*Channel, error) {
 
 	base := channels.NewBaseChannel("discord", msgBus, cfg.AllowFrom)
 
+	requireMention := true
+	if cfg.RequireMention != nil {
+		requireMention = *cfg.RequireMention
+	}
+
 	return &Channel{
-		BaseChannel: base,
-		session:     session,
-		config:      cfg,
+		BaseChannel:    base,
+		session:        session,
+		config:         cfg,
+		requireMention: requireMention,
 	}, nil
 }
 
@@ -88,10 +95,18 @@ func (c *Channel) Send(_ context.Context, msg bus.OutboundMessage) error {
 		return fmt.Errorf("empty chat ID for discord send")
 	}
 
+	// Resolve placeholder key from metadata (inbound message ID), fall back to channelID.
+	// Keying by message ID prevents race conditions when multiple messages
+	// arrive in the same channel before the first response is sent.
+	placeholderKey := channelID
+	if pk := msg.Metadata["placeholder_key"]; pk != "" {
+		placeholderKey = pk
+	}
+
 	// Placeholder update (e.g. LLM retry notification): edit the placeholder
 	// but keep it alive for the final response. Don't stop typing or cleanup.
 	if msg.Metadata["placeholder_update"] == "true" {
-		if pID, ok := c.placeholders.Load(channelID); ok {
+		if pID, ok := c.placeholders.Load(placeholderKey); ok {
 			msgID := pID.(string)
 			_, _ = c.session.ChannelMessageEdit(channelID, msgID, msg.Content)
 		}
@@ -108,8 +123,8 @@ func (c *Channel) Send(_ context.Context, msg bus.OutboundMessage) error {
 	// NO_REPLY cleanup: content is empty when agent suppresses reply.
 	// Delete placeholder and return without sending any message.
 	if content == "" {
-		if pID, ok := c.placeholders.Load(channelID); ok {
-			c.placeholders.Delete(channelID)
+		if pID, ok := c.placeholders.Load(placeholderKey); ok {
+			c.placeholders.Delete(placeholderKey)
 			msgID := pID.(string)
 			_ = c.session.ChannelMessageDelete(channelID, msgID)
 		}
@@ -117,8 +132,8 @@ func (c *Channel) Send(_ context.Context, msg bus.OutboundMessage) error {
 	}
 
 	// Try to edit the placeholder "Thinking..." message
-	if pID, ok := c.placeholders.Load(channelID); ok {
-		c.placeholders.Delete(channelID)
+	if pID, ok := c.placeholders.Load(placeholderKey); ok {
+		c.placeholders.Delete(placeholderKey)
 		msgID := pID.(string)
 
 		// Discord has a 2000-char message limit
@@ -127,8 +142,11 @@ func (c *Channel) Send(_ context.Context, msg bus.OutboundMessage) error {
 			editContent = editContent[:1997] + "..."
 		}
 
-		if _, err := c.session.ChannelMessageEdit(channelID, msgID, editContent); err == nil {
+		if _, editErr := c.session.ChannelMessageEdit(channelID, msgID, editContent); editErr == nil {
 			return nil
+		} else {
+			slog.Warn("discord: placeholder edit failed, sending new message",
+				"channel_id", channelID, "placeholder_id", msgID, "error", editErr)
 		}
 		// Fall through to send new message if edit fails
 	}
@@ -204,6 +222,25 @@ func (c *Channel) handleMessage(_ *discordgo.Session, m *discordgo.MessageCreate
 		return
 	}
 
+	// Mention gating: in groups, only respond when bot is @mentioned (default true).
+	if peerKind == "group" && c.requireMention {
+		mentioned := false
+		for _, u := range m.Mentions {
+			if u.ID == c.botUserID {
+				mentioned = true
+				break
+			}
+		}
+		if !mentioned {
+			slog.Debug("discord group message skipped: bot not mentioned",
+				"channel_id", channelID,
+				"user_id", senderID,
+				"username", senderName,
+			)
+			return
+		}
+	}
+
 	// Build content
 	content := m.Content
 
@@ -243,10 +280,12 @@ func (c *Channel) handleMessage(_ *discordgo.Session, m *discordgo.MessageCreate
 	c.typingCtrls.Store(channelID, typingCtrl)
 	typingCtrl.Start()
 
-	// Send placeholder "Thinking..." message
+	// Send placeholder "Thinking..." message.
+	// Key by inbound message ID (not channel ID) to avoid race conditions
+	// when multiple messages arrive in the same channel concurrently.
 	placeholder, err := c.session.ChannelMessageSend(channelID, "Thinking...")
 	if err == nil {
-		c.placeholders.Store(channelID, placeholder.ID)
+		c.placeholders.Store(m.ID, placeholder.ID)
 	}
 
 	// Annotate current message with sender name so LLM knows who is talking in groups.
@@ -255,12 +294,13 @@ func (c *Channel) handleMessage(_ *discordgo.Session, m *discordgo.MessageCreate
 	}
 
 	metadata := map[string]string{
-		"message_id": m.ID,
-		"user_id":    senderID,
-		"username":   senderName,
-		"guild_id":   m.GuildID,
-		"channel_id": channelID,
-		"is_dm":      fmt.Sprintf("%t", isDM),
+		"message_id":      m.ID,
+		"user_id":         senderID,
+		"username":        senderName,
+		"guild_id":        m.GuildID,
+		"channel_id":      channelID,
+		"is_dm":           fmt.Sprintf("%t", isDM),
+		"placeholder_key": m.ID, // keyed by inbound message ID for placeholder lookup
 	}
 
 	c.HandleMessage(senderID, channelID, content, nil, metadata, peerKind)
