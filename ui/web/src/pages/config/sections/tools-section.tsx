@@ -8,6 +8,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { InfoLabel } from "@/components/shared/info-label";
+import { ToolNameSelect } from "@/components/shared/tool-name-select";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type ToolsData = Record<string, any>;
@@ -60,7 +62,7 @@ export function ToolsSection({ data, onSave, saving }: Props) {
         {/* Profile & Lists */}
         <div className="grid grid-cols-2 gap-4">
           <div className="grid gap-1.5">
-            <Label>Profile</Label>
+            <InfoLabel tip="Tool profile preset. Minimal = basic tools, Coding = filesystem + exec, Messaging = channels, Full = all tools enabled.">Profile</InfoLabel>
             <Select value={draft.profile ?? ""} onValueChange={(v) => update({ profile: v })}>
               <SelectTrigger>
                 <SelectValue placeholder="Select profile" />
@@ -74,7 +76,7 @@ export function ToolsSection({ data, onSave, saving }: Props) {
             </Select>
           </div>
           <div className="grid gap-1.5">
-            <Label>Rate Limit (per hour)</Label>
+            <InfoLabel tip="Maximum tool executions per hour across all tools. 0 = no limit.">Rate Limit (per hour)</InfoLabel>
             <Input
               type="number"
               value={draft.rate_limit_per_hour ?? ""}
@@ -85,37 +87,36 @@ export function ToolsSection({ data, onSave, saving }: Props) {
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-4">
+        <div className="space-y-4">
           <div className="grid gap-1.5">
-            <Label>Allow</Label>
-            <Input
-              value={(draft.allow ?? []).join(", ")}
-              onChange={(e) => update({ allow: e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean) })}
-              placeholder="Comma-separated tool names"
+            <InfoLabel tip="Explicit whitelist of tool names. Only these tools will be available (overrides profile).">Allow</InfoLabel>
+            <ToolNameSelect
+              value={draft.allow ?? []}
+              onChange={(v) => { update({ allow: v }); }}
+              placeholder="Select tools to allow..."
             />
           </div>
           <div className="grid gap-1.5">
-            <Label>Deny</Label>
-            <Input
-              value={(draft.deny ?? []).join(", ")}
-              onChange={(e) => update({ deny: e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean) })}
-              placeholder="Comma-separated"
+            <InfoLabel tip="Blacklist of tool names. These tools are disabled regardless of profile or allow list.">Deny</InfoLabel>
+            <ToolNameSelect
+              value={draft.deny ?? []}
+              onChange={(v) => { update({ deny: v }); }}
+              placeholder="Select tools to deny..."
             />
           </div>
           <div className="grid gap-1.5">
-            <Label>Also Allow</Label>
-            <Input
-              value={(draft.alsoAllow ?? []).join(", ")}
-              onChange={(e) => update({ alsoAllow: e.target.value.split(",").map((s: string) => s.trim()).filter(Boolean) })}
-              placeholder="Additive list"
+            <InfoLabel tip="Additional tools to enable on top of the profile. Additive to the profile's default set.">Also Allow</InfoLabel>
+            <ToolNameSelect
+              value={draft.alsoAllow ?? []}
+              onChange={(v) => { update({ alsoAllow: v }); }}
+              placeholder="Select additional tools..."
             />
           </div>
         </div>
 
         <div className="flex items-center justify-between">
           <div>
-            <Label>Scrub Credentials</Label>
-            <p className="text-xs text-muted-foreground">Auto-redact API keys in tool output</p>
+            <InfoLabel tip="Automatically redact API keys, tokens, and other credentials from tool output before sending to the LLM.">Scrub Credentials</InfoLabel>
           </div>
           <Switch
             checked={draft.scrub_credentials !== false}
@@ -130,7 +131,7 @@ export function ToolsSection({ data, onSave, saving }: Props) {
           <h4 className="mb-3 text-sm font-medium">Exec Approval</h4>
           <div className="grid grid-cols-2 gap-4">
             <div className="grid gap-1.5">
-              <Label>Security</Label>
+              <InfoLabel tip="Security level for shell command execution. Deny = no exec, Allowlist = only matching patterns, Full = allow all commands.">Security</InfoLabel>
               <Select value={exec.security ?? "full"} onValueChange={(v) => updateNested("execApproval", { security: v })}>
                 <SelectTrigger>
                   <SelectValue />
@@ -143,7 +144,7 @@ export function ToolsSection({ data, onSave, saving }: Props) {
               </Select>
             </div>
             <div className="grid gap-1.5">
-              <Label>Ask Mode</Label>
+              <InfoLabel tip="When to ask the user for approval before executing a command. Off = never ask, On Miss = ask if not in allowlist, Always = always ask.">Ask Mode</InfoLabel>
               <Select value={exec.ask ?? "off"} onValueChange={(v) => updateNested("execApproval", { ask: v })}>
                 <SelectTrigger>
                   <SelectValue />

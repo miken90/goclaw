@@ -2,6 +2,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import type { MemoryConfig } from "@/types/agent";
 import { ConfigSection, InfoLabel, numOrUndef } from "./config-section";
+import { ProviderModelSelect } from "@/components/shared/provider-model-select";
 
 interface MemorySectionProps {
   enabled: boolean;
@@ -25,24 +26,18 @@ export function MemorySection({ enabled, value, onToggle, onChange }: MemorySect
         />
         <InfoLabel tip="Enable or disable the memory system for this agent. When enabled, the agent can store and recall information across sessions.">Enabled</InfoLabel>
       </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-2">
-          <InfoLabel tip="LLM provider used for generating text embeddings. Leave empty to auto-detect from the agent's main provider.">Embedding Provider</InfoLabel>
-          <Input
-            placeholder="(auto)"
-            value={value.embedding_provider ?? ""}
-            onChange={(e) => onChange({ ...value, embedding_provider: e.target.value || undefined })}
-          />
-        </div>
-        <div className="space-y-2">
-          <InfoLabel tip="Embedding model name. Must be supported by the embedding provider (e.g. text-embedding-3-small for OpenAI).">Embedding Model</InfoLabel>
-          <Input
-            placeholder="text-embedding-3-small"
-            value={value.embedding_model ?? ""}
-            onChange={(e) => onChange({ ...value, embedding_model: e.target.value || undefined })}
-          />
-        </div>
-      </div>
+      <ProviderModelSelect
+        provider={value.embedding_provider ?? ""}
+        onProviderChange={(v) => onChange({ ...value, embedding_provider: v || undefined })}
+        model={value.embedding_model ?? ""}
+        onModelChange={(v) => onChange({ ...value, embedding_model: v || undefined })}
+        providerLabel="Embedding Provider"
+        modelLabel="Embedding Model"
+        providerTip="LLM provider used for generating text embeddings. Leave empty to auto-detect from the agent's main provider."
+        modelTip="Embedding model name (e.g. text-embedding-3-small). Must be supported by the provider."
+        providerPlaceholder="(auto)"
+        modelPlaceholder="text-embedding-3-small"
+      />
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
           <InfoLabel tip="Maximum number of memory entries returned per search query.">Max Results</InfoLabel>

@@ -6,6 +6,8 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { InfoLabel } from "@/components/shared/info-label";
+import { ProviderModelSelect } from "@/components/shared/provider-model-select";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type AgentsData = Record<string, any>;
@@ -72,28 +74,19 @@ export function AgentsDefaultsSection({ data, onSave, saving }: Props) {
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Core fields */}
-        <div className="grid grid-cols-2 gap-4">
-          <div className="grid gap-1.5">
-            <Label>Provider</Label>
-            <Input
-              value={defaults.provider ?? ""}
-              onChange={(e) => updateDefaults({ provider: e.target.value })}
-              placeholder="anthropic"
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <Label>Model</Label>
-            <Input
-              value={defaults.model ?? ""}
-              onChange={(e) => updateDefaults({ model: e.target.value })}
-              placeholder="claude-sonnet-4-5-20250929"
-            />
-          </div>
-        </div>
+        <ProviderModelSelect
+          provider={defaults.provider ?? ""}
+          onProviderChange={(v) => updateDefaults({ provider: v })}
+          model={defaults.model ?? ""}
+          onModelChange={(v) => updateDefaults({ model: v })}
+          providerTip="Default LLM provider for all agents. Must match a configured provider name."
+          modelTip="Default model ID for all agents. Agents can override this in their own settings."
+          showVerify
+        />
 
         <div className="grid grid-cols-4 gap-4">
           <div className="grid gap-1.5">
-            <Label>Max Tokens</Label>
+            <InfoLabel tip="Maximum output tokens per LLM response. Higher values allow longer responses.">Max Tokens</InfoLabel>
             <Input
               type="number"
               value={defaults.max_tokens ?? ""}
@@ -102,7 +95,7 @@ export function AgentsDefaultsSection({ data, onSave, saving }: Props) {
             />
           </div>
           <div className="grid gap-1.5">
-            <Label>Temperature</Label>
+            <InfoLabel tip="Sampling temperature (0-2). Lower = more deterministic, higher = more creative.">Temperature</InfoLabel>
             <Input
               type="number"
               step="0.1"
@@ -114,7 +107,7 @@ export function AgentsDefaultsSection({ data, onSave, saving }: Props) {
             />
           </div>
           <div className="grid gap-1.5">
-            <Label>Max Tool Iterations</Label>
+            <InfoLabel tip="Maximum number of tool calls per agent request before stopping.">Max Tool Iterations</InfoLabel>
             <Input
               type="number"
               value={defaults.max_tool_iterations ?? ""}
@@ -123,7 +116,7 @@ export function AgentsDefaultsSection({ data, onSave, saving }: Props) {
             />
           </div>
           <div className="grid gap-1.5">
-            <Label>Context Window</Label>
+            <InfoLabel tip="Maximum context size in tokens. Should match the model's context window limit.">Context Window</InfoLabel>
             <Input
               type="number"
               value={defaults.context_window ?? ""}
@@ -135,7 +128,7 @@ export function AgentsDefaultsSection({ data, onSave, saving }: Props) {
 
         <div className="grid grid-cols-2 gap-4">
           <div className="grid gap-1.5">
-            <Label>Workspace</Label>
+            <InfoLabel tip="Default filesystem workspace path for agent file operations.">Workspace</InfoLabel>
             <Input
               value={defaults.workspace ?? ""}
               onChange={(e) => updateDefaults({ workspace: e.target.value })}
@@ -143,7 +136,7 @@ export function AgentsDefaultsSection({ data, onSave, saving }: Props) {
             />
           </div>
           <div className="flex items-center justify-between">
-            <Label>Restrict to Workspace</Label>
+            <InfoLabel tip="When enabled, agents can only read/write files within the workspace directory.">Restrict to Workspace</InfoLabel>
             <Switch
               checked={defaults.restrict_to_workspace ?? false}
               onCheckedChange={(v) => updateDefaults({ restrict_to_workspace: v })}
@@ -159,12 +152,12 @@ export function AgentsDefaultsSection({ data, onSave, saving }: Props) {
           onToggle={() => toggleSub("subagents")}
         >
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Max Concurrent" type="number" value={subagents.maxConcurrent} onChange={(v) => updateNested("subagents", { maxConcurrent: Number(v) })} placeholder="20" />
-            <Field label="Max Spawn Depth" type="number" value={subagents.maxSpawnDepth} onChange={(v) => updateNested("subagents", { maxSpawnDepth: Number(v) })} placeholder="1" />
-            <Field label="Max Children/Agent" type="number" value={subagents.maxChildrenPerAgent} onChange={(v) => updateNested("subagents", { maxChildrenPerAgent: Number(v) })} placeholder="5" />
-            <Field label="Archive After (min)" type="number" value={subagents.archiveAfterMinutes} onChange={(v) => updateNested("subagents", { archiveAfterMinutes: Number(v) })} placeholder="60" />
+            <Field label="Max Concurrent" tip="Maximum subagents running at the same time." type="number" value={subagents.maxConcurrent} onChange={(v) => updateNested("subagents", { maxConcurrent: Number(v) })} placeholder="20" />
+            <Field label="Max Spawn Depth" tip="Maximum nesting depth for subagent spawning (agent → subagent → sub-subagent)." type="number" value={subagents.maxSpawnDepth} onChange={(v) => updateNested("subagents", { maxSpawnDepth: Number(v) })} placeholder="1" />
+            <Field label="Max Children/Agent" tip="Maximum child subagents a single agent can spawn." type="number" value={subagents.maxChildrenPerAgent} onChange={(v) => updateNested("subagents", { maxChildrenPerAgent: Number(v) })} placeholder="5" />
+            <Field label="Archive After (min)" tip="Auto-archive idle subagent sessions after this many minutes." type="number" value={subagents.archiveAfterMinutes} onChange={(v) => updateNested("subagents", { archiveAfterMinutes: Number(v) })} placeholder="60" />
           </div>
-          <Field label="Model Override" value={subagents.model} onChange={(v) => updateNested("subagents", { model: v })} placeholder="Use default" />
+          <Field label="Model Override" tip="Use a different model for subagents. Leave empty to inherit the parent agent's model." value={subagents.model} onChange={(v) => updateNested("subagents", { model: v })} placeholder="Use default" />
         </SubSection>
 
         <SubSection
@@ -177,11 +170,21 @@ export function AgentsDefaultsSection({ data, onSave, saving }: Props) {
             <Label>Enabled</Label>
             <Switch checked={memory.enabled !== false} onCheckedChange={(v) => updateNested("memory", { enabled: v })} />
           </div>
+          <ProviderModelSelect
+            provider={memory.embedding_provider ?? ""}
+            onProviderChange={(v) => updateNested("memory", { embedding_provider: v || undefined })}
+            model={memory.embedding_model ?? ""}
+            onModelChange={(v) => updateNested("memory", { embedding_model: v || undefined })}
+            providerLabel="Embedding Provider"
+            modelLabel="Embedding Model"
+            providerTip="Provider for generating text embeddings. Auto-detects from agent's main provider if empty."
+            modelTip="Embedding model name (e.g. text-embedding-3-small). Must be supported by the provider."
+            providerPlaceholder="(auto)"
+            modelPlaceholder="text-embedding-3-small"
+          />
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Embedding Provider" value={memory.embedding_provider} onChange={(v) => updateNested("memory", { embedding_provider: v })} placeholder="auto" />
-            <Field label="Embedding Model" value={memory.embedding_model} onChange={(v) => updateNested("memory", { embedding_model: v })} placeholder="text-embedding-3-small" />
-            <Field label="Max Results" type="number" value={memory.max_results} onChange={(v) => updateNested("memory", { max_results: Number(v) })} placeholder="6" />
-            <Field label="Min Score" type="number" step="0.01" value={memory.min_score} onChange={(v) => updateNested("memory", { min_score: Number(v) })} placeholder="0.35" />
+            <Field label="Max Results" tip="Maximum memory entries returned per search query." type="number" value={memory.max_results} onChange={(v) => updateNested("memory", { max_results: Number(v) })} placeholder="6" />
+            <Field label="Min Score" tip="Minimum similarity score (0-1) for memory search results. Lower = more results but less relevant." type="number" step="0.01" value={memory.min_score} onChange={(v) => updateNested("memory", { min_score: Number(v) })} placeholder="0.35" />
           </div>
         </SubSection>
 
@@ -192,8 +195,8 @@ export function AgentsDefaultsSection({ data, onSave, saving }: Props) {
           onToggle={() => toggleSub("compaction")}
         >
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Reserve Tokens Floor" type="number" value={compaction.reserveTokensFloor} onChange={(v) => updateNested("compaction", { reserveTokensFloor: Number(v) })} placeholder="20000" />
-            <Field label="Max History Share" type="number" step="0.05" value={compaction.maxHistoryShare} onChange={(v) => updateNested("compaction", { maxHistoryShare: Number(v) })} placeholder="0.75" />
+            <Field label="Reserve Tokens Floor" tip="Minimum tokens to reserve for new content after compaction. Prevents over-compaction." type="number" value={compaction.reserveTokensFloor} onChange={(v) => updateNested("compaction", { reserveTokensFloor: Number(v) })} placeholder="20000" />
+            <Field label="Max History Share" tip="Maximum fraction (0-1) of context window that conversation history can occupy before compaction triggers." type="number" step="0.05" value={compaction.maxHistoryShare} onChange={(v) => updateNested("compaction", { maxHistoryShare: Number(v) })} placeholder="0.75" />
           </div>
         </SubSection>
 
@@ -214,7 +217,7 @@ export function AgentsDefaultsSection({ data, onSave, saving }: Props) {
                 </SelectContent>
               </Select>
             </div>
-            <Field label="Keep Last Assistants" type="number" value={pruning.keepLastAssistants} onChange={(v) => updateNested("contextPruning", { keepLastAssistants: Number(v) })} placeholder="3" />
+            <Field label="Keep Last Assistants" tip="Number of recent assistant messages to always keep when pruning context." type="number" value={pruning.keepLastAssistants} onChange={(v) => updateNested("contextPruning", { keepLastAssistants: Number(v) })} placeholder="3" />
           </div>
         </SubSection>
 
@@ -225,10 +228,10 @@ export function AgentsDefaultsSection({ data, onSave, saving }: Props) {
           onToggle={() => toggleSub("heartbeat")}
         >
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Every" value={heartbeat.every} onChange={(v) => updateNested("heartbeat", { every: v })} placeholder="30m (0m = disabled)" />
-            <Field label="Model Override" value={heartbeat.model} onChange={(v) => updateNested("heartbeat", { model: v })} placeholder="Use default" />
-            <Field label="Session" value={heartbeat.session} onChange={(v) => updateNested("heartbeat", { session: v })} placeholder="main" />
-            <Field label="Target" value={heartbeat.target} onChange={(v) => updateNested("heartbeat", { target: v })} placeholder="last" />
+            <Field label="Every" tip="How often the agent wakes up. Go duration format (e.g. 30m, 1h). 0m = disabled." value={heartbeat.every} onChange={(v) => updateNested("heartbeat", { every: v })} placeholder="30m (0m = disabled)" />
+            <Field label="Model Override" tip="Use a different model for heartbeat checks. Leave empty for default." value={heartbeat.model} onChange={(v) => updateNested("heartbeat", { model: v })} placeholder="Use default" />
+            <Field label="Session" tip="Session key to use for heartbeat messages." value={heartbeat.session} onChange={(v) => updateNested("heartbeat", { session: v })} placeholder="main" />
+            <Field label="Target" tip="Target for heartbeat. 'last' resumes the last active session." value={heartbeat.target} onChange={(v) => updateNested("heartbeat", { target: v })} placeholder="last" />
           </div>
         </SubSection>
 
@@ -250,10 +253,10 @@ export function AgentsDefaultsSection({ data, onSave, saving }: Props) {
                 </SelectContent>
               </Select>
             </div>
-            <Field label="Image" value={sandbox.image} onChange={(v) => updateNested("sandbox", { image: v })} placeholder="goclaw-sandbox:bookworm-slim" />
-            <Field label="Memory (MB)" type="number" value={sandbox.memory_mb} onChange={(v) => updateNested("sandbox", { memory_mb: Number(v) })} placeholder="512" />
-            <Field label="CPUs" type="number" step="0.5" value={sandbox.cpus} onChange={(v) => updateNested("sandbox", { cpus: Number(v) })} placeholder="1.0" />
-            <Field label="Timeout (sec)" type="number" value={sandbox.timeout_sec} onChange={(v) => updateNested("sandbox", { timeout_sec: Number(v) })} placeholder="300" />
+            <Field label="Image" tip="Docker image name for the sandbox container." value={sandbox.image} onChange={(v) => updateNested("sandbox", { image: v })} placeholder="goclaw-sandbox:bookworm-slim" />
+            <Field label="Memory (MB)" tip="Memory limit in MB for the sandbox container." type="number" value={sandbox.memory_mb} onChange={(v) => updateNested("sandbox", { memory_mb: Number(v) })} placeholder="512" />
+            <Field label="CPUs" tip="CPU limit for the sandbox container (fractional values allowed)." type="number" step="0.5" value={sandbox.cpus} onChange={(v) => updateNested("sandbox", { cpus: Number(v) })} placeholder="1.0" />
+            <Field label="Timeout (sec)" tip="Maximum execution time in seconds before the sandbox is killed." type="number" value={sandbox.timeout_sec} onChange={(v) => updateNested("sandbox", { timeout_sec: Number(v) })} placeholder="300" />
             <div className="flex items-center justify-between">
               <Label>Network Enabled</Label>
               <Switch checked={sandbox.network_enabled ?? false} onCheckedChange={(v) => updateNested("sandbox", { network_enabled: v })} />
@@ -301,13 +304,14 @@ function SubSection({
           <span className="ml-2 text-xs text-muted-foreground">{desc}</span>
         </div>
       </button>
-      {open && <div className="space-y-3 border-t px-3 py-3">{children}</div>}
+      {open && <div className="space-y-3 border-t px-4 py-3">{children}</div>}
     </div>
   );
 }
 
 function Field({
   label,
+  tip,
   value,
   onChange,
   placeholder,
@@ -315,6 +319,7 @@ function Field({
   step,
 }: {
   label: string;
+  tip?: string;
   value: any;
   onChange: (v: string) => void;
   placeholder?: string;
@@ -323,7 +328,7 @@ function Field({
 }) {
   return (
     <div className="grid gap-1.5">
-      <Label>{label}</Label>
+      {tip ? <InfoLabel tip={tip}>{label}</InfoLabel> : <Label>{label}</Label>}
       <Input
         type={type}
         step={step}

@@ -2,9 +2,10 @@ import { useState, useEffect } from "react";
 import { Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { InfoLabel } from "@/components/shared/info-label";
+import { TagInput } from "@/components/shared/tag-input";
 
 interface GatewayData {
   host?: string;
@@ -64,7 +65,7 @@ export function GatewaySection({ data, onSave, saving }: Props) {
       <CardContent className="space-y-4">
         <div className="grid grid-cols-3 gap-4">
           <div className="grid gap-1.5">
-            <Label>Host</Label>
+            <InfoLabel tip="IP address to bind the server. Use 0.0.0.0 to accept connections from any interface.">Host</InfoLabel>
             <Input
               value={draft.host ?? ""}
               onChange={(e) => update({ host: e.target.value })}
@@ -72,7 +73,7 @@ export function GatewaySection({ data, onSave, saving }: Props) {
             />
           </div>
           <div className="grid gap-1.5">
-            <Label>Port</Label>
+            <InfoLabel tip="TCP port for the WebSocket and HTTP server.">Port</InfoLabel>
             <Input
               type="number"
               value={draft.port ?? ""}
@@ -81,7 +82,7 @@ export function GatewaySection({ data, onSave, saving }: Props) {
             />
           </div>
           <div className="grid gap-1.5">
-            <Label>Token</Label>
+            <InfoLabel tip="Bearer token for authenticating WebSocket and API connections. Managed via GOCLAW_GATEWAY_TOKEN env var.">Token</InfoLabel>
             <Input
               type="password"
               value={draft.token ?? ""}
@@ -97,26 +98,26 @@ export function GatewaySection({ data, onSave, saving }: Props) {
 
         <div className="grid grid-cols-2 gap-4">
           <div className="grid gap-1.5">
-            <Label>Owner IDs</Label>
-            <Input
-              value={(draft.owner_ids ?? []).join(", ")}
-              onChange={(e) => update({ owner_ids: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })}
-              placeholder="Comma-separated sender IDs"
+            <InfoLabel tip="Sender IDs with admin privileges. These users bypass rate limits and can manage configuration.">Owner IDs</InfoLabel>
+            <TagInput
+              value={draft.owner_ids ?? []}
+              onChange={(v) => update({ owner_ids: v })}
+              placeholder="Type ID and press Enter..."
             />
           </div>
           <div className="grid gap-1.5">
-            <Label>Allowed Origins</Label>
-            <Input
-              value={(draft.allowed_origins ?? []).join(", ")}
-              onChange={(e) => update({ allowed_origins: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })}
-              placeholder="Empty = allow all"
+            <InfoLabel tip="CORS allowed origins for the HTTP API. Empty means all origins are allowed.">Allowed Origins</InfoLabel>
+            <TagInput
+              value={draft.allowed_origins ?? []}
+              onChange={(v) => update({ allowed_origins: v })}
+              placeholder="Type origin and press Enter..."
             />
           </div>
         </div>
 
         <div className="grid grid-cols-4 gap-4">
           <div className="grid gap-1.5">
-            <Label>Max Message Chars</Label>
+            <InfoLabel tip="Maximum characters per inbound message. Messages exceeding this are rejected.">Max Message Chars</InfoLabel>
             <Input
               type="number"
               value={draft.max_message_chars ?? ""}
@@ -125,7 +126,7 @@ export function GatewaySection({ data, onSave, saving }: Props) {
             />
           </div>
           <div className="grid gap-1.5">
-            <Label>Rate Limit (RPM)</Label>
+            <InfoLabel tip="Requests per minute per sender. 0 = no limit. Prevents abuse from individual users.">Rate Limit (RPM)</InfoLabel>
             <Input
               type="number"
               value={draft.rate_limit_rpm ?? ""}
@@ -135,7 +136,7 @@ export function GatewaySection({ data, onSave, saving }: Props) {
             />
           </div>
           <div className="grid gap-1.5">
-            <Label>Inbound Debounce (ms)</Label>
+            <InfoLabel tip="Delay in ms before processing messages. Groups rapid messages into one request. -1 = disabled.">Inbound Debounce (ms)</InfoLabel>
             <Input
               type="number"
               value={draft.inbound_debounce_ms ?? ""}
@@ -145,7 +146,7 @@ export function GatewaySection({ data, onSave, saving }: Props) {
             />
           </div>
           <div className="grid gap-1.5">
-            <Label>Injection Action</Label>
+            <InfoLabel tip="Action when prompt injection is detected. Off = disabled, Log = log only, Warn = add warning to prompt, Block = reject.">Injection Action</InfoLabel>
             <Select value={draft.injection_action ?? "warn"} onValueChange={(v) => update({ injection_action: v })}>
               <SelectTrigger>
                 <SelectValue />

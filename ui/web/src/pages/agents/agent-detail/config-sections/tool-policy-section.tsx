@@ -1,4 +1,3 @@
-import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -7,7 +6,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { ToolPolicyConfig } from "@/types/agent";
-import { ConfigSection, InfoLabel, arrayToTags, tagsToArray } from "./config-section";
+import { ConfigSection, InfoLabel } from "./config-section";
+import { ToolNameSelect } from "@/components/shared/tool-name-select";
 
 interface ToolPolicySectionProps {
   enabled: boolean;
@@ -39,27 +39,27 @@ export function ToolPolicySection({ enabled, value, onToggle, onChange }: ToolPo
         </Select>
       </div>
       <div className="space-y-2">
-        <InfoLabel tip="Comma-separated allowlist. Only these tools will be available (overrides profile). Leave empty to use profile defaults.">Allow</InfoLabel>
-        <Input
-          placeholder="tool1, tool2, ..."
-          value={arrayToTags(value.allow)}
-          onChange={(e) => onChange({ ...value, allow: tagsToArray(e.target.value) })}
+        <InfoLabel tip="Explicit allowlist. Only these tools will be available (overrides profile). Leave empty to use profile defaults.">Allow</InfoLabel>
+        <ToolNameSelect
+          value={value.allow ?? []}
+          onChange={(v) => onChange({ ...value, allow: v.length > 0 ? v : undefined })}
+          placeholder="Select tools to allow..."
         />
       </div>
       <div className="space-y-2">
-        <InfoLabel tip="Comma-separated denylist. These tools will be blocked even if allowed by the profile.">Deny</InfoLabel>
-        <Input
-          placeholder="tool1, tool2, ..."
-          value={arrayToTags(value.deny)}
-          onChange={(e) => onChange({ ...value, deny: tagsToArray(e.target.value) })}
+        <InfoLabel tip="Denylist. These tools will be blocked even if allowed by the profile.">Deny</InfoLabel>
+        <ToolNameSelect
+          value={value.deny ?? []}
+          onChange={(v) => onChange({ ...value, deny: v.length > 0 ? v : undefined })}
+          placeholder="Select tools to deny..."
         />
       </div>
       <div className="space-y-2">
-        <InfoLabel tip="Additional tools added on top of the profile defaults. Useful for enabling optional tools like web_fetch without overriding the whole profile.">Also Allow</InfoLabel>
-        <Input
-          placeholder="web_fetch, web_search, ..."
-          value={arrayToTags(value.alsoAllow)}
-          onChange={(e) => onChange({ ...value, alsoAllow: tagsToArray(e.target.value) })}
+        <InfoLabel tip="Additional tools on top of profile defaults. Useful for enabling optional tools without overriding the whole profile.">Also Allow</InfoLabel>
+        <ToolNameSelect
+          value={value.alsoAllow ?? []}
+          onChange={(v) => onChange({ ...value, alsoAllow: v.length > 0 ? v : undefined })}
+          placeholder="Select additional tools..."
         />
       </div>
     </ConfigSection>

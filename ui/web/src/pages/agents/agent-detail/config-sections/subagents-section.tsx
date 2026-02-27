@@ -1,4 +1,6 @@
+import { useMemo } from "react";
 import { Input } from "@/components/ui/input";
+import { Combobox } from "@/components/ui/combobox";
 import {
   Select,
   SelectContent,
@@ -8,6 +10,8 @@ import {
 } from "@/components/ui/select";
 import type { SubagentsConfig } from "@/types/agent";
 import { ConfigSection, InfoLabel, numOrUndef } from "./config-section";
+import { useProviders } from "@/pages/providers/hooks/use-providers";
+import { useProviderModels } from "@/pages/providers/hooks/use-provider-models";
 
 interface SubagentsSectionProps {
   enabled: boolean;
@@ -17,6 +21,15 @@ interface SubagentsSectionProps {
 }
 
 export function SubagentsSection({ enabled, value, onToggle, onChange }: SubagentsSectionProps) {
+  const { providers } = useProviders();
+  const enabledProviders = providers.filter((p) => p.enabled);
+  // Use the first enabled provider for model list suggestions
+  const defaultProviderId = useMemo(
+    () => enabledProviders[0]?.id,
+    [enabledProviders],
+  );
+  const { models, loading: modelsLoading } = useProviderModels(defaultProviderId);
+
   return (
     <ConfigSection
       title="Subagents"
@@ -71,10 +84,11 @@ export function SubagentsSection({ enabled, value, onToggle, onChange }: Subagen
       </div>
       <div className="space-y-2">
         <InfoLabel tip="LLM model for sub-agents. Leave empty to inherit the parent agent's model.">Model Override</InfoLabel>
-        <Input
-          placeholder="(inherit from agent)"
+        <Combobox
           value={value.model ?? ""}
-          onChange={(e) => onChange({ ...value, model: e.target.value || undefined })}
+          onChange={(v) => onChange({ ...value, model: v || undefined })}
+          options={models.map((m) => ({ value: m.id, label: m.name }))}
+          placeholder={modelsLoading ? "Loading models..." : "(inherit from agent)"}
         />
       </div>
     </ConfigSection>

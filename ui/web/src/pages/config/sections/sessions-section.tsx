@@ -2,9 +2,9 @@ import { useState, useEffect } from "react";
 import { Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { InfoLabel } from "@/components/shared/info-label";
 
 interface SessionsData {
   storage?: string;
@@ -46,7 +46,7 @@ export function SessionsSection({ data, onSave, saving }: Props) {
       <CardContent className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
           <div className="grid gap-1.5">
-            <Label>Storage Directory</Label>
+            <InfoLabel tip="Directory path where session data is persisted on disk (standalone mode).">Storage Directory</InfoLabel>
             <Input
               value={draft.storage ?? ""}
               onChange={(e) => update({ storage: e.target.value })}
@@ -54,7 +54,7 @@ export function SessionsSection({ data, onSave, saving }: Props) {
             />
           </div>
           <div className="grid gap-1.5">
-            <Label>Main Key</Label>
+            <InfoLabel tip="Default session key name. Used as the main conversation thread identifier.">Main Key</InfoLabel>
             <Input
               value={draft.main_key ?? ""}
               onChange={(e) => update({ main_key: e.target.value })}
@@ -65,7 +65,7 @@ export function SessionsSection({ data, onSave, saving }: Props) {
 
         <div className="grid grid-cols-2 gap-4">
           <div className="grid gap-1.5">
-            <Label>Scope</Label>
+            <InfoLabel tip="Session isolation level. Per Sender = each user gets their own session. Global = all users share one session.">Scope</InfoLabel>
             <Select value={draft.scope ?? "per-sender"} onValueChange={(v) => update({ scope: v })}>
               <SelectTrigger>
                 <SelectValue />
@@ -77,7 +77,7 @@ export function SessionsSection({ data, onSave, saving }: Props) {
             </Select>
           </div>
           <div className="grid gap-1.5">
-            <Label>DM Scope</Label>
+            <InfoLabel tip="How DM sessions are scoped. Controls session isolation for direct messages across different channels and accounts.">DM Scope</InfoLabel>
             <Select value={draft.dm_scope ?? "per-channel-peer"} onValueChange={(v) => update({ dm_scope: v })}>
               <SelectTrigger>
                 <SelectValue />
