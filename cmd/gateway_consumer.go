@@ -632,36 +632,26 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 	}
 }
 
-// resolveCronAgent resolves the agent ID for a cron job, falling back to the
-// config default if the requested agent doesn't exist.
-func resolveCronAgent(agentID string, agents *agent.Router, cfg *config.Config) string {
-	if agentID == "" {
-		return cfg.ResolveDefaultAgentID()
-	}
-	normalized := config.NormalizeAgentID(agentID)
-	if _, err := agents.Get(normalized); err != nil {
-		slog.Warn("cron agent not found, falling back to default", "requested", agentID)
-		return cfg.ResolveDefaultAgentID()
-	}
-	return normalized
-}
-
-// makeCronJobHandler creates a cron job handler that sends job messages through the agent.
-func makeCronJobHandler(agents *agent.Router, msgBus *bus.MessageBus, cfg *config.Config) func(job *store.CronJob) (*store.CronJobResult, error) {
+// makeCronJobHandler creates a cron job handler that routes through the scheduler's cron lane.
+// This ensures per-session concurrency control (same job can't run concurrently)
+// and integration with /stop, /stopall commands.
+func makeCronJobHandler(sched *scheduler.Scheduler, msgBus *bus.MessageBus, cfg *config.Config) func(job *store.CronJob) (*store.CronJobResult, error) {
 	return func(job *store.CronJob) (*store.CronJobResult, error) {
-		agentID := resolveCronAgent(job.AgentID, agents, cfg)
-		loop, err := agents.Get(agentID)
-		if err != nil {
-			return nil, fmt.Errorf("agent %s not found: %w", agentID, err)
+		agentID := job.AgentID
+		if agentID == "" {
+			agentID = cfg.ResolveDefaultAgentID()
+		} else {
+			agentID = config.NormalizeAgentID(agentID)
 		}
 
-		sessionKey := sessions.BuildCronSessionKey(agentID, job.ID, job.ID)
+		sessionKey := sessions.BuildCronSessionKey(agentID, job.ID)
 		channel := job.Payload.Channel
 		if channel == "" {
 			channel = "cron"
 		}
 
-		result, err := loop.Run(context.Background(), agent.RunRequest{
+		// Schedule through cron lane — scheduler handles agent resolution and concurrency
+		outCh := sched.Schedule(context.Background(), scheduler.LaneCron, agent.RunRequest{
 			SessionKey: sessionKey,
 			Message:    job.Payload.Message,
 			Channel:    channel,
@@ -672,9 +662,14 @@ func makeCronJobHandler(agents *agent.Router, msgBus *bus.MessageBus, cfg *confi
 			TraceName:  fmt.Sprintf("Cron [%s] - %s", job.Name, agentID),
 			TraceTags:  []string{"cron"},
 		})
-		if err != nil {
-			return nil, err
+
+		// Block until the scheduled run completes
+		outcome := <-outCh
+		if outcome.Err != nil {
+			return nil, outcome.Err
 		}
+
+		result := outcome.Result
 
 		// If job wants delivery to a channel, publish outbound
 		if job.Payload.Deliver && job.Payload.Channel != "" && job.Payload.To != "" {

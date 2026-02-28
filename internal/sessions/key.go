@@ -10,7 +10,7 @@
 //	Group:       {channel}:group:{groupId}
 //	Forum topic: {channel}:group:{groupId}:topic:{topicId}
 //	Subagent:    subagent:{label}
-//	Cron:        cron:{jobId}:run:{runId}
+//	Cron:        cron:{jobId}
 //
 // Examples:
 //
@@ -18,7 +18,7 @@
 //	agent:default:telegram:group:-100123456
 //	agent:default:telegram:group:-100123456:topic:99
 //	agent:default:subagent:my-task
-//	agent:default:cron:reminder:run:abc123
+//	agent:default:cron:reminder-job-id
 package sessions
 
 import (
@@ -57,18 +57,18 @@ func BuildSubagentSessionKey(agentID, label string) string {
 	return fmt.Sprintf("agent:%s:subagent:%s", agentID, label)
 }
 
-// BuildCronSessionKey builds the session key for a cron job run.
+// BuildCronSessionKey builds the session key for a cron job.
+// Each cron job gets one persistent session (all runs share the same history).
 //
-//	agent:{agentId}:cron:{jobID}:run:{runID}
+//	agent:{agentId}:cron:{jobID}
 //
 // Guards against double-prefixing: if jobID is already a canonical session key
-// (e.g. "agent:X:..."), only the rest part is used to prevent
-// "agent:X:cron:agent:X:cron:..." duplication.
-func BuildCronSessionKey(agentID, jobID, runID string) string {
+// (e.g. "agent:X:..."), only the rest part is used.
+func BuildCronSessionKey(agentID, jobID string) string {
 	if _, rest := ParseSessionKey(jobID); rest != "" {
 		jobID = rest
 	}
-	return fmt.Sprintf("agent:%s:cron:%s:run:%s", agentID, jobID, runID)
+	return fmt.Sprintf("agent:%s:cron:%s", agentID, jobID)
 }
 
 // BuildAgentMainSessionKey builds the shared "main" session key for an agent.

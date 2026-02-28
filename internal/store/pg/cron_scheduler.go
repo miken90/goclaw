@@ -2,6 +2,7 @@ package pg
 
 import (
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -146,87 +147,100 @@ func (s *PGCronStore) checkAndRunDueJobs() {
 		return
 	}
 
+	// Clear next_run for all due jobs first to prevent duplicate fires
 	for _, job := range dueJobs {
-		// Clear next_run to prevent duplicate
 		if id, parseErr := uuid.Parse(job.ID); parseErr == nil {
 			s.db.Exec("UPDATE cron_jobs SET next_run_at = NULL WHERE id = $1", id)
 		}
-
-		jobCopy := job
-		startTime := time.Now()
-
-		// Wrap handler to fit ExecuteWithRetry's (string, error) signature
-		var lastResult *store.CronJobResult
-		resultStr, attempts, err := cron.ExecuteWithRetry(func() (string, error) {
-			r, e := handler(&jobCopy)
-			if e != nil {
-				return "", e
-			}
-			lastResult = r
-			if r != nil {
-				return r.Content, nil
-			}
-			return "", nil
-		}, s.retryCfg)
-
-		durationMS := time.Since(startTime).Milliseconds()
-
-		if attempts > 1 {
-			slog.Info("cron job retried", "id", job.ID, "attempts", attempts, "success", err == nil)
-		}
-
-		now := time.Now()
-		status := "ok"
-		var lastError *string
-		if err != nil {
-			status = "error"
-			errStr := err.Error()
-			lastError = &errStr
-		}
-
-		// Extract token usage from handler result
-		var inputTokens, outputTokens int
-		if lastResult != nil {
-			inputTokens = lastResult.InputTokens
-			outputTokens = lastResult.OutputTokens
-		}
-
-		// Log run
-		logID := uuid.Must(uuid.NewV7())
-		var summary *string
-		if err == nil {
-			s := cron.TruncateOutput(resultStr)
-			summary = &s
-		}
-		if id, parseErr := uuid.Parse(job.ID); parseErr == nil {
-			var agentUUID *uuid.UUID
-			if aid, aidErr := uuid.Parse(job.AgentID); aidErr == nil {
-				agentUUID = &aid
-			}
-			s.db.Exec(
-				`INSERT INTO cron_run_logs (id, job_id, agent_id, status, error, summary, duration_ms, input_tokens, output_tokens, ran_at)
-				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-				logID, id, agentUUID, status, lastError, summary, durationMS, inputTokens, outputTokens, now,
-			)
-		}
-
-		// Recompute next run or delete
-		if job.DeleteAfterRun {
-			if id, parseErr := uuid.Parse(job.ID); parseErr == nil {
-				s.db.Exec("DELETE FROM cron_jobs WHERE id = $1", id)
-			}
-		} else if id, parseErr := uuid.Parse(job.ID); parseErr == nil {
-			schedule := job.Schedule
-			next := computeNextRun(&schedule, now)
-			s.db.Exec(
-				"UPDATE cron_jobs SET last_run_at = $1, last_status = $2, last_error = $3, next_run_at = $4, updated_at = $5 WHERE id = $6",
-				now, status, lastError, next, now, id,
-			)
-		}
 	}
+
+	// Execute jobs in parallel — scheduler enforces per-session serialization
+	var wg sync.WaitGroup
+	for _, job := range dueJobs {
+		wg.Add(1)
+		go func(job store.CronJob) {
+			defer wg.Done()
+			s.executeOneJob(job, handler)
+		}(job)
+	}
+	wg.Wait()
 
 	// Invalidate cache after job execution changed next_run_at values
 	s.mu.Lock()
 	s.cacheLoaded = false
 	s.mu.Unlock()
+}
+
+// executeOneJob runs a single cron job with retry, logs the result, and updates next_run_at.
+func (s *PGCronStore) executeOneJob(job store.CronJob, handler func(job *store.CronJob) (*store.CronJobResult, error)) {
+	startTime := time.Now()
+
+	// Wrap handler to fit ExecuteWithRetry's (string, error) signature
+	var lastResult *store.CronJobResult
+	resultStr, attempts, err := cron.ExecuteWithRetry(func() (string, error) {
+		r, e := handler(&job)
+		if e != nil {
+			return "", e
+		}
+		lastResult = r
+		if r != nil {
+			return r.Content, nil
+		}
+		return "", nil
+	}, s.retryCfg)
+
+	durationMS := time.Since(startTime).Milliseconds()
+
+	if attempts > 1 {
+		slog.Info("cron job retried", "id", job.ID, "attempts", attempts, "success", err == nil)
+	}
+
+	now := time.Now()
+	status := "ok"
+	var lastError *string
+	if err != nil {
+		status = "error"
+		errStr := err.Error()
+		lastError = &errStr
+	}
+
+	// Extract token usage from handler result
+	var inputTokens, outputTokens int
+	if lastResult != nil {
+		inputTokens = lastResult.InputTokens
+		outputTokens = lastResult.OutputTokens
+	}
+
+	// Log run
+	logID := uuid.Must(uuid.NewV7())
+	var summary *string
+	if err == nil {
+		truncated := cron.TruncateOutput(resultStr)
+		summary = &truncated
+	}
+	if id, parseErr := uuid.Parse(job.ID); parseErr == nil {
+		var agentUUID *uuid.UUID
+		if aid, aidErr := uuid.Parse(job.AgentID); aidErr == nil {
+			agentUUID = &aid
+		}
+		s.db.Exec(
+			`INSERT INTO cron_run_logs (id, job_id, agent_id, status, error, summary, duration_ms, input_tokens, output_tokens, ran_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			logID, id, agentUUID, status, lastError, summary, durationMS, inputTokens, outputTokens, now,
+		)
+	}
+
+	// Recompute next run or delete
+	if job.DeleteAfterRun {
+		if id, parseErr := uuid.Parse(job.ID); parseErr == nil {
+			s.db.Exec("DELETE FROM cron_jobs WHERE id = $1", id)
+		}
+	} else if id, parseErr := uuid.Parse(job.ID); parseErr == nil {
+		schedule := job.Schedule
+		next := computeNextRun(&schedule, now)
+		s.db.Exec(
+			"UPDATE cron_jobs SET last_run_at = $1, last_status = $2, last_error = $3, next_run_at = $4, updated_at = $5 WHERE id = $6",
+			now, status, lastError, next, now, id,
+		)
+	}
 }
