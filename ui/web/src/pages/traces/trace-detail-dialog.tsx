@@ -176,7 +176,7 @@ function SpanTreeNode({ node, depth }: { node: SpanNode; depth: number }) {
   return (
     <div>
       <div
-        className="mt-1.5 rounded-md border text-sm"
+        className="mt-1.5 min-w-0 rounded-md border text-sm"
         style={{ marginLeft: depth * 24 }}
       >
         <div className="flex w-full items-center gap-1 px-2 py-2">
@@ -233,7 +233,7 @@ function SpanTreeNode({ node, depth }: { node: SpanNode; depth: number }) {
 
         {/* Expanded detail panel */}
         {detailOpen && (
-          <div className="space-y-2 border-t px-3 py-2">
+          <div className="space-y-2 overflow-hidden border-t px-3 py-2">
             {span.model && (
               <div className="text-xs">
                 <span className="text-muted-foreground">Model:</span> {span.provider}/{span.model}

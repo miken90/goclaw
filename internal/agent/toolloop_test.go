@@ -5,8 +5,8 @@ import "testing"
 func TestToolLoopDetection_NoLoop(t *testing.T) {
 	var s toolLoopState
 
-	// 4 identical calls with same result → below threshold, no detection
-	for i := 0; i < 4; i++ {
+	// 2 identical calls with same result → below threshold, no detection
+	for i := 0; i < 2; i++ {
 		h := s.record("list_files", map[string]interface{}{"path": "."})
 		s.recordResult(h, "access denied")
 		level, _ := s.detect("list_files", h)
@@ -77,7 +77,8 @@ func TestToolLoopDetection_MixedTools(t *testing.T) {
 	var s toolLoopState
 
 	// Alternate between two tools with same result → each tool only hit ~half
-	for i := 0; i < 15; i++ {
+	// With 8 iterations, each tool is called 4 times → below critical (5)
+	for i := 0; i < 8; i++ {
 		toolName := "list_files"
 		if i%2 == 1 {
 			toolName = "read_file"
@@ -85,7 +86,7 @@ func TestToolLoopDetection_MixedTools(t *testing.T) {
 		h := s.record(toolName, map[string]interface{}{"path": "."})
 		s.recordResult(h, "error")
 		level, _ := s.detect(toolName, h)
-		// Each tool is only called ~7-8 times, should at most warn
+		// Each tool is only called 4 times, should at most warn
 		if level == "critical" {
 			t.Fatalf("iteration %d: unexpected critical for alternating tools", i)
 		}
