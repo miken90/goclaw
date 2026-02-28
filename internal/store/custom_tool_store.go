@@ -22,6 +22,14 @@ type CustomToolDef struct {
 	CreatedBy      string          `json:"created_by"`
 }
 
+// CustomToolListOpts configures custom tool listing with optional pagination and filtering.
+type CustomToolListOpts struct {
+	AgentID *uuid.UUID
+	Search  string
+	Limit   int
+	Offset  int
+}
+
 // CustomToolStore manages custom tool definitions (managed mode only).
 type CustomToolStore interface {
 	Create(ctx context.Context, def *CustomToolDef) error
@@ -31,4 +39,6 @@ type CustomToolStore interface {
 	ListGlobal(ctx context.Context) ([]CustomToolDef, error)
 	ListByAgent(ctx context.Context, agentID uuid.UUID) ([]CustomToolDef, error)
 	ListAll(ctx context.Context) ([]CustomToolDef, error)
+	ListPaged(ctx context.Context, opts CustomToolListOpts) ([]CustomToolDef, error)
+	CountTools(ctx context.Context, opts CustomToolListOpts) (int, error)
 }

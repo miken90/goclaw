@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -189,4 +190,44 @@ func (s *PGChannelInstanceStore) ListAll(ctx context.Context) ([]store.ChannelIn
 		return nil, err
 	}
 	return s.scanInstances(rows)
+}
+
+func buildChannelInstanceWhere(opts store.ChannelInstanceListOpts) (string, []interface{}) {
+	var conditions []string
+	var args []interface{}
+	argIdx := 1
+
+	if opts.Search != "" {
+		conditions = append(conditions, fmt.Sprintf("(name ILIKE $%d OR display_name ILIKE $%d OR channel_type ILIKE $%d)", argIdx, argIdx, argIdx))
+		args = append(args, "%"+opts.Search+"%")
+	}
+
+	where := ""
+	if len(conditions) > 0 {
+		where = " WHERE " + strings.Join(conditions, " AND ")
+	}
+	return where, args
+}
+
+func (s *PGChannelInstanceStore) ListPaged(ctx context.Context, opts store.ChannelInstanceListOpts) ([]store.ChannelInstanceData, error) {
+	where, args := buildChannelInstanceWhere(opts)
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	q := `SELECT ` + channelInstanceSelectCols + ` FROM channel_instances` + where +
+		fmt.Sprintf(" ORDER BY name OFFSET %d LIMIT %d", opts.Offset, limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	return s.scanInstances(rows)
+}
+
+func (s *PGChannelInstanceStore) CountInstances(ctx context.Context, opts store.ChannelInstanceListOpts) (int, error) {
+	where, args := buildChannelInstanceWhere(opts)
+	var count int
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM channel_instances"+where, args...).Scan(&count)
+	return count, err
 }

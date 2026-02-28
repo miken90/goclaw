@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Combobox } from "@/components/ui/combobox";
@@ -25,8 +25,14 @@ interface ProviderModelSelectProps {
   modelLabel?: string;
   providerPlaceholder?: string;
   modelPlaceholder?: string;
-  /** Show a "Check" verify button. */
+  /** Show a "Check" verify button. When true, always shows. When omitted, auto-shows if savedProvider/savedModel are provided and values differ. */
   showVerify?: boolean;
+  /** Saved provider value — when provided, verify button auto-shows on change. */
+  savedProvider?: string;
+  /** Saved model value — when provided, verify button auto-shows on change. */
+  savedModel?: string;
+  /** Called when verification status changes. True = save should be blocked (changed but not verified). */
+  onSaveBlockedChange?: (blocked: boolean) => void;
 }
 
 export function ProviderModelSelect({
@@ -40,7 +46,10 @@ export function ProviderModelSelect({
   modelLabel = "Model",
   providerPlaceholder = "Select provider",
   modelPlaceholder = "Enter or select model",
-  showVerify = false,
+  showVerify,
+  savedProvider,
+  savedModel,
+  onSaveBlockedChange,
 }: ProviderModelSelectProps) {
   const { providers } = useProviders();
   const enabledProviders = providers.filter((p) => p.enabled);
@@ -52,15 +61,21 @@ export function ProviderModelSelect({
   const { models, loading: modelsLoading } = useProviderModels(selectedProviderId);
   const { verify, verifying, result: verifyResult, reset: resetVerify } = useProviderVerify();
 
+  const hasSavedValues = savedProvider !== undefined && savedModel !== undefined;
+  const llmChanged = hasSavedValues && (provider !== savedProvider || model !== savedModel);
+  const shouldShowVerify = showVerify ?? llmChanged;
+
+  useEffect(() => {
+    resetVerify();
+  }, [provider, model, resetVerify]);
+
+  useEffect(() => {
+    onSaveBlockedChange?.(!!llmChanged && !verifyResult?.valid);
+  }, [llmChanged, verifyResult, onSaveBlockedChange]);
+
   const handleProviderChange = (v: string) => {
     onProviderChange(v);
     onModelChange("");
-    resetVerify();
-  };
-
-  const handleModelChange = (v: string) => {
-    onModelChange(v);
-    resetVerify();
   };
 
   const handleVerify = async () => {
@@ -99,12 +114,12 @@ export function ProviderModelSelect({
           <div className="flex-1">
             <Combobox
               value={model}
-              onChange={handleModelChange}
+              onChange={onModelChange}
               options={models.map((m) => ({ value: m.id, label: m.name }))}
               placeholder={modelsLoading ? "Loading models..." : modelPlaceholder}
             />
           </div>
-          {showVerify && (
+          {shouldShowVerify && (
             <Button
               type="button"
               variant="outline"
@@ -117,7 +132,7 @@ export function ProviderModelSelect({
             </Button>
           )}
         </div>
-        {showVerify && verifyResult && (
+        {shouldShowVerify && verifyResult && (
           <p className={`text-xs ${verifyResult.valid ? "text-success" : "text-destructive"}`}>
             {verifyResult.valid ? "Model verified" : verifyResult.error || "Verification failed"}
           </p>

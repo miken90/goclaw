@@ -35,6 +35,13 @@ func IsDefaultChannelInstance(name string) bool {
 	return false
 }
 
+// ChannelInstanceListOpts configures channel instance listing with optional pagination and filtering.
+type ChannelInstanceListOpts struct {
+	Search string
+	Limit  int
+	Offset int
+}
+
 // ChannelInstanceStore manages channel instance definitions (managed mode only).
 type ChannelInstanceStore interface {
 	Create(ctx context.Context, inst *ChannelInstanceData) error
@@ -44,4 +51,6 @@ type ChannelInstanceStore interface {
 	Delete(ctx context.Context, id uuid.UUID) error
 	ListEnabled(ctx context.Context) ([]ChannelInstanceData, error)
 	ListAll(ctx context.Context) ([]ChannelInstanceData, error)
+	ListPaged(ctx context.Context, opts ChannelInstanceListOpts) ([]ChannelInstanceData, error)
+	CountInstances(ctx context.Context, opts ChannelInstanceListOpts) (int, error)
 }

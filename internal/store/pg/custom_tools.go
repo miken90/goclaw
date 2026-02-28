@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -190,4 +191,45 @@ func (s *PGCustomToolStore) ListAll(ctx context.Context) ([]store.CustomToolDef,
 		return nil, err
 	}
 	return s.scanTools(rows)
+}
+
+func buildCustomToolWhere(opts store.CustomToolListOpts) (string, []interface{}) {
+	conditions := []string{"enabled = true"}
+	var args []interface{}
+	argIdx := 1
+
+	if opts.AgentID != nil {
+		conditions = append(conditions, fmt.Sprintf("agent_id = $%d", argIdx))
+		args = append(args, *opts.AgentID)
+		argIdx++
+	}
+	if opts.Search != "" {
+		conditions = append(conditions, fmt.Sprintf("(name ILIKE $%d OR description ILIKE $%d)", argIdx, argIdx))
+		args = append(args, "%"+opts.Search+"%")
+	}
+
+	return " WHERE " + strings.Join(conditions, " AND "), args
+}
+
+func (s *PGCustomToolStore) ListPaged(ctx context.Context, opts store.CustomToolListOpts) ([]store.CustomToolDef, error) {
+	where, args := buildCustomToolWhere(opts)
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	q := `SELECT ` + customToolSelectCols + ` FROM custom_tools` + where +
+		fmt.Sprintf(" ORDER BY name OFFSET %d LIMIT %d", opts.Offset, limit)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	return s.scanTools(rows)
+}
+
+func (s *PGCustomToolStore) CountTools(ctx context.Context, opts store.CustomToolListOpts) (int, error) {
+	where, args := buildCustomToolWhere(opts)
+	var count int
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM custom_tools"+where, args...).Scan(&count)
+	return count, err
 }

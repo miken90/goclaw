@@ -1,6 +1,8 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWs } from "@/hooks/use-ws";
 import { Methods } from "@/api/protocol";
+import { queryKeys } from "@/lib/query-keys";
 
 export interface TtsProviderConfig {
   api_key?: string;
@@ -41,28 +43,24 @@ const DEFAULT_TTS: TtsConfig = {
 
 export function useTtsConfig() {
   const ws = useWs();
-  const [tts, setTts] = useState<TtsConfig>(DEFAULT_TTS);
-  const [loading, setLoading] = useState(false);
+  const queryClient = useQueryClient();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    if (!ws.isConnected) return;
-    setLoading(true);
-    try {
+  const { data: tts = DEFAULT_TTS, isLoading: loading } = useQuery({
+    queryKey: queryKeys.tts.all,
+    queryFn: async () => {
+      if (!ws.isConnected) return DEFAULT_TTS;
       const res = await ws.call<{ config: Record<string, unknown> }>(Methods.CONFIG_GET);
       const ttsConfig = (res.config?.tts as TtsConfig) ?? DEFAULT_TTS;
-      setTts({ ...DEFAULT_TTS, ...ttsConfig });
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false);
-    }
-  }, [ws]);
+      return { ...DEFAULT_TTS, ...ttsConfig };
+    },
+  });
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  const invalidate = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: queryKeys.tts.all }),
+    [queryClient],
+  );
 
   const save = useCallback(
     async (updates: Partial<TtsConfig>) => {
@@ -70,7 +68,7 @@ export function useTtsConfig() {
       setError(null);
       try {
         await ws.call(Methods.CONFIG_PATCH, { tts: updates });
-        await load();
+        await invalidate();
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Failed to save TTS config";
         setError(msg);
@@ -79,8 +77,8 @@ export function useTtsConfig() {
         setSaving(false);
       }
     },
-    [ws, load],
+    [ws, invalidate],
   );
 
-  return { tts, loading, saving, error, refresh: load, save };
+  return { tts, loading, saving, error, refresh: invalidate, save };
 }

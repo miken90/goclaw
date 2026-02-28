@@ -1,80 +1,79 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useHttp } from "@/hooks/use-ws";
+import { queryKeys } from "@/lib/query-keys";
+import type { ChannelInstanceData, ChannelInstanceInput } from "@/types/channel";
 
-export interface ChannelInstanceData {
-  id: string;
-  name: string;
-  display_name: string;
-  channel_type: string;
-  agent_id: string;
-  config: Record<string, unknown> | null;
-  enabled: boolean;
-  is_default: boolean;
-  created_by: string;
-  created_at: string;
-  updated_at: string;
+export type { ChannelInstanceData, ChannelInstanceInput };
+
+export interface ChannelInstanceFilters {
+  search?: string;
+  limit?: number;
+  offset?: number;
 }
 
-export interface ChannelInstanceInput {
-  name: string;
-  display_name?: string;
-  channel_type: string;
-  agent_id: string;
-  credentials?: Record<string, unknown>; // JSON object, encrypted server-side
-  config?: Record<string, unknown>;
-  enabled?: boolean;
-}
-
-export function useChannelInstances() {
+export function useChannelInstances(filters: ChannelInstanceFilters = {}) {
   const http = useHttp();
-  const [instances, setInstances] = useState<ChannelInstanceData[]>([]);
-  const [loading, setLoading] = useState(false);
+  const queryClient = useQueryClient();
   const [supported, setSupported] = useState(true); // false if standalone mode (404)
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await http.get<{ instances: ChannelInstanceData[] }>("/v1/channels/instances");
-      setInstances(res.instances ?? []);
-      setSupported(true);
-    } catch (err: unknown) {
-      // 404 means standalone mode — channel instances not available
-      if (err instanceof Error && err.message.includes("404")) {
-        setSupported(false);
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, [http]);
+  const queryKey = queryKeys.channels.list({ ...filters });
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  const { data, isLoading: loading } = useQuery({
+    queryKey,
+    queryFn: async () => {
+      try {
+        const params: Record<string, string> = {};
+        if (filters.search) params.search = filters.search;
+        if (filters.limit) params.limit = String(filters.limit);
+        if (filters.offset !== undefined) params.offset = String(filters.offset);
+
+        const res = await http.get<{ instances: ChannelInstanceData[]; total?: number }>("/v1/channels/instances", params);
+        setSupported(true);
+        return { instances: res.instances ?? [], total: res.total ?? 0 };
+      } catch (err: unknown) {
+        // 404 means standalone mode — channel instances not available
+        if (err instanceof Error && err.message.includes("404")) {
+          setSupported(false);
+        }
+        return { instances: [], total: 0 };
+      }
+    },
+    placeholderData: (prev) => prev,
+  });
+
+  const instances = data?.instances ?? [];
+  const total = data?.total ?? 0;
+
+  const invalidate = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: queryKeys.channels.all }),
+    [queryClient],
+  );
 
   const createInstance = useCallback(
     async (data: ChannelInstanceInput) => {
       const res = await http.post<{ id: string }>("/v1/channels/instances", data);
-      await load();
+      await invalidate();
       return res;
     },
-    [http, load],
+    [http, invalidate],
   );
 
   const updateInstance = useCallback(
     async (id: string, data: Partial<ChannelInstanceInput>) => {
       await http.put(`/v1/channels/instances/${id}`, data);
-      await load();
+      await invalidate();
     },
-    [http, load],
+    [http, invalidate],
   );
 
   const deleteInstance = useCallback(
     async (id: string) => {
       await http.delete(`/v1/channels/instances/${id}`);
-      await load();
+      await invalidate();
     },
-    [http, load],
+    [http, invalidate],
   );
 
-  return { instances, loading, supported, refresh: load, createInstance, updateInstance, deleteInstance };
+  return { instances, total, loading, supported, refresh: invalidate, createInstance, updateInstance, deleteInstance };
 }

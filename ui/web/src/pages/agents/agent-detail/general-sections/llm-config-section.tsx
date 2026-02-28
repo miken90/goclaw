@@ -1,18 +1,6 @@
-import { useMemo, useEffect } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Button } from "@/components/ui/button";
-import { Combobox } from "@/components/ui/combobox";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { useProviders } from "@/pages/providers/hooks/use-providers";
-import { useProviderModels } from "@/pages/providers/hooks/use-provider-models";
-import { useProviderVerify } from "@/pages/providers/hooks/use-provider-verify";
+import { ProviderModelSelect } from "@/components/shared/provider-model-select";
 
 interface LlmConfigSectionProps {
   provider: string;
@@ -42,97 +30,21 @@ export function LlmConfigSection({
   savedModel,
   onSaveBlockedChange,
 }: LlmConfigSectionProps) {
-  const { providers } = useProviders();
-  const enabledProviders = providers.filter((p) => p.enabled);
-
-  const selectedProviderId = useMemo(
-    () => enabledProviders.find((p) => p.name === provider)?.id,
-    [enabledProviders, provider],
-  );
-  const { models, loading: modelsLoading } = useProviderModels(selectedProviderId);
-  const { verify, verifying, result: verifyResult, reset: resetVerify } = useProviderVerify();
-
-  const llmChanged = provider !== savedProvider || model !== savedModel;
-
-  useEffect(() => {
-    resetVerify();
-  }, [provider, model, resetVerify]);
-
-  // Report save-blocked status to parent
-  useEffect(() => {
-    onSaveBlockedChange?.(llmChanged && !verifyResult?.valid);
-  }, [llmChanged, verifyResult, onSaveBlockedChange]);
-
-  const handleVerify = async () => {
-    if (!selectedProviderId || !model.trim()) return;
-    await verify(selectedProviderId, model.trim());
-  };
-
   return (
     <section className="space-y-4">
       <h3 className="text-sm font-medium text-muted-foreground">LLM Configuration</h3>
       <div className="space-y-4 rounded-lg border p-4">
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <Label>Provider</Label>
-            {enabledProviders.length > 0 ? (
-              <Select
-                value={provider}
-                onValueChange={(v) => {
-                  onProviderChange(v);
-                  onModelChange("");
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select provider" />
-                </SelectTrigger>
-                <SelectContent>
-                  {enabledProviders.map((p) => (
-                    <SelectItem key={p.name} value={p.name}>
-                      {p.display_name || p.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            ) : (
-              <Input
-                value={provider}
-                onChange={(e) => onProviderChange(e.target.value)}
-                placeholder="openrouter"
-              />
-            )}
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="model">Model</Label>
-            <div className="flex gap-2">
-              <div className="flex-1">
-                <Combobox
-                  value={model}
-                  onChange={onModelChange}
-                  options={models.map((m) => ({ value: m.id, label: m.name }))}
-                  placeholder={modelsLoading ? "Loading models..." : "Enter or select model"}
-                />
-              </div>
-              {llmChanged && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-9 px-3"
-                  disabled={!selectedProviderId || !model.trim() || verifying}
-                  onClick={handleVerify}
-                >
-                  {verifying ? "..." : "Check"}
-                </Button>
-              )}
-            </div>
-            {verifyResult && (
-              <p className={`text-xs ${verifyResult.valid ? "text-success" : "text-destructive"}`}>
-                {verifyResult.valid ? "Model verified" : verifyResult.error || "Verification failed"}
-              </p>
-            )}
-          </div>
-        </div>
+        <ProviderModelSelect
+          provider={provider}
+          onProviderChange={onProviderChange}
+          model={model}
+          onModelChange={onModelChange}
+          savedProvider={savedProvider}
+          savedModel={savedModel}
+          onSaveBlockedChange={onSaveBlockedChange}
+          providerTip="LLM provider name. Must match a configured provider."
+          modelTip="Model ID to use."
+        />
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label htmlFor="contextWindow">Context Window</Label>

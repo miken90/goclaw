@@ -1,77 +1,69 @@
-import { useState, useEffect, useCallback } from "react";
+import { useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useHttp } from "@/hooks/use-ws";
+import { queryKeys } from "@/lib/query-keys";
+import type { CustomToolData, CustomToolInput } from "@/types/custom-tool";
 
-export interface CustomToolData {
-  id: string;
-  name: string;
-  description: string;
-  parameters: Record<string, unknown> | null;
-  command: string;
-  working_dir: string;
-  timeout_seconds: number;
-  agent_id: string | null;
-  enabled: boolean;
-  created_by: string;
-  created_at: string;
-  updated_at: string;
+export type { CustomToolData, CustomToolInput };
+
+export interface CustomToolFilters {
+  search?: string;
+  limit?: number;
+  offset?: number;
 }
 
-export interface CustomToolInput {
-  name: string;
-  description?: string;
-  parameters?: Record<string, unknown>;
-  command: string;
-  working_dir?: string;
-  timeout_seconds?: number;
-  agent_id?: string;
-  enabled?: boolean;
-}
-
-export function useCustomTools() {
+export function useCustomTools(filters: CustomToolFilters = {}) {
   const http = useHttp();
-  const [tools, setTools] = useState<CustomToolData[]>([]);
-  const [loading, setLoading] = useState(false);
+  const queryClient = useQueryClient();
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await http.get<{ tools: CustomToolData[] }>("/v1/tools/custom");
-      setTools(res.tools ?? []);
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false);
-    }
-  }, [http]);
+  const queryKey = queryKeys.customTools.list({ ...filters });
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  const { data, isLoading: loading } = useQuery({
+    queryKey,
+    queryFn: async () => {
+      const params: Record<string, string> = {};
+      if (filters.search) params.search = filters.search;
+      if (filters.limit) params.limit = String(filters.limit);
+      if (filters.offset !== undefined) params.offset = String(filters.offset);
+
+      const res = await http.get<{ tools: CustomToolData[]; total?: number }>("/v1/tools/custom", params);
+      return { tools: res.tools ?? [], total: res.total ?? 0 };
+    },
+    placeholderData: (prev) => prev,
+  });
+
+  const tools = data?.tools ?? [];
+  const total = data?.total ?? 0;
+
+  const invalidate = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: queryKeys.customTools.all }),
+    [queryClient],
+  );
 
   const createTool = useCallback(
     async (data: CustomToolInput) => {
       const res = await http.post<{ id: string }>("/v1/tools/custom", data);
-      await load();
+      await invalidate();
       return res;
     },
-    [http, load],
+    [http, invalidate],
   );
 
   const updateTool = useCallback(
     async (id: string, data: Partial<CustomToolInput>) => {
       await http.put(`/v1/tools/custom/${id}`, data);
-      await load();
+      await invalidate();
     },
-    [http, load],
+    [http, invalidate],
   );
 
   const deleteTool = useCallback(
     async (id: string) => {
       await http.delete(`/v1/tools/custom/${id}`);
-      await load();
+      await invalidate();
     },
-    [http, load],
+    [http, invalidate],
   );
 
-  return { tools, loading, refresh: load, createTool, updateTool, deleteTool };
+  return { tools, total, loading, refresh: invalidate, createTool, updateTool, deleteTool };
 }

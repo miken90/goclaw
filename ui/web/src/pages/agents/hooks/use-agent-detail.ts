@@ -1,28 +1,32 @@
-import { useState, useEffect, useCallback } from "react";
+import { useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useHttp, useWs } from "@/hooks/use-ws";
 import { Methods } from "@/api/protocol";
+import { queryKeys } from "@/lib/query-keys";
 import type { AgentData, BootstrapFile } from "@/types/agent";
+
+interface AgentDetailData {
+  agent: AgentData;
+  files: BootstrapFile[];
+}
 
 export function useAgentDetail(agentId: string | undefined) {
   const http = useHttp();
   const ws = useWs();
-  const [agent, setAgent] = useState<AgentData | null>(null);
-  const [files, setFiles] = useState<BootstrapFile[]>([]);
-  const [loading, setLoading] = useState(false);
+  const queryClient = useQueryClient();
 
-  const load = useCallback(async () => {
-    if (!agentId) return;
-    setLoading(true);
-    try {
+  const { data, isLoading: loading } = useQuery({
+    queryKey: queryKeys.agents.detail(agentId ?? ""),
+    queryFn: async (): Promise<AgentDetailData> => {
       // Try HTTP first (may fail with 403 if user isn't owner/shared)
-      let ag: AgentData | null = null;
+      let ag: AgentData;
       try {
         ag = await http.get<AgentData>(`/v1/agents/${agentId}`);
       } catch {
         // HTTP failed - construct minimal agent from agentId (which is the agent_key)
         ag = {
-          id: agentId,
-          agent_key: agentId,
+          id: agentId!,
+          agent_key: agentId!,
           owner_id: "",
           provider: "",
           model: "",
@@ -35,34 +39,41 @@ export function useAgentDetail(agentId: string | undefined) {
           status: "active",
         };
       }
-      setAgent(ag);
 
       // Load files via WS (no access control)
+      let files: BootstrapFile[] = [];
       if (ws.isConnected) {
-        const filesRes = await ws.call<{ files: BootstrapFile[] }>(
-          Methods.AGENTS_FILES_LIST,
-          { agentId: ag.agent_key },
-        );
-        setFiles(filesRes.files ?? []);
+        try {
+          const filesRes = await ws.call<{ files: BootstrapFile[] }>(
+            Methods.AGENTS_FILES_LIST,
+            { agentId: ag.agent_key },
+          );
+          files = filesRes.files ?? [];
+        } catch {
+          // ignore
+        }
       }
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false);
-    }
-  }, [agentId, http, ws]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+      return { agent: ag, files };
+    },
+    enabled: !!agentId,
+  });
+
+  const agent = data?.agent ?? null;
+  const files = data?.files ?? [];
+
+  const invalidate = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.agents.detail(agentId ?? "") });
+    queryClient.invalidateQueries({ queryKey: queryKeys.agents.all });
+  }, [queryClient, agentId]);
 
   const updateAgent = useCallback(
     async (updates: Record<string, unknown>) => {
       if (!agentId) return;
       await http.put(`/v1/agents/${agentId}`, updates);
-      load();
+      await invalidate();
     },
-    [agentId, http, load],
+    [agentId, http, invalidate],
   );
 
   const getFile = useCallback(
@@ -85,9 +96,9 @@ export function useAgentDetail(agentId: string | undefined) {
         name,
         content,
       });
-      load();
+      await invalidate();
     },
-    [agent, ws, load],
+    [agent, ws, invalidate],
   );
 
   const regenerateAgent = useCallback(
@@ -103,5 +114,5 @@ export function useAgentDetail(agentId: string | undefined) {
     await http.post(`/v1/agents/${agentId}/resummon`);
   }, [agentId, http]);
 
-  return { agent, files, loading, updateAgent, getFile, setFile, regenerateAgent, resummonAgent, refresh: load };
+  return { agent, files, loading, updateAgent, getFile, setFile, regenerateAgent, resummonAgent, refresh: invalidate };
 }

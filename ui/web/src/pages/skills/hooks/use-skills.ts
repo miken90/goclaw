@@ -1,36 +1,30 @@
-import { useState, useEffect, useCallback } from "react";
+import { useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWs, useHttp } from "@/hooks/use-ws";
 import { Methods } from "@/api/protocol";
+import { queryKeys } from "@/lib/query-keys";
+import type { SkillInfo } from "@/types/skill";
 
-export interface SkillInfo {
-  id?: string;
-  name: string;
-  description: string;
-  source: string;
-}
+export type { SkillInfo };
 
 export function useSkills() {
   const ws = useWs();
   const http = useHttp();
-  const [skills, setSkills] = useState<SkillInfo[]>([]);
-  const [loading, setLoading] = useState(false);
+  const queryClient = useQueryClient();
 
-  const load = useCallback(async () => {
-    if (!ws.isConnected) return;
-    setLoading(true);
-    try {
+  const { data: skills = [], isLoading: loading } = useQuery({
+    queryKey: queryKeys.skills.all,
+    queryFn: async () => {
+      if (!ws.isConnected) return [];
       const res = await ws.call<{ skills: SkillInfo[] }>(Methods.SKILLS_LIST);
-      setSkills(res.skills ?? []);
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false);
-    }
-  }, [ws]);
+      return res.skills ?? [];
+    },
+  });
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  const invalidate = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: queryKeys.skills.all }),
+    [queryClient],
+  );
 
   const getSkill = useCallback(
     async (name: string) => {
@@ -44,20 +38,24 @@ export function useSkills() {
     async (file: File) => {
       const formData = new FormData();
       formData.append("file", file);
-      return http.upload<{ id: string; slug: string; version: number; name: string }>(
+      const res = await http.upload<{ id: string; slug: string; version: number; name: string }>(
         "/v1/skills/upload",
         formData,
       );
+      await invalidate();
+      return res;
     },
-    [http],
+    [http, invalidate],
   );
 
   const deleteSkill = useCallback(
     async (id: string) => {
-      return http.delete<{ ok: string }>(`/v1/skills/${id}`);
+      const res = await http.delete<{ ok: string }>(`/v1/skills/${id}`);
+      await invalidate();
+      return res;
     },
-    [http],
+    [http, invalidate],
   );
 
-  return { skills, loading, refresh: load, getSkill, uploadSkill, deleteSkill };
+  return { skills, loading, refresh: invalidate, getSkill, uploadSkill, deleteSkill };
 }
