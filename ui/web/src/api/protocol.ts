@@ -129,6 +129,8 @@ export const Methods = {
   TEAMS_GET: "teams.get",
   TEAMS_DELETE: "teams.delete",
   TEAMS_TASK_LIST: "teams.tasks.list",
+  TEAMS_MEMBERS_ADD: "teams.members.add",
+  TEAMS_MEMBERS_REMOVE: "teams.members.remove",
 
   // Delegation history (managed mode)
   DELEGATIONS_LIST: "delegations.list",

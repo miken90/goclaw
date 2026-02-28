@@ -20,7 +20,7 @@ export function useTraces(filters: TraceFilters = {}) {
 
   const queryKey = queryKeys.traces.list({ ...filters });
 
-  const { data, isLoading: loading } = useQuery({
+  const { data, isLoading: loading, isFetching } = useQuery({
     queryKey,
     queryFn: async () => {
       const params: Record<string, string> = {};
@@ -55,5 +55,5 @@ export function useTraces(filters: TraceFilters = {}) {
     [http],
   );
 
-  return { traces, total, loading, refresh: invalidate, getTrace };
+  return { traces, total, loading, fetching: isFetching, refresh: invalidate, getTrace };
 }

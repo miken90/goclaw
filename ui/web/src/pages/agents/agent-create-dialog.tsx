@@ -96,7 +96,7 @@ export function AgentCreateDialog({ open, onOpenChange, onCreate }: AgentCreateD
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col">
+      <DialogContent className="sm:max-w-4xl max-h-[90vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>Create Agent</DialogTitle>
         </DialogHeader>

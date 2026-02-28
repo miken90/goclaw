@@ -71,4 +71,7 @@ type AgentLinkStore interface {
 
 	// SearchDelegateTargetsByEmbedding performs vector similarity search over delegation targets.
 	SearchDelegateTargetsByEmbedding(ctx context.Context, fromAgentID uuid.UUID, embedding []float32, limit int) ([]AgentLinkData, error)
+
+	// DeleteTeamLinksForAgent removes all team-specific links involving an agent.
+	DeleteTeamLinksForAgent(ctx context.Context, teamID, agentID uuid.UUID) error
 }

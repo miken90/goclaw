@@ -87,7 +87,7 @@ export function Combobox({
         />
       )}
       {open && filtered.length > 0 && (
-        <div className="bg-popover text-popover-foreground absolute top-full left-0 z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-md border p-1 shadow-md">
+        <div className="bg-popover text-popover-foreground absolute top-full left-0 z-50 mt-1 max-h-60 min-w-full overflow-y-auto rounded-md border p-1 shadow-md">
           {filtered.map((o) => (
             <button
               key={o.value}

@@ -20,12 +20,12 @@ export function TracesPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
 
-  const { traces, total, loading, refresh, getTrace } = useTraces({
+  const { traces, total, loading, fetching, refresh, getTrace } = useTraces({
     agentId: appliedAgentFilter || undefined,
     limit: pageSize,
     offset: (page - 1) * pageSize,
   });
-  const spinning = useMinLoading(loading);
+  const spinning = useMinLoading(fetching);
   const showSkeleton = useDeferredLoading(loading && traces.length === 0);
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));

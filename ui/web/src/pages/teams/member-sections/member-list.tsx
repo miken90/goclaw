@@ -1,13 +1,14 @@
-import { Users } from "lucide-react";
+import { Users, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { TeamMemberData } from "@/types/team";
 import { roleBadgeVariant } from "./member-utils";
 
 interface MemberListProps {
   members: TeamMemberData[];
+  onRemove?: (agentId: string) => void;
 }
 
-export function MemberList({ members }: MemberListProps) {
+export function MemberList({ members, onRemove }: MemberListProps) {
   if (members.length === 0) {
     return (
       <div className="flex flex-col items-center gap-2 py-8 text-center">
@@ -19,15 +20,16 @@ export function MemberList({ members }: MemberListProps) {
 
   return (
     <div className="rounded-lg border">
-      <div className="grid grid-cols-[1fr_1fr_80px] items-center gap-2 border-b bg-muted/50 px-4 py-2.5 text-xs font-medium text-muted-foreground">
+      <div className="grid grid-cols-[1fr_1fr_80px_40px] items-center gap-2 border-b bg-muted/50 px-4 py-2.5 text-xs font-medium text-muted-foreground">
         <span>Agent</span>
         <span>Frontmatter</span>
         <span>Role</span>
+        <span />
       </div>
       {members.map((member) => (
         <div
           key={member.agent_id}
-          className="grid grid-cols-[1fr_1fr_80px] items-center gap-2 border-b px-4 py-3 last:border-0"
+          className="grid grid-cols-[1fr_1fr_80px_40px] items-center gap-2 border-b px-4 py-3 last:border-0"
         >
           <div className="min-w-0">
             <span className="truncate text-sm font-medium">
@@ -51,6 +53,18 @@ export function MemberList({ members }: MemberListProps) {
           <Badge variant={roleBadgeVariant(member.role)}>
             {member.role}
           </Badge>
+          <div className="flex justify-center">
+            {member.role !== "lead" && onRemove && (
+              <button
+                type="button"
+                onClick={() => onRemove(member.agent_id)}
+                className="rounded p-1 text-muted-foreground/50 transition-colors hover:bg-destructive/10 hover:text-destructive"
+                title="Remove member"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
         </div>
       ))}
     </div>
