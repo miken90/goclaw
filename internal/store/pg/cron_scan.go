@@ -123,11 +123,18 @@ func computeNextRun(schedule *store.CronSchedule, now time.Time) *time.Time {
 		if schedule.Expr == "" {
 			return nil
 		}
-		nextTime, err := gronx.NextTickAfter(schedule.Expr, now, false)
+		evalTime := now
+		if schedule.TZ != "" {
+			if loc, err := time.LoadLocation(schedule.TZ); err == nil {
+				evalTime = now.In(loc)
+			}
+		}
+		nextTime, err := gronx.NextTickAfter(schedule.Expr, evalTime, false)
 		if err != nil {
 			return nil
 		}
-		return &nextTime
+		utcNext := nextTime.UTC()
+		return &utcNext
 	default:
 		return nil
 	}

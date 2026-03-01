@@ -47,8 +47,9 @@ func (p *OpenAIProvider) WithChatPath(path string) *OpenAIProvider {
 	return p
 }
 
-func (p *OpenAIProvider) Name() string        { return p.name }
-func (p *OpenAIProvider) DefaultModel() string { return p.defaultModel }
+func (p *OpenAIProvider) Name() string            { return p.name }
+func (p *OpenAIProvider) DefaultModel() string     { return p.defaultModel }
+func (p *OpenAIProvider) SupportsThinking() bool   { return true }
 func (p *OpenAIProvider) APIKey() string       { return p.apiKey }
 func (p *OpenAIProvider) APIBase() string      { return p.apiBase }
 
@@ -122,6 +123,12 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req ChatRequest, onChun
 		}
 
 		delta := chunk.Choices[0].Delta
+		if delta.ReasoningContent != "" {
+			result.Thinking += delta.ReasoningContent
+			if onChunk != nil {
+				onChunk(StreamChunk{Thinking: delta.ReasoningContent})
+			}
+		}
 		if delta.Content != "" {
 			result.Content += delta.Content
 			if onChunk != nil {
@@ -134,12 +141,12 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req ChatRequest, onChun
 			acc, ok := accumulators[tc.Index]
 			if !ok {
 				acc = &toolCallAccumulator{
-					ToolCall: ToolCall{ID: tc.ID, Name: tc.Function.Name},
+					ToolCall: ToolCall{ID: tc.ID, Name: strings.TrimSpace(tc.Function.Name)},
 				}
 				accumulators[tc.Index] = acc
 			}
 			if tc.Function.Name != "" {
-				acc.Name = tc.Function.Name
+				acc.Name = strings.TrimSpace(tc.Function.Name)
 			}
 			acc.rawArgs += tc.Function.Arguments
 			if tc.Function.ThoughtSignature != "" {
@@ -159,6 +166,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req ChatRequest, onChun
 			}
 			if chunk.Usage.PromptTokensDetails != nil {
 				result.Usage.CacheReadTokens = chunk.Usage.PromptTokensDetails.CachedTokens
+			}
+			if chunk.Usage.CompletionTokensDetails != nil && chunk.Usage.CompletionTokensDetails.ReasoningTokens > 0 {
+				result.Usage.ThinkingTokens = chunk.Usage.CompletionTokensDetails.ReasoningTokens
 			}
 		}
 
@@ -277,11 +287,24 @@ func (p *OpenAIProvider) buildRequestBody(model string, req ChatRequest, stream 
 	}
 
 	// Merge options
-	if v, ok := req.Options["max_tokens"]; ok {
+	if v, ok := req.Options[OptMaxTokens]; ok {
 		body["max_tokens"] = v
 	}
-	if v, ok := req.Options["temperature"]; ok {
+	if v, ok := req.Options[OptTemperature]; ok {
 		body["temperature"] = v
+	}
+
+	// Inject reasoning_effort for o-series models (ignored by models that don't support it)
+	if level, ok := req.Options[OptThinkingLevel].(string); ok && level != "" && level != "off" {
+		body[OptReasoningEffort] = level
+	}
+
+	// DashScope-specific passthrough keys
+	if v, ok := req.Options[OptEnableThinking]; ok {
+		body[OptEnableThinking] = v
+	}
+	if v, ok := req.Options[OptThinkingBudget]; ok {
+		body[OptThinkingBudget] = v
 	}
 
 	return body
@@ -326,6 +349,7 @@ func (p *OpenAIProvider) parseResponse(resp *openAIResponse) *ChatResponse {
 	if len(resp.Choices) > 0 {
 		msg := resp.Choices[0].Message
 		result.Content = msg.Content
+		result.Thinking = msg.ReasoningContent
 		result.FinishReason = resp.Choices[0].FinishReason
 
 		for _, tc := range msg.ToolCalls {
@@ -333,7 +357,7 @@ func (p *OpenAIProvider) parseResponse(resp *openAIResponse) *ChatResponse {
 			_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
 			call := ToolCall{
 				ID:        tc.ID,
-				Name:      tc.Function.Name,
+				Name:      strings.TrimSpace(tc.Function.Name),
 				Arguments: args,
 			}
 			if tc.Function.ThoughtSignature != "" {
@@ -355,6 +379,9 @@ func (p *OpenAIProvider) parseResponse(resp *openAIResponse) *ChatResponse {
 		}
 		if resp.Usage.PromptTokensDetails != nil {
 			result.Usage.CacheReadTokens = resp.Usage.PromptTokensDetails.CachedTokens
+		}
+		if resp.Usage.CompletionTokensDetails != nil && resp.Usage.CompletionTokensDetails.ReasoningTokens > 0 {
+			result.Usage.ThinkingTokens = resp.Usage.CompletionTokensDetails.ReasoningTokens
 		}
 	}
 

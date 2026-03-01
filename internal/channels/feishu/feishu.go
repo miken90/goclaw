@@ -63,6 +63,7 @@ func New(cfg config.FeishuConfig, msgBus *bus.MessageBus, pairingSvc store.Pairi
 	client := NewLarkClient(cfg.AppID, cfg.AppSecret, domain)
 
 	base := channels.NewBaseChannel("feishu", msgBus, cfg.AllowFrom)
+	base.ValidatePolicy(cfg.DMPolicy, cfg.GroupPolicy)
 
 	historyLimit := cfg.HistoryLimit
 	if historyLimit == 0 {

@@ -10,9 +10,9 @@ import (
 
 // Tool loop detection thresholds (per-run, not per-session).
 const (
-	toolLoopHistorySize      = 30
-	toolLoopWarningThreshold = 5  // inject warning into conversation
-	toolLoopCriticalThreshold = 10 // force stop the iteration loop
+	toolLoopHistorySize       = 30
+	toolLoopWarningThreshold  = 3 // inject warning into conversation
+	toolLoopCriticalThreshold = 5 // force stop the iteration loop
 )
 
 // toolLoopState tracks recent tool calls within a single agent run

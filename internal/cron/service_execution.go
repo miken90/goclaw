@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/adhocore/gronx"
@@ -175,10 +176,16 @@ func (cs *Service) checkJobs() {
 	cs.saveUnsafe()
 	cs.mu.Unlock()
 
-	// Execute jobs outside lock
+	// Execute jobs in parallel — scheduler enforces per-session serialization
+	var wg sync.WaitGroup
 	for _, jobID := range dueJobIDs {
-		cs.executeJobByID(jobID)
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			cs.executeJobByID(id)
+		}(jobID)
 	}
+	wg.Wait()
 }
 
 func (cs *Service) executeJobByID(jobID string) {
@@ -267,6 +274,11 @@ func (cs *Service) computeNextRun(schedule *Schedule, now int64) *int64 {
 			return nil
 		}
 		nowTime := time.UnixMilli(now)
+		if schedule.TZ != "" {
+			if loc, err := time.LoadLocation(schedule.TZ); err == nil {
+				nowTime = nowTime.In(loc)
+			}
+		}
 		nextTime, err := gronx.NextTickAfter(schedule.Expr, nowTime, false)
 		if err != nil {
 			slog.Error("cron: failed to compute next run", "expr", schedule.Expr, "error", err)
@@ -297,6 +309,11 @@ func (cs *Service) validateSchedule(schedule *Schedule) error {
 		gx := gronx.New()
 		if !gx.IsValid(schedule.Expr) {
 			return fmt.Errorf("invalid cron expression: %s", schedule.Expr)
+		}
+		if schedule.TZ != "" {
+			if _, err := time.LoadLocation(schedule.TZ); err != nil {
+				return fmt.Errorf("invalid timezone: %s", schedule.TZ)
+			}
 		}
 	default:
 		return fmt.Errorf("unknown schedule kind: %s", schedule.Kind)

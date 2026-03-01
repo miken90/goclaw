@@ -1,7 +1,6 @@
 package providers
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -21,6 +20,7 @@ const (
 // AnthropicProvider implements Provider using the Anthropic Claude API via net/http.
 type AnthropicProvider struct {
 	apiKey       string
+	baseURL      string
 	defaultModel string
 	client       *http.Client
 	retryConfig  RetryConfig
@@ -30,6 +30,7 @@ type AnthropicProvider struct {
 func NewAnthropicProvider(apiKey string, opts ...AnthropicOption) *AnthropicProvider {
 	p := &AnthropicProvider{
 		apiKey:       apiKey,
+		baseURL:      anthropicAPIBase,
 		defaultModel: defaultClaudeModel,
 		client:       &http.Client{Timeout: 120 * time.Second},
 		retryConfig:  DefaultRetryConfig(),
@@ -46,8 +47,17 @@ func WithAnthropicModel(model string) AnthropicOption {
 	return func(p *AnthropicProvider) { p.defaultModel = model }
 }
 
-func (p *AnthropicProvider) Name() string        { return "anthropic" }
-func (p *AnthropicProvider) DefaultModel() string { return p.defaultModel }
+func WithAnthropicBaseURL(baseURL string) AnthropicOption {
+	return func(p *AnthropicProvider) {
+		if baseURL != "" {
+			p.baseURL = strings.TrimRight(baseURL, "/")
+		}
+	}
+}
+
+func (p *AnthropicProvider) Name() string            { return "anthropic" }
+func (p *AnthropicProvider) DefaultModel() string     { return p.defaultModel }
+func (p *AnthropicProvider) SupportsThinking() bool   { return true }
 
 func (p *AnthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	model := req.Model
@@ -73,265 +83,13 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 	})
 }
 
-func (p *AnthropicProvider) ChatStream(ctx context.Context, req ChatRequest, onChunk func(StreamChunk)) (*ChatResponse, error) {
-	model := req.Model
-	if model == "" {
-		model = p.defaultModel
-	}
-
-	body := p.buildRequestBody(model, req, true)
-
-	// Retry only the connection phase; once streaming starts, no retry.
-	respBody, err := RetryDo(ctx, p.retryConfig, func() (io.ReadCloser, error) {
-		return p.doRequest(ctx, body)
-	})
-	if err != nil {
-		return nil, err
-	}
-	defer respBody.Close()
-
-	result := &ChatResponse{FinishReason: "stop"}
-	// Accumulate raw JSON fragments for each tool call by index
-	toolCallJSON := make(map[int]string)
-
-	scanner := bufio.NewScanner(respBody)
-	var currentEvent string
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		// Track event type
-		if strings.HasPrefix(line, "event: ") {
-			currentEvent = strings.TrimPrefix(line, "event: ")
-			continue
-		}
-
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-
-		data := strings.TrimPrefix(line, "data: ")
-
-		switch currentEvent {
-		case "message_start":
-			var ev anthropicMessageStartEvent
-			if err := json.Unmarshal([]byte(data), &ev); err == nil {
-				if result.Usage == nil {
-					result.Usage = &Usage{}
-				}
-				if ev.Message.Usage.InputTokens > 0 {
-					result.Usage.PromptTokens = ev.Message.Usage.InputTokens
-				}
-				result.Usage.CacheCreationTokens = ev.Message.Usage.CacheCreationInputTokens
-				result.Usage.CacheReadTokens = ev.Message.Usage.CacheReadInputTokens
-			}
-
-		case "content_block_start":
-			var ev anthropicContentBlockStartEvent
-			if err := json.Unmarshal([]byte(data), &ev); err == nil {
-				if ev.ContentBlock.Type == "tool_use" {
-					result.ToolCalls = append(result.ToolCalls, ToolCall{
-						ID:        ev.ContentBlock.ID,
-						Name:      ev.ContentBlock.Name,
-						Arguments: make(map[string]interface{}),
-					})
-				}
-			}
-
-		case "content_block_delta":
-			var ev anthropicContentBlockDeltaEvent
-			if err := json.Unmarshal([]byte(data), &ev); err == nil {
-				if ev.Delta.Type == "text_delta" {
-					result.Content += ev.Delta.Text
-					if onChunk != nil {
-						onChunk(StreamChunk{Content: ev.Delta.Text})
-					}
-				} else if ev.Delta.Type == "input_json_delta" {
-					if len(result.ToolCalls) > 0 {
-						idx := len(result.ToolCalls) - 1
-						toolCallJSON[idx] += ev.Delta.PartialJSON
-					}
-				}
-			}
-
-		case "message_delta":
-			var ev anthropicMessageDeltaEvent
-			if err := json.Unmarshal([]byte(data), &ev); err == nil {
-				if ev.Delta.StopReason != "" {
-					switch ev.Delta.StopReason {
-					case "tool_use":
-						result.FinishReason = "tool_calls"
-					case "max_tokens":
-						result.FinishReason = "length"
-					default:
-						result.FinishReason = "stop"
-					}
-				}
-				if ev.Usage.OutputTokens > 0 {
-					if result.Usage == nil {
-						result.Usage = &Usage{}
-					}
-					result.Usage.CompletionTokens = ev.Usage.OutputTokens
-				}
-			}
-
-		case "error":
-			var ev anthropicErrorEvent
-			if err := json.Unmarshal([]byte(data), &ev); err == nil {
-				return nil, fmt.Errorf("anthropic stream error: %s: %s", ev.Error.Type, ev.Error.Message)
-			}
-
-		case "message_stop":
-			// Stream complete
-		}
-	}
-
-	// Parse accumulated tool call JSON arguments
-	for i, rawJSON := range toolCallJSON {
-		if rawJSON != "" {
-			args := make(map[string]interface{})
-			_ = json.Unmarshal([]byte(rawJSON), &args)
-			result.ToolCalls[i].Arguments = args
-		}
-	}
-
-	if result.Usage != nil {
-		result.Usage.TotalTokens = result.Usage.PromptTokens + result.Usage.CompletionTokens
-	}
-
-	if onChunk != nil {
-		onChunk(StreamChunk{Done: true})
-	}
-
-	return result, nil
-}
-
-func (p *AnthropicProvider) buildRequestBody(model string, req ChatRequest, stream bool) map[string]interface{} {
-	// Separate system messages and build conversation messages
-	var systemBlocks []map[string]interface{}
-	var messages []map[string]interface{}
-
-	for _, msg := range req.Messages {
-		switch msg.Role {
-		case "system":
-			systemBlocks = append(systemBlocks, map[string]interface{}{
-				"type": "text",
-				"text": msg.Content,
-			})
-
-		case "user":
-			if len(msg.Images) > 0 {
-				var blocks []map[string]interface{}
-				for _, img := range msg.Images {
-					blocks = append(blocks, map[string]interface{}{
-						"type": "image",
-						"source": map[string]interface{}{
-							"type":       "base64",
-							"media_type": img.MimeType,
-							"data":       img.Data,
-						},
-					})
-				}
-				if msg.Content != "" {
-					blocks = append(blocks, map[string]interface{}{
-						"type": "text",
-						"text": msg.Content,
-					})
-				}
-				messages = append(messages, map[string]interface{}{
-					"role":    "user",
-					"content": blocks,
-				})
-			} else {
-				messages = append(messages, map[string]interface{}{
-					"role":    "user",
-					"content": msg.Content,
-				})
-			}
-
-		case "assistant":
-			var blocks []map[string]interface{}
-			if msg.Content != "" {
-				blocks = append(blocks, map[string]interface{}{
-					"type": "text",
-					"text": msg.Content,
-				})
-			}
-			for _, tc := range msg.ToolCalls {
-				blocks = append(blocks, map[string]interface{}{
-					"type":  "tool_use",
-					"id":    tc.ID,
-					"name":  tc.Name,
-					"input": tc.Arguments,
-				})
-			}
-			messages = append(messages, map[string]interface{}{
-				"role":    "assistant",
-				"content": blocks,
-			})
-
-		case "tool":
-			messages = append(messages, map[string]interface{}{
-				"role": "user",
-				"content": []map[string]interface{}{
-					{
-						"type":        "tool_result",
-						"tool_use_id": msg.ToolCallID,
-						"content":     msg.Content,
-					},
-				},
-			})
-		}
-	}
-
-	body := map[string]interface{}{
-		"model":         model,
-		"max_tokens":    4096,
-		"messages":      messages,
-		"cache_control": map[string]interface{}{"type": "ephemeral"},
-	}
-
-	if stream {
-		body["stream"] = true
-	}
-
-	if len(systemBlocks) > 0 {
-		body["system"] = systemBlocks
-	}
-
-	// Translate tools to Anthropic format
-	if len(req.Tools) > 0 {
-		var tools []map[string]interface{}
-		for _, t := range req.Tools {
-			cleanedParams := CleanSchemaForProvider("anthropic", t.Function.Parameters)
-			tool := map[string]interface{}{
-				"name":         t.Function.Name,
-				"description":  t.Function.Description,
-				"input_schema": cleanedParams,
-			}
-			tools = append(tools, tool)
-		}
-		body["tools"] = tools
-	}
-
-	// Merge options
-	if v, ok := req.Options["max_tokens"]; ok {
-		body["max_tokens"] = v
-	}
-	if v, ok := req.Options["temperature"]; ok {
-		body["temperature"] = v
-	}
-
-	return body
-}
-
 func (p *AnthropicProvider) doRequest(ctx context.Context, body interface{}) (io.ReadCloser, error) {
 	data, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", anthropicAPIBase+"/messages", bytes.NewReader(data))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/messages", bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: create request: %w", err)
 	}
@@ -339,6 +97,13 @@ func (p *AnthropicProvider) doRequest(ctx context.Context, body interface{}) (io
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", p.apiKey)
 	httpReq.Header.Set("anthropic-version", anthropicAPIVersion)
+
+	// Add beta header for interleaved thinking when thinking is enabled
+	if bodyMap, ok := body.(map[string]interface{}); ok {
+		if _, hasThinking := bodyMap["thinking"]; hasThinking {
+			httpReq.Header.Set("anthropic-beta", "interleaved-thinking-2025-05-14")
+		}
+	}
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
@@ -361,17 +126,23 @@ func (p *AnthropicProvider) doRequest(ctx context.Context, body interface{}) (io
 
 func (p *AnthropicProvider) parseResponse(resp *anthropicResponse) *ChatResponse {
 	result := &ChatResponse{}
+	thinkingChars := 0
 
 	for _, block := range resp.Content {
 		switch block.Type {
 		case "text":
 			result.Content += block.Text
+		case "thinking":
+			result.Thinking += block.Thinking
+			thinkingChars += len(block.Thinking)
+		case "redacted_thinking":
+			// Encrypted thinking — cannot display but must preserve for passback
 		case "tool_use":
 			args := make(map[string]interface{})
 			_ = json.Unmarshal(block.Input, &args)
 			result.ToolCalls = append(result.ToolCalls, ToolCall{
 				ID:        block.ID,
-				Name:      block.Name,
+				Name:      strings.TrimSpace(block.Name),
 				Arguments: args,
 			})
 		}
@@ -393,6 +164,16 @@ func (p *AnthropicProvider) parseResponse(resp *anthropicResponse) *ChatResponse
 		CacheCreationTokens: resp.Usage.CacheCreationInputTokens,
 		CacheReadTokens:     resp.Usage.CacheReadInputTokens,
 	}
+	if thinkingChars > 0 {
+		result.Usage.ThinkingTokens = thinkingChars / 4
+	}
+
+	// Preserve raw content blocks for tool use passback
+	if len(result.ToolCalls) > 0 {
+		if b, err := json.Marshal(resp.Content); err == nil {
+			result.RawAssistantContent = b
+		}
+	}
 
 	return result
 }
@@ -406,11 +187,14 @@ type anthropicResponse struct {
 }
 
 type anthropicContentBlock struct {
-	Type  string          `json:"type"`
-	Text  string          `json:"text,omitempty"`
-	ID    string          `json:"id,omitempty"`
-	Name  string          `json:"name,omitempty"`
-	Input json.RawMessage `json:"input,omitempty"`
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	Thinking  string          `json:"thinking,omitempty"`  // for type="thinking"
+	Signature string          `json:"signature,omitempty"` // encrypted thinking verification
+	Data      string          `json:"data,omitempty"`      // for type="redacted_thinking"
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
 }
 
 type anthropicUsage struct {
@@ -437,6 +221,8 @@ type anthropicContentBlockDeltaEvent struct {
 	Delta struct {
 		Type        string `json:"type"`
 		Text        string `json:"text,omitempty"`
+		Thinking    string `json:"thinking,omitempty"`    // for thinking_delta
+		Signature   string `json:"signature,omitempty"`   // for signature_delta
 		PartialJSON string `json:"partial_json,omitempty"`
 	} `json:"delta"`
 }

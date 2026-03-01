@@ -29,6 +29,7 @@ export function ChatPage() {
   const {
     messages,
     streamText,
+    thinkingText,
     toolStream,
     isRunning,
     loading: messagesLoading,
@@ -133,6 +134,7 @@ export function ChatPage() {
         <ChatThread
           messages={messages}
           streamText={streamText}
+          thinkingText={thinkingText}
           toolStream={toolStream}
           isRunning={isRunning}
           loading={messagesLoading}

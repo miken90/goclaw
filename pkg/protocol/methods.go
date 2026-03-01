@@ -103,7 +103,9 @@ const (
 	MethodTeamsCreate   = "teams.create"
 	MethodTeamsGet      = "teams.get"
 	MethodTeamsDelete   = "teams.delete"
-	MethodTeamsTaskList = "teams.tasks.list"
+	MethodTeamsTaskList      = "teams.tasks.list"
+	MethodTeamsMembersAdd    = "teams.members.add"
+	MethodTeamsMembersRemove = "teams.members.remove"
 )
 
 // Delegation history (managed mode)

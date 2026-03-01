@@ -66,10 +66,7 @@ func seedManagedData(dsn string, cfg *config.Config) error {
 			continue
 		}
 
-		providerType := "openai_compat"
-		if name == "anthropic" {
-			providerType = "anthropic_native"
-		}
+		providerType := resolveProviderType(name)
 
 		p := &store.LLMProviderData{
 			Name:         name,
@@ -311,6 +308,34 @@ func resolveProviderAPIKey(cfg *config.Config, providerName string) string {
 		return cfg.Providers.Perplexity.APIKey
 	default:
 		return ""
+	}
+}
+
+// resolveProviderType maps a provider name to its store.Provider* type constant.
+func resolveProviderType(name string) string {
+	switch name {
+	case "anthropic":
+		return store.ProviderAnthropicNative
+	case "gemini":
+		return store.ProviderGeminiNative
+	case "minimax":
+		return store.ProviderMiniMax
+	case "openrouter":
+		return store.ProviderOpenRouter
+	case "groq":
+		return store.ProviderGroq
+	case "deepseek":
+		return store.ProviderDeepSeek
+	case "mistral":
+		return store.ProviderMistral
+	case "xai":
+		return store.ProviderXAI
+	case "cohere":
+		return store.ProviderCohere
+	case "perplexity":
+		return store.ProviderPerplexity
+	default:
+		return store.ProviderOpenAICompat
 	}
 }
 

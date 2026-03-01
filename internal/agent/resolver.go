@@ -90,6 +90,11 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			provider, _ = deps.ProviderReg.Get(names[0])
 			slog.Warn("agent provider not found, using fallback",
 				"agent", agentKey, "wanted", ag.Provider, "using", names[0])
+			if tl := ag.ParseThinkingLevel(); tl != "" && tl != "off" {
+				slog.Warn("agent thinking may not be supported by fallback provider",
+					"agent", agentKey, "thinking_level", tl,
+					"wanted_provider", ag.Provider, "fallback_provider", names[0])
+			}
 		}
 
 		if provider == nil {
@@ -281,6 +286,7 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 			SandboxContainerDir:    sandboxContainerDir,
 			SandboxWorkspaceAccess: sandboxWorkspaceAccess,
 			BuiltinToolSettings:    builtinSettings,
+			ThinkingLevel:         ag.ParseThinkingLevel(),
 		})
 
 		slog.Info("resolved agent from DB", "agent", agentKey, "model", ag.Model, "provider", ag.Provider)

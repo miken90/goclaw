@@ -203,6 +203,11 @@ func (t *CronTool) handleAdd(ctx context.Context, args map[string]interface{}, a
 			return ErrorResult("job.schedule.expr is required for 'cron' schedule")
 		}
 		schedule.TZ = stringFromMap(scheduleObj, "tz")
+		if schedule.TZ != "" {
+			if _, err := time.LoadLocation(schedule.TZ); err != nil {
+				return ErrorResult(fmt.Sprintf("invalid timezone '%s': use IANA names like 'Asia/Ho_Chi_Minh', 'America/New_York'", schedule.TZ))
+			}
+		}
 	default:
 		return ErrorResult(fmt.Sprintf("invalid schedule kind: %s (must be at, every, or cron)", schedule.Kind))
 	}

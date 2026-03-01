@@ -76,6 +76,7 @@ func New(cfg config.TelegramConfig, msgBus *bus.MessageBus, pairingSvc store.Pai
 	}
 
 	base := channels.NewBaseChannel("telegram", msgBus, cfg.AllowFrom)
+	base.ValidatePolicy(cfg.DMPolicy, cfg.GroupPolicy)
 
 	requireMention := true
 	if cfg.RequireMention != nil {

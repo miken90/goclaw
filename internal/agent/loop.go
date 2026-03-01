@@ -100,6 +100,9 @@ type Loop struct {
 
 	// Global builtin tool settings (from builtin_tools table, managed mode)
 	builtinToolSettings tools.BuiltinToolSettings
+
+	// Thinking level for extended thinking support
+	thinkingLevel string
 }
 
 // AgentEvent is emitted during agent execution for WS broadcasting.
@@ -162,6 +165,9 @@ type LoopConfig struct {
 
 	// Global builtin tool settings (from builtin_tools table, managed mode)
 	BuiltinToolSettings tools.BuiltinToolSettings
+
+	// Thinking level: "off", "low", "medium", "high" (from agent other_config)
+	ThinkingLevel string
 }
 
 func NewLoop(cfg LoopConfig) *Loop {
@@ -220,6 +226,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		injectionAction:       action,
 		maxMessageChars:       cfg.MaxMessageChars,
 		builtinToolSettings:   cfg.BuiltinToolSettings,
+		thinkingLevel:         cfg.ThinkingLevel,
 	}
 }
 
@@ -239,6 +246,8 @@ type RunRequest struct {
 	HistoryLimit     int    // max user turns to keep in context (0=unlimited, from channel config)
 	ParentTraceID    uuid.UUID // if set, reuse parent trace instead of creating new (announce runs)
 	ParentRootSpanID uuid.UUID // if set, nest announce agent span under this parent span
+	TraceName        string    // override trace name (default: "chat <agentID>")
+	TraceTags        []string  // additional tags for the trace (e.g. "cron")
 }
 
 // RunResult is the output of a completed agent run.
@@ -282,17 +291,22 @@ func (l *Loop) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 	} else if l.traceCollector != nil {
 		traceID = store.GenNewID()
 		now := time.Now().UTC()
+		traceName := "chat " + l.id
+		if req.TraceName != "" {
+			traceName = req.TraceName
+		}
 		trace := &store.TraceData{
 			ID:           traceID,
 			RunID:        req.RunID,
 			SessionKey:   req.SessionKey,
 			UserID:       req.UserID,
 			Channel:      req.Channel,
-			Name:         "chat " + l.id,
+			Name:         traceName,
 			InputPreview: truncateStr(req.Message, 500),
 			Status:       store.TraceStatusRunning,
 			StartTime:    now,
 			CreatedAt:    now,
+			Tags:         req.TraceTags,
 		}
 		if l.agentUUID != uuid.Nil {
 			trace.AgentID = &l.agentUUID
@@ -533,9 +547,17 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 			Tools:    toolDefs,
 			Model:    l.model,
 			Options: map[string]interface{}{
-				"max_tokens":  8192,
-				"temperature": 0.7,
+				providers.OptMaxTokens:   8192,
+				providers.OptTemperature: 0.7,
 			},
+		}
+		if l.thinkingLevel != "" && l.thinkingLevel != "off" {
+			if tc, ok := l.provider.(providers.ThinkingCapable); ok && tc.SupportsThinking() {
+				chatReq.Options[providers.OptThinkingLevel] = l.thinkingLevel
+			} else {
+				slog.Debug("thinking_level ignored: provider does not support thinking",
+					"provider", l.provider.Name(), "level", l.thinkingLevel)
+			}
 		}
 
 		// Call LLM (streaming or non-streaming)
@@ -546,6 +568,14 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 
 		if req.Stream {
 			resp, err = l.provider.ChatStream(ctx, chatReq, func(chunk providers.StreamChunk) {
+				if chunk.Thinking != "" {
+					l.emit(AgentEvent{
+						Type:    protocol.ChatEventThinking,
+						AgentID: l.id,
+						RunID:   req.RunID,
+						Payload: map[string]string{"content": chunk.Thinking},
+					})
+				}
 				if chunk.Content != "" {
 					l.emit(AgentEvent{
 						Type:    protocol.ChatEventChunk,
@@ -570,6 +600,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 			totalUsage.PromptTokens += resp.Usage.PromptTokens
 			totalUsage.CompletionTokens += resp.Usage.CompletionTokens
 			totalUsage.TotalTokens += resp.Usage.TotalTokens
+			totalUsage.ThinkingTokens += resp.Usage.ThinkingTokens
 		}
 
 		// No tool calls → done
@@ -580,9 +611,10 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 
 		// Build assistant message with tool calls
 		assistantMsg := providers.Message{
-			Role:      "assistant",
-			Content:   resp.Content,
-			ToolCalls: resp.ToolCalls,
+			Role:                "assistant",
+			Content:             resp.Content,
+			ToolCalls:           resp.ToolCalls,
+			RawAssistantContent: resp.RawAssistantContent, // preserve thinking blocks for Anthropic passback
 		}
 		messages = append(messages, assistantMsg)
 		pendingMsgs = append(pendingMsgs, assistantMsg)

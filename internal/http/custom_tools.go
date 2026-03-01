@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 
@@ -63,28 +64,48 @@ func (h *CustomToolsHandler) emitCacheInvalidate(key string) {
 }
 
 func (h *CustomToolsHandler) handleList(w http.ResponseWriter, r *http.Request) {
-	agentIDStr := r.URL.Query().Get("agent_id")
+	opts := store.CustomToolListOpts{
+		Limit:  50,
+		Offset: 0,
+	}
 
-	var result []store.CustomToolDef
-	var err error
-
-	if agentIDStr != "" {
-		agentID, parseErr := uuid.Parse(agentIDStr)
-		if parseErr != nil {
+	if v := r.URL.Query().Get("agent_id"); v != "" {
+		id, err := uuid.Parse(v)
+		if err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid agent_id"})
 			return
 		}
-		result, err = h.store.ListByAgent(r.Context(), agentID)
-	} else {
-		result, err = h.store.ListAll(r.Context())
+		opts.AgentID = &id
+	}
+	if v := r.URL.Query().Get("search"); v != "" {
+		opts.Search = v
+	}
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
+			opts.Limit = n
+		}
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			opts.Offset = n
+		}
 	}
 
+	result, err := h.store.ListPaged(r.Context(), opts)
 	if err != nil {
 		slog.Error("custom_tools.list", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list tools"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"tools": result})
+
+	total, _ := h.store.CountTools(r.Context(), opts)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"tools":  result,
+		"total":  total,
+		"limit":  opts.Limit,
+		"offset": opts.Offset,
+	})
 }
 
 func (h *CustomToolsHandler) handleCreate(w http.ResponseWriter, r *http.Request) {

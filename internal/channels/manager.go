@@ -45,9 +45,16 @@ func NewManager(msgBus *bus.MessageBus) *Manager {
 }
 
 // StartAll starts all registered channels and the outbound dispatch loop.
+// The dispatcher is always started even when no channels exist yet,
+// because channels may be loaded dynamically later via Reload().
 func (m *Manager) StartAll(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Always start the outbound dispatcher — channels may be added later via Reload().
+	dispatchCtx, cancel := context.WithCancel(ctx)
+	m.dispatchTask = &asyncTask{cancel: cancel}
+	go m.dispatchOutbound(dispatchCtx)
 
 	if len(m.channels) == 0 {
 		slog.Warn("no channels enabled")
@@ -55,11 +62,6 @@ func (m *Manager) StartAll(ctx context.Context) error {
 	}
 
 	slog.Info("starting all channels")
-
-	dispatchCtx, cancel := context.WithCancel(ctx)
-	m.dispatchTask = &asyncTask{cancel: cancel}
-
-	go m.dispatchOutbound(dispatchCtx)
 
 	for name, channel := range m.channels {
 		slog.Info("starting channel", "channel", name)

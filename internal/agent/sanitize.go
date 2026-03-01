@@ -293,7 +293,13 @@ func stripMediaPaths(content string) string {
 	var result []string
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "MEDIA:") || strings.HasPrefix(trimmed, "[[audio_as_voice]]") {
+		if strings.HasPrefix(trimmed, "[[audio_as_voice]]") {
+			continue
+		}
+		// Strip any line containing a MEDIA: path reference, regardless of wrapping format.
+		// LLMs echo these in many forms: bare "MEDIA:/path", markdown "![alt](MEDIA:/path)",
+		// JSON '{"image":"MEDIA:/path"}', etc. The /tmp/ or / after MEDIA: confirms it's a path.
+		if strings.Contains(trimmed, "MEDIA:/") {
 			continue
 		}
 		result = append(result, line)

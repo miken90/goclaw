@@ -39,6 +39,7 @@ type MediaInfo struct {
 	ContentType string // MIME type
 	FileName    string // original filename
 	FileSize    int64
+	Transcript  string // STT transcript for audio/voice media (empty if not transcribed)
 }
 
 // mediaGroupBuffer buffers media group (album) messages before processing them together.
@@ -251,6 +252,7 @@ func (c *Channel) downloadMedia(ctx context.Context, fileID string, maxBytes int
 }
 
 // buildMediaTags generates content tags for media items (matching TS media placeholder format).
+// For audio/voice items that have been transcribed, the transcript is embedded in a <transcript> block.
 func buildMediaTags(mediaList []MediaInfo) string {
 	var tags []string
 	for _, m := range mediaList {
@@ -260,9 +262,17 @@ func buildMediaTags(mediaList []MediaInfo) string {
 		case "video", "animation":
 			tags = append(tags, "<media:video>")
 		case "audio":
-			tags = append(tags, "<media:audio>")
+			if m.Transcript != "" {
+				tags = append(tags, fmt.Sprintf("<media:audio>\n<transcript>%s</transcript>", html.EscapeString(m.Transcript)))
+			} else {
+				tags = append(tags, "<media:audio>")
+			}
 		case "voice":
-			tags = append(tags, "<media:voice>")
+			if m.Transcript != "" {
+				tags = append(tags, fmt.Sprintf("<media:voice>\n<transcript>%s</transcript>", html.EscapeString(m.Transcript)))
+			} else {
+				tags = append(tags, "<media:voice>")
+			}
 		case "document":
 			tags = append(tags, "<media:document>")
 		}

@@ -66,5 +66,19 @@ export function useTeams() {
     [ws],
   );
 
-  return { teams, loading, load, createTeam, deleteTeam, getTeam, getTeamTasks };
+  const addMember = useCallback(
+    async (teamId: string, agent: string) => {
+      await ws.call(Methods.TEAMS_MEMBERS_ADD, { teamId, agent });
+    },
+    [ws],
+  );
+
+  const removeMember = useCallback(
+    async (teamId: string, agentId: string) => {
+      await ws.call(Methods.TEAMS_MEMBERS_REMOVE, { teamId, agentId });
+    },
+    [ws],
+  );
+
+  return { teams, loading, load, createTeam, deleteTeam, getTeam, getTeamTasks, addMember, removeMember };
 }

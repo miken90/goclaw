@@ -11,7 +11,8 @@ import (
 
 func registerProviders(registry *providers.Registry, cfg *config.Config) {
 	if cfg.Providers.Anthropic.APIKey != "" {
-		registry.Register(providers.NewAnthropicProvider(cfg.Providers.Anthropic.APIKey))
+		registry.Register(providers.NewAnthropicProvider(cfg.Providers.Anthropic.APIKey,
+			providers.WithAnthropicBaseURL(cfg.Providers.Anthropic.APIBase)))
 		slog.Info("registered provider", "name", "anthropic")
 	}
 
@@ -65,6 +66,20 @@ func registerProviders(registry *providers.Registry, cfg *config.Config) {
 		registry.Register(providers.NewOpenAIProvider("perplexity", cfg.Providers.Perplexity.APIKey, "https://api.perplexity.ai", "sonar-pro"))
 		slog.Info("registered provider", "name", "perplexity")
 	}
+
+	if cfg.Providers.DashScope.APIKey != "" {
+		registry.Register(providers.NewDashScopeProvider(cfg.Providers.DashScope.APIKey, cfg.Providers.DashScope.APIBase, "qwen3-max"))
+		slog.Info("registered provider", "name", "dashscope")
+	}
+
+	if cfg.Providers.Bailian.APIKey != "" {
+		base := cfg.Providers.Bailian.APIBase
+		if base == "" {
+			base = "https://coding-intl.dashscope.aliyuncs.com/v1"
+		}
+		registry.Register(providers.NewOpenAIProvider("bailian", cfg.Providers.Bailian.APIKey, base, "qwen3.5-plus"))
+		slog.Info("registered provider", "name", "bailian")
+	}
 }
 
 // registerProvidersFromDB loads providers from Postgres and registers them.
@@ -81,7 +96,16 @@ func registerProvidersFromDB(registry *providers.Registry, provStore store.Provi
 			continue
 		}
 		if p.ProviderType == store.ProviderAnthropicNative {
-			registry.Register(providers.NewAnthropicProvider(p.APIKey))
+			registry.Register(providers.NewAnthropicProvider(p.APIKey,
+				providers.WithAnthropicBaseURL(p.APIBase)))
+		} else if p.ProviderType == store.ProviderDashScope {
+			registry.Register(providers.NewDashScopeProvider(p.APIKey, p.APIBase, ""))
+		} else if p.ProviderType == store.ProviderBailian {
+			base := p.APIBase
+			if base == "" {
+				base = "https://coding-intl.dashscope.aliyuncs.com/v1"
+			}
+			registry.Register(providers.NewOpenAIProvider(p.Name, p.APIKey, base, "qwen3.5-plus"))
 		} else {
 			prov := providers.NewOpenAIProvider(p.Name, p.APIKey, p.APIBase, "")
 			if p.ProviderType == store.ProviderMiniMax {

@@ -7,3 +7,4 @@ export { SandboxSection } from "./sandbox-section";
 export { MemorySection } from "./memory-section";
 export { OtherConfigSection } from "./other-config-section";
 export { QualityGatesSection } from "./quality-gates-section";
+export { ThinkingSection } from "./thinking-section";

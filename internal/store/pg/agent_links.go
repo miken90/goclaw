@@ -246,6 +246,14 @@ func (s *PGAgentLinkStore) SearchDelegateTargetsByEmbedding(ctx context.Context,
 	return scanLinkRowsJoined(rows)
 }
 
+func (s *PGAgentLinkStore) DeleteTeamLinksForAgent(ctx context.Context, teamID, agentID uuid.UUID) error {
+	_, err := s.db.ExecContext(ctx,
+		`DELETE FROM agent_links WHERE team_id = $1 AND (source_agent_id = $2 OR target_agent_id = $2)`,
+		teamID, agentID,
+	)
+	return err
+}
+
 // --- scan helpers ---
 
 func scanLinkRow(row *sql.Row) (*store.AgentLinkData, error) {

@@ -41,6 +41,7 @@ func New(cfg config.WhatsAppConfig, msgBus *bus.MessageBus, pairingSvc store.Pai
 	}
 
 	base := channels.NewBaseChannel("whatsapp", msgBus, cfg.AllowFrom)
+	base.ValidatePolicy(cfg.DMPolicy, cfg.GroupPolicy)
 
 	return &Channel{
 		BaseChannel:    base,

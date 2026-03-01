@@ -43,7 +43,7 @@ export function TaskList({ tasks, loading }: TaskListProps) {
           className="grid grid-cols-[1fr_90px_100px_60px] items-center gap-2 border-b px-4 py-3 last:border-0"
         >
           <div className="min-w-0">
-            <span className="truncate text-sm font-medium">{task.subject}</span>
+            <p className="truncate text-sm font-medium">{task.subject}</p>
             {task.description && (
               <p className="truncate text-xs text-muted-foreground/70">
                 {task.description}

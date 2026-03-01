@@ -40,6 +40,8 @@ const PROVIDER_TYPES = [
   { value: "minimax_native", label: "MiniMax (Native)", apiBase: "https://api.minimax.io/v1", placeholder: "" },
   { value: "cohere", label: "Cohere", apiBase: "https://api.cohere.ai/compatibility/v1", placeholder: "" },
   { value: "perplexity", label: "Perplexity", apiBase: "https://api.perplexity.ai", placeholder: "" },
+  { value: "dashscope", label: "DashScope (Qwen)", apiBase: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", placeholder: "" },
+  { value: "bailian", label: "Bailian Coding", apiBase: "https://coding-intl.dashscope.aliyuncs.com/v1", placeholder: "" },
 ];
 
 export function ProviderFormDialog({ open, onOpenChange, provider, onSubmit }: ProviderFormDialogProps) {
@@ -139,7 +141,7 @@ export function ProviderFormDialog({ open, onOpenChange, provider, onSubmit }: P
                 setProviderType(v);
                 if (!isEdit) {
                   const preset = PROVIDER_TYPES.find((t) => t.value === v);
-                  if (preset?.apiBase) setApiBase(preset.apiBase);
+                  setApiBase(preset?.apiBase || "");
                 }
               }}
             >

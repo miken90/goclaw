@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useParams, useNavigate } from "react-router";
 import { History } from "lucide-react";
 import { PageHeader } from "@/components/shared/page-header";
@@ -17,17 +17,17 @@ import type { SessionInfo } from "@/types/session";
 export function SessionsPage() {
   const { key: detailKey } = useParams<{ key: string }>();
   const navigate = useNavigate();
-  const { sessions, total, loading, refresh, preview, deleteSession, resetSession } = useSessions();
-  const showSkeleton = useDeferredLoading(loading && sessions.length === 0);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
 
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const { sessions, total, loading, preview, deleteSession, resetSession } = useSessions({
+    limit: pageSize,
+    offset: (page - 1) * pageSize,
+  });
+  const showSkeleton = useDeferredLoading(loading && sessions.length === 0);
 
-  useEffect(() => {
-    refresh({ limit: pageSize, offset: (page - 1) * pageSize });
-  }, [page, pageSize]);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   const detailSession = detailKey
     ? sessions.find((s) => s.key === decodeURIComponent(detailKey))

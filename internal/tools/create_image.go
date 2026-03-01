@@ -30,7 +30,7 @@ var imageGenProviderPriority = []string{"openrouter", "gemini", "openai"}
 var imageGenModelDefaults = map[string]string{
 	"openrouter": "google/gemini-2.5-flash-image",
 	"openai":     "dall-e-3",
-	"gemini":     "gemini-2.0-flash-exp",
+	"gemini":     "gemini-2.5-flash-image",
 }
 
 // CreateImageTool generates images using an image generation API.
@@ -92,7 +92,25 @@ func (t *CreateImageTool) Execute(ctx context.Context, args map[string]interface
 	slog.Info("create_image: calling image generation API",
 		"provider", providerName, "model", model, "aspect_ratio", aspectRatio)
 
-	imageBytes, usage, err := t.callImageGenAPI(ctx, cp.APIKey(), cp.APIBase(), model, prompt, aspectRatio)
+	// Route to the correct image generation endpoint per provider:
+	// - gemini: native Gemini generateContent API (responseModalities)
+	// - openrouter: OpenAI-compat /chat/completions with modalities
+	// - others (openai, etc.): /images/generations
+	var imageBytes []byte
+	var usage *providers.Usage
+	if providerName == "gemini" {
+		var genErr error
+		imageBytes, usage, genErr = t.callGeminiNativeImageGen(ctx, cp.APIKey(), cp.APIBase(), model, prompt)
+		err = genErr
+	} else if providerName == "openrouter" {
+		var genErr error
+		imageBytes, usage, genErr = t.callImageGenAPI(ctx, cp.APIKey(), cp.APIBase(), model, prompt, aspectRatio)
+		err = genErr
+	} else {
+		var genErr error
+		imageBytes, usage, genErr = t.callStandardImageGenAPI(ctx, cp.APIKey(), cp.APIBase(), model, prompt)
+		err = genErr
+	}
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("image generation failed: %v", err))
 	}
@@ -217,6 +235,159 @@ func (t *CreateImageTool) callImageGenAPI(ctx context.Context, apiKey, apiBase, 
 	}
 
 	return t.parseImageResponse(respBody)
+}
+
+// callStandardImageGenAPI uses the /images/generations endpoint (Gemini, OpenAI, and compatible providers).
+// This is the standard OpenAI-compatible image generation endpoint that returns b64_json data.
+func (t *CreateImageTool) callStandardImageGenAPI(ctx context.Context, apiKey, apiBase, model, prompt string) ([]byte, *providers.Usage, error) {
+	body := map[string]interface{}{
+		"model":           model,
+		"prompt":          prompt,
+		"n":               1,
+		"response_format": "b64_json",
+	}
+
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	url := strings.TrimRight(apiBase, "/") + "/images/generations"
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil, fmt.Errorf("API error %d: %s", resp.StatusCode, truncateBytes(respBody, 500))
+	}
+
+	// Parse OpenAI-compat images/generations response: {data: [{b64_json: "..."}]}
+	var imgResp struct {
+		Data []struct {
+			B64JSON string `json:"b64_json"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(respBody, &imgResp); err != nil {
+		return nil, nil, fmt.Errorf("parse response: %w", err)
+	}
+	if len(imgResp.Data) == 0 || imgResp.Data[0].B64JSON == "" {
+		return nil, nil, fmt.Errorf("no image data in response")
+	}
+
+	imageBytes, err := base64.StdEncoding.DecodeString(imgResp.Data[0].B64JSON)
+	if err != nil {
+		return nil, nil, fmt.Errorf("decode base64: %w", err)
+	}
+
+	return imageBytes, nil, nil
+}
+
+// callGeminiNativeImageGen uses the native Gemini generateContent API with responseModalities.
+// Gemini image models (gemini-2.5-flash-image, gemini-3.1-flash-image-preview) require this
+// endpoint — they don't support the OpenAI-compat /images/generations or /chat/completions.
+func (t *CreateImageTool) callGeminiNativeImageGen(ctx context.Context, apiKey, apiBase, model, prompt string) ([]byte, *providers.Usage, error) {
+	// Derive native Gemini base from OpenAI-compat base (strip /openai suffix)
+	nativeBase := strings.TrimRight(apiBase, "/")
+	nativeBase = strings.TrimSuffix(nativeBase, "/openai")
+
+	url := fmt.Sprintf("%s/models/%s:generateContent?key=%s", nativeBase, model, apiKey)
+
+	body := map[string]interface{}{
+		"contents": []map[string]interface{}{
+			{"parts": []map[string]interface{}{{"text": prompt}}},
+		},
+		"generationConfig": map[string]interface{}{
+			"responseModalities": []string{"TEXT", "IMAGE"},
+		},
+	}
+
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("http request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil, fmt.Errorf("API error %d: %s", resp.StatusCode, truncateBytes(respBody, 500))
+	}
+
+	// Parse native Gemini response: {candidates: [{content: {parts: [{inlineData: {mimeType, data}}]}}]}
+	var gemResp struct {
+		Candidates []struct {
+			Content struct {
+				Parts []struct {
+					InlineData *struct {
+						MimeType string `json:"mimeType"`
+						Data     string `json:"data"`
+					} `json:"inlineData"`
+					Text string `json:"text"`
+				} `json:"parts"`
+			} `json:"content"`
+		} `json:"candidates"`
+		UsageMetadata *struct {
+			PromptTokenCount     int `json:"promptTokenCount"`
+			CandidatesTokenCount int `json:"candidatesTokenCount"`
+			TotalTokenCount      int `json:"totalTokenCount"`
+		} `json:"usageMetadata"`
+	}
+	if err := json.Unmarshal(respBody, &gemResp); err != nil {
+		return nil, nil, fmt.Errorf("parse response: %w", err)
+	}
+
+	// Extract first image from parts
+	for _, cand := range gemResp.Candidates {
+		for _, part := range cand.Content.Parts {
+			if part.InlineData != nil && strings.HasPrefix(part.InlineData.MimeType, "image/") {
+				imageBytes, err := base64.StdEncoding.DecodeString(part.InlineData.Data)
+				if err != nil {
+					return nil, nil, fmt.Errorf("decode base64: %w", err)
+				}
+				var usage *providers.Usage
+				if gemResp.UsageMetadata != nil {
+					usage = &providers.Usage{
+						PromptTokens:     gemResp.UsageMetadata.PromptTokenCount,
+						CompletionTokens: gemResp.UsageMetadata.CandidatesTokenCount,
+						TotalTokens:      gemResp.UsageMetadata.TotalTokenCount,
+					}
+				}
+				return imageBytes, usage, nil
+			}
+		}
+	}
+
+	return nil, nil, fmt.Errorf("no image data in Gemini response")
 }
 
 // parseImageResponse extracts base64 image data from the OpenAI-compat chat response.

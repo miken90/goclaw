@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 
@@ -61,19 +62,45 @@ func (h *ChannelInstancesHandler) emitCacheInvalidate() {
 }
 
 func (h *ChannelInstancesHandler) handleList(w http.ResponseWriter, r *http.Request) {
-	instances, err := h.store.ListAll(r.Context())
+	opts := store.ChannelInstanceListOpts{
+		Limit:  50,
+		Offset: 0,
+	}
+
+	if v := r.URL.Query().Get("search"); v != "" {
+		opts.Search = v
+	}
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
+			opts.Limit = n
+		}
+	}
+	if v := r.URL.Query().Get("offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			opts.Offset = n
+		}
+	}
+
+	instances, err := h.store.ListPaged(r.Context(), opts)
 	if err != nil {
 		slog.Error("channel_instances.list", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list instances"})
 		return
 	}
 
+	total, _ := h.store.CountInstances(r.Context(), opts)
+
 	result := make([]map[string]interface{}, 0, len(instances))
 	for _, inst := range instances {
 		result = append(result, maskInstanceHTTP(inst))
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{"instances": result})
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"instances": result,
+		"total":     total,
+		"limit":     opts.Limit,
+		"offset":    opts.Offset,
+	})
 }
 
 func (h *ChannelInstancesHandler) handleCreate(w http.ResponseWriter, r *http.Request) {

@@ -65,7 +65,16 @@ func (h *ProvidersHandler) registerInMemory(p *store.LLMProviderData) {
 		return
 	}
 	if p.ProviderType == store.ProviderAnthropicNative {
-		h.providerReg.Register(providers.NewAnthropicProvider(p.APIKey))
+		h.providerReg.Register(providers.NewAnthropicProvider(p.APIKey,
+			providers.WithAnthropicBaseURL(p.APIBase)))
+	} else if p.ProviderType == store.ProviderDashScope {
+		h.providerReg.Register(providers.NewDashScopeProvider(p.APIKey, p.APIBase, ""))
+	} else if p.ProviderType == store.ProviderBailian {
+		base := p.APIBase
+		if base == "" {
+			base = "https://coding-intl.dashscope.aliyuncs.com/v1"
+		}
+		h.providerReg.Register(providers.NewOpenAIProvider(p.Name, p.APIKey, base, "qwen3.5-plus"))
 	} else {
 		prov := providers.NewOpenAIProvider(p.Name, p.APIKey, p.APIBase, "")
 		if p.ProviderType == store.ProviderMiniMax {

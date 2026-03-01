@@ -1,6 +1,19 @@
 package providers
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
+
+// Options keys used in ChatRequest.Options across providers.
+const (
+	OptMaxTokens      = "max_tokens"
+	OptTemperature    = "temperature"
+	OptThinkingLevel  = "thinking_level"
+	OptReasoningEffort = "reasoning_effort"
+	OptEnableThinking = "enable_thinking"
+	OptThinkingBudget = "thinking_budget"
+)
 
 // Provider is the interface all LLM providers must implement.
 type Provider interface {
@@ -19,6 +32,12 @@ type Provider interface {
 	Name() string
 }
 
+// ThinkingCapable is optionally implemented by providers that support extended thinking.
+// Used to gate thinking_level injection so it's not sent to providers that ignore it.
+type ThinkingCapable interface {
+	SupportsThinking() bool
+}
+
 // ChatRequest contains the input for a Chat/ChatStream call.
 type ChatRequest struct {
 	Messages []Message              `json:"messages"`
@@ -30,9 +49,14 @@ type ChatRequest struct {
 // ChatResponse is the result from an LLM call.
 type ChatResponse struct {
 	Content      string     `json:"content"`
+	Thinking     string     `json:"thinking,omitempty"`
 	ToolCalls    []ToolCall `json:"tool_calls,omitempty"`
 	FinishReason string     `json:"finish_reason"` // "stop", "tool_calls", "length"
 	Usage        *Usage     `json:"usage,omitempty"`
+
+	// RawAssistantContent preserves the raw content blocks array from the provider response.
+	// Used by Anthropic to pass thinking blocks back in tool use loops (required by API).
+	RawAssistantContent json.RawMessage `json:"-"`
 }
 
 // StreamChunk is a piece of a streaming response.
@@ -55,6 +79,10 @@ type Message struct {
 	Images     []ImageContent `json:"images,omitempty"`      // vision: base64 images
 	ToolCalls  []ToolCall     `json:"tool_calls,omitempty"`
 	ToolCallID string         `json:"tool_call_id,omitempty"` // for role="tool" responses
+
+	// RawAssistantContent carries raw provider content blocks through tool loop iterations.
+	// Anthropic requires thinking blocks to be passed back exactly as received.
+	RawAssistantContent json.RawMessage `json:"-"`
 }
 
 // ToolCall represents a tool invocation requested by the LLM.
@@ -85,4 +113,5 @@ type Usage struct {
 	TotalTokens         int `json:"total_tokens"`
 	CacheCreationTokens int `json:"cache_creation_input_tokens,omitempty"`
 	CacheReadTokens     int `json:"cache_read_input_tokens,omitempty"`
+	ThinkingTokens      int `json:"thinking_tokens,omitempty"`
 }

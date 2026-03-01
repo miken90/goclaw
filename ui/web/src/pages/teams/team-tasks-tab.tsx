@@ -28,7 +28,7 @@ export function TeamTasksTab({ teamId, getTeamTasks }: TeamTasksTabProps) {
   }, [teamId, getTeamTasks]);
 
   return (
-    <div className="max-w-2xl space-y-6">
+    <div className="space-y-6">
       <TaskList tasks={tasks} loading={loading} />
     </div>
   );

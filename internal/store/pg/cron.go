@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/adhocore/gronx"
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/cron"
@@ -47,6 +48,12 @@ func (s *PGCronStore) SetRetryConfig(cfg cron.RetryConfig) {
 }
 
 func (s *PGCronStore) AddJob(name string, schedule store.CronSchedule, message string, deliver bool, channel, to, agentID, userID string) (*store.CronJob, error) {
+	if schedule.TZ != "" {
+		if _, err := time.LoadLocation(schedule.TZ); err != nil {
+			return nil, fmt.Errorf("invalid timezone: %s", schedule.TZ)
+		}
+	}
+
 	payload := store.CronPayload{
 		Kind: "agent_turn", Message: message, Deliver: deliver, Channel: channel, To: to,
 	}
@@ -191,10 +198,113 @@ func (s *PGCronStore) UpdateJob(jobID string, patch store.CronJobPatch) (*store.
 		updates["enabled"] = *patch.Enabled
 	}
 	if patch.Schedule != nil {
-		updates["schedule_kind"] = patch.Schedule.Kind
-		if patch.Schedule.Expr != "" {
-			updates["cron_expression"] = patch.Schedule.Expr
+		// Fetch current schedule to merge with patch (partial updates)
+		var curKind string
+		var curExpr, curTZ *string
+		var curIntervalMS *int64
+		var curRunAt *time.Time
+		s.db.QueryRow(
+			"SELECT schedule_kind, cron_expression, timezone, interval_ms, run_at FROM cron_jobs WHERE id = $1", id,
+		).Scan(&curKind, &curExpr, &curTZ, &curIntervalMS, &curRunAt)
+
+		// Resolve the effective schedule kind
+		newKind := patch.Schedule.Kind
+		if newKind == "" {
+			newKind = curKind // keep current kind if not specified
 		}
+		updates["schedule_kind"] = newKind
+
+		// Set type-specific fields and clear others
+		switch newKind {
+		case "cron":
+			if patch.Schedule.Expr != "" {
+				updates["cron_expression"] = patch.Schedule.Expr
+			}
+			if patch.Schedule.TZ != "" {
+				if _, err := time.LoadLocation(patch.Schedule.TZ); err != nil {
+					return nil, fmt.Errorf("invalid timezone: %s", patch.Schedule.TZ)
+				}
+				updates["timezone"] = patch.Schedule.TZ
+			}
+			// Clear other type fields when switching to cron
+			if curKind != "cron" {
+				updates["interval_ms"] = nil
+				updates["run_at"] = nil
+			}
+		case "every":
+			if patch.Schedule.EveryMS != nil {
+				updates["interval_ms"] = *patch.Schedule.EveryMS
+			}
+			// Clear other type fields when switching to every
+			if curKind != "every" {
+				updates["cron_expression"] = nil
+				updates["timezone"] = nil
+				updates["run_at"] = nil
+			}
+		case "at":
+			if patch.Schedule.AtMS != nil {
+				t := time.UnixMilli(*patch.Schedule.AtMS)
+				updates["run_at"] = t
+			}
+			// Clear other type fields when switching to at
+			if curKind != "at" {
+				updates["cron_expression"] = nil
+				updates["timezone"] = nil
+				updates["interval_ms"] = nil
+			}
+		}
+
+		// Build merged schedule for recomputing next_run_at
+		merged := store.CronSchedule{Kind: newKind}
+		switch newKind {
+		case "cron":
+			if patch.Schedule.Expr != "" {
+				merged.Expr = patch.Schedule.Expr
+			} else if curExpr != nil {
+				merged.Expr = *curExpr
+			}
+			if patch.Schedule.TZ != "" {
+				merged.TZ = patch.Schedule.TZ
+			} else if curTZ != nil && newKind == curKind {
+				merged.TZ = *curTZ
+			}
+		case "every":
+			if patch.Schedule.EveryMS != nil {
+				merged.EveryMS = patch.Schedule.EveryMS
+			} else if curIntervalMS != nil {
+				merged.EveryMS = curIntervalMS
+			}
+		case "at":
+			if patch.Schedule.AtMS != nil {
+				merged.AtMS = patch.Schedule.AtMS
+			} else if curRunAt != nil {
+				ms := curRunAt.UnixMilli()
+				merged.AtMS = &ms
+			}
+		}
+
+		// Validate the merged schedule before applying
+		switch merged.Kind {
+		case "cron":
+			if merged.Expr == "" {
+				return nil, fmt.Errorf("cron schedule requires expr")
+			}
+			gx := gronx.New()
+			if !gx.IsValid(merged.Expr) {
+				return nil, fmt.Errorf("invalid cron expression: %s", merged.Expr)
+			}
+		case "every":
+			if merged.EveryMS == nil || *merged.EveryMS <= 0 {
+				return nil, fmt.Errorf("every schedule requires positive everyMs")
+			}
+		case "at":
+			if merged.AtMS == nil {
+				return nil, fmt.Errorf("at schedule requires atMs")
+			}
+		}
+
+		next := computeNextRun(&merged, time.Now())
+		updates["next_run_at"] = next
 	}
 	if patch.DeleteAfterRun != nil {
 		updates["delete_after_run"] = *patch.DeleteAfterRun

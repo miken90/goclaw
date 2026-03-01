@@ -32,6 +32,8 @@ func (c *Config) MaskedCopy() *Config {
 	maskNonEmpty(&cp.Providers.MiniMax.APIKey)
 	maskNonEmpty(&cp.Providers.Cohere.APIKey)
 	maskNonEmpty(&cp.Providers.Perplexity.APIKey)
+	maskNonEmpty(&cp.Providers.DashScope.APIKey)
+	maskNonEmpty(&cp.Providers.Bailian.APIKey)
 
 	// Mask gateway token
 	maskNonEmpty(&cp.Gateway.Token)
@@ -77,6 +79,8 @@ func (c *Config) StripSecrets() {
 	c.Providers.MiniMax.APIKey = ""
 	c.Providers.Cohere.APIKey = ""
 	c.Providers.Perplexity.APIKey = ""
+	c.Providers.DashScope.APIKey = ""
+	c.Providers.Bailian.APIKey = ""
 
 	// Gateway token
 	c.Gateway.Token = ""
@@ -127,6 +131,8 @@ func (c *Config) StripMaskedSecrets() {
 	stripIfMasked(&c.Providers.MiniMax.APIKey)
 	stripIfMasked(&c.Providers.Cohere.APIKey)
 	stripIfMasked(&c.Providers.Perplexity.APIKey)
+	stripIfMasked(&c.Providers.DashScope.APIKey)
+	stripIfMasked(&c.Providers.Bailian.APIKey)
 
 	// Gateway token
 	stripIfMasked(&c.Gateway.Token)

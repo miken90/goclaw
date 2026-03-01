@@ -121,6 +121,21 @@ func (a *AgentData) ParseMemoryConfig() *config.MemoryConfig {
 	return &c
 }
 
+// ParseThinkingLevel extracts thinking_level from other_config JSONB.
+// Returns "" if not configured (meaning "off").
+func (a *AgentData) ParseThinkingLevel() string {
+	if len(a.OtherConfig) == 0 {
+		return ""
+	}
+	var cfg struct {
+		ThinkingLevel string `json:"thinking_level"`
+	}
+	if json.Unmarshal(a.OtherConfig, &cfg) != nil {
+		return ""
+	}
+	return cfg.ThinkingLevel
+}
+
 // AgentShareData represents an agent share grant.
 type AgentShareData struct {
 	BaseModel

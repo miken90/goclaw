@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Wrench, Plus, RefreshCw, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -12,27 +12,39 @@ import { useCustomTools, type CustomToolData, type CustomToolInput } from "./hoo
 import { CustomToolFormDialog } from "./custom-tool-form-dialog";
 import { useMinLoading } from "@/hooks/use-min-loading";
 import { useDeferredLoading } from "@/hooks/use-deferred-loading";
-import { usePagination } from "@/hooks/use-pagination";
+import { useRef } from "react";
+import { useDebouncedCallback } from "@/hooks/use-debounced-callback";
 
 export function CustomToolsPage() {
-  const { tools, loading, refresh, createTool, updateTool, deleteTool } = useCustomTools();
-  const spinning = useMinLoading(loading);
-  const showSkeleton = useDeferredLoading(loading && tools.length === 0);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
   const [formOpen, setFormOpen] = useState(false);
   const [editTool, setEditTool] = useState<CustomToolData | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<CustomToolData | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
-  const filtered = tools.filter(
-    (t) =>
-      t.name.toLowerCase().includes(search.toLowerCase()) ||
-      t.description.toLowerCase().includes(search.toLowerCase()),
-  );
+  const pendingSearchRef = useRef("");
+  const flushSearch = useDebouncedCallback(() => {
+    setDebouncedSearch(pendingSearchRef.current);
+    setPage(1);
+  }, 300);
 
-  const { pageItems, pagination, setPage, setPageSize, resetPage } = usePagination(filtered);
+  const handleSearchChange = (v: string) => {
+    setSearch(v);
+    pendingSearchRef.current = v;
+    flushSearch();
+  };
 
-  useEffect(() => { resetPage(); }, [search, resetPage]);
+  const { tools, total, loading, refresh, createTool, updateTool, deleteTool } = useCustomTools({
+    search: debouncedSearch || undefined,
+    limit: pageSize,
+    offset: (page - 1) * pageSize,
+  });
+  const spinning = useMinLoading(loading);
+  const showSkeleton = useDeferredLoading(loading && tools.length === 0);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   const handleCreate = async (data: CustomToolInput) => {
     await createTool(data);
@@ -74,7 +86,7 @@ export function CustomToolsPage() {
       <div className="mt-4">
         <SearchInput
           value={search}
-          onChange={setSearch}
+          onChange={handleSearchChange}
           placeholder="Search tools..."
           className="max-w-sm"
         />
@@ -83,11 +95,11 @@ export function CustomToolsPage() {
       <div className="mt-4">
         {showSkeleton ? (
           <TableSkeleton rows={5} />
-        ) : filtered.length === 0 ? (
+        ) : tools.length === 0 ? (
           <EmptyState
             icon={Wrench}
-            title={search ? "No matching tools" : "No custom tools"}
-            description={search ? "Try a different search term." : "Create your first custom tool to get started."}
+            title={debouncedSearch ? "No matching tools" : "No custom tools"}
+            description={debouncedSearch ? "Try a different search term." : "Create your first custom tool to get started."}
           />
         ) : (
           <div className="rounded-md border">
@@ -103,7 +115,7 @@ export function CustomToolsPage() {
                 </tr>
               </thead>
               <tbody>
-                {pageItems.map((tool) => (
+                {tools.map((tool) => (
                   <tr key={tool.id} className="border-b last:border-0 hover:bg-muted/30">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
@@ -150,12 +162,12 @@ export function CustomToolsPage() {
               </tbody>
             </table>
             <Pagination
-              page={pagination.page}
-              pageSize={pagination.pageSize}
-              total={pagination.total}
-              totalPages={pagination.totalPages}
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              totalPages={totalPages}
               onPageChange={setPage}
-              onPageSizeChange={setPageSize}
+              onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
             />
           </div>
         )}

@@ -799,8 +799,18 @@ func runGateway() {
 		slog.Error("failed to start channels", "error", err)
 	}
 
-	// Start cron service with job handler
-	cronStore.SetOnJob(makeCronJobHandler(agentRouter, msgBus, cfg))
+	// Create lane-based scheduler (matching TS CommandLane pattern).
+	// The RunFunc resolves the agent from the RunRequest metadata.
+	// Must be created before cron setup so cron jobs route through the scheduler.
+	sched := scheduler.NewScheduler(
+		scheduler.DefaultLanes(),
+		scheduler.DefaultQueueConfig(),
+		makeSchedulerRunFunc(agentRouter, cfg),
+	)
+	defer sched.Stop()
+
+	// Start cron service with job handler (routes through scheduler's cron lane)
+	cronStore.SetOnJob(makeCronJobHandler(sched, msgBus, cfg))
 	if err := cronStore.Start(); err != nil {
 		slog.Warn("cron service failed to start", "error", err)
 	}
@@ -810,15 +820,6 @@ func runGateway() {
 	if heartbeatSvc != nil {
 		heartbeatSvc.Start()
 	}
-
-	// Create lane-based scheduler (matching TS CommandLane pattern).
-	// The RunFunc resolves the agent from the RunRequest metadata.
-	sched := scheduler.NewScheduler(
-		scheduler.DefaultLanes(),
-		scheduler.DefaultQueueConfig(),
-		makeSchedulerRunFunc(agentRouter, cfg),
-	)
-	defer sched.Stop()
 
 	// Adaptive throttle: reduce per-session concurrency when nearing the summary threshold.
 	// This prevents concurrent runs from racing with summarization.

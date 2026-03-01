@@ -3,6 +3,7 @@ import { WsClient, type ConnectionState } from "@/api/ws-client";
 import { HttpClient } from "@/api/http-client";
 import { WsContext } from "@/hooks/use-ws";
 import { useAuthStore } from "@/stores/use-auth-store";
+import { useWsQueryInvalidation } from "@/hooks/use-query-invalidation";
 
 // In dev mode, connect directly to backend WS (bypass Vite proxy).
 // In production, use relative "/ws" path.
@@ -55,5 +56,15 @@ export function WsProvider({ children }: { children: React.ReactNode }) {
 
   const value = useMemo(() => ({ ws, http }), [ws, http]);
 
-  return <WsContext.Provider value={value}>{children}</WsContext.Provider>;
+  return (
+    <WsContext.Provider value={value}>
+      <WsQueryInvalidation />
+      {children}
+    </WsContext.Provider>
+  );
+}
+
+function WsQueryInvalidation() {
+  useWsQueryInvalidation();
+  return null;
 }

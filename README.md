@@ -6,7 +6,7 @@
 
 [![Go](https://img.shields.io/badge/Go_1.25-00ADD8?style=flat-square&logo=go&logoColor=white)](https://go.dev/) [![PostgreSQL](https://img.shields.io/badge/PostgreSQL_18-316192?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org/) [![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white)](https://www.docker.com/) [![WebSocket](https://img.shields.io/badge/WebSocket-010101?style=flat-square&logo=socket.io&logoColor=white)](https://developer.mozilla.org/en-US/docs/Web/API/WebSocket) [![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-000000?style=flat-square&logo=opentelemetry&logoColor=white)](https://opentelemetry.io/) [![Anthropic](https://img.shields.io/badge/Anthropic-191919?style=flat-square&logo=anthropic&logoColor=white)](https://www.anthropic.com/) [![OpenAI](https://img.shields.io/badge/OpenAI_Compatible-412991?style=flat-square&logo=openai&logoColor=white)](https://openai.com/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 
-**GoClaw** is a multi-agent AI gateway that connects LLMs to your tools, channels, and data — deployed as a single Go binary with zero runtime dependencies. It orchestrates agent teams, inter-agent delegation, and quality-gated workflows across 11+ LLM providers with full multi-tenant isolation.
+**GoClaw** is a multi-agent AI gateway that connects LLMs to your tools, channels, and data — deployed as a single Go binary with zero runtime dependencies. It orchestrates agent teams, inter-agent delegation, and quality-gated workflows across 13+ LLM providers with full multi-tenant isolation.
 
 A Go port of [OpenClaw](https://github.com/openclaw/openclaw) with enhanced security, multi-tenant PostgreSQL, and production-grade observability.
 
@@ -16,7 +16,7 @@ A Go port of [OpenClaw](https://github.com/openclaw/openclaw) with enhanced secu
 - **Multi-Tenant PostgreSQL** — Per-user workspaces, per-user context files, encrypted API keys (AES-256-GCM), isolated sessions — the only Claw project with DB-native multi-tenancy
 - **Single Binary** — ~25 MB static Go binary, no Node.js runtime, <1s startup, runs on a $5 VPS
 - **Production Security** — 5-layer defense: rate limiting, prompt injection detection, SSRF protection, shell deny patterns, AES-256-GCM encryption
-- **11+ LLM Providers** — Anthropic (native HTTP+SSE with prompt caching), OpenAI, OpenRouter, Groq, DeepSeek, Gemini, Mistral, xAI, MiniMax, Cohere, Perplexity
+- **13+ LLM Providers** — Anthropic (native HTTP+SSE with prompt caching), OpenAI, OpenRouter, Groq, DeepSeek, Gemini, Mistral, xAI, MiniMax, Cohere, Perplexity, DashScope (Qwen), Bailian Coding
 - **5 Messaging Channels** — Telegram, Discord, Zalo, Feishu/Lark, WhatsApp with `/stop` and `/stopall` commands
 
 ## Claw Ecosystem
@@ -51,7 +51,7 @@ A Go port of [OpenClaw](https://github.com/openclaw/openclaw) with enhanced secu
 | Messaging channels         | 37+                                  | 15+                                          | 10+                                   | 5+                             |
 | Companion apps             | macOS, iOS, Android                  | Python SDK                                   | —                                     | Web dashboard                  |
 | Live Canvas / Voice        | ✅ (A2UI + TTS/STT)                  | —                                            | Voice transcription                   | TTS (4 providers)              |
-| LLM providers              | 10+                                  | 8 native + 29 compat                         | 13+                                   | **11+**                        |
+| LLM providers              | 10+                                  | 8 native + 29 compat                         | 13+                                   | **13+**                        |
 | Per-user workspaces        | ✅ (file-based)                      | —                                            | —                                     | ✅ (managed mode only)         |
 | Encrypted secrets          | — (env vars only)                    | ✅ ChaCha20-Poly1305                         | — (plaintext JSON)                    | ✅ AES-256-GCM in DB           |
 
@@ -78,7 +78,7 @@ graph TB
         SCHED --> ROUTER["Agent Router"]
         ROUTER --> LOOP["Agent Loop<br/>think → act → observe"]
         LOOP --> TOOLS["Tool Registry<br/>fs · exec · web · memory · delegate · team · mcp · custom"]
-        LOOP --> LLM["LLM Providers<br/>Anthropic (native + prompt caching) · OpenAI-compat (10+)"]
+        LOOP --> LLM["LLM Providers<br/>Anthropic (native + prompt caching) · OpenAI-compat (12+)"]
     end
 
     subgraph Storage
@@ -294,7 +294,7 @@ Quality gates validate agent output before it reaches users. Configured in agent
 ## Features
 
 ### LLM Providers
-- **11+ providers** — OpenRouter, Anthropic, OpenAI, Groq, DeepSeek, Gemini, Mistral, xAI, MiniMax, Cohere, Perplexity, and any OpenAI-compatible endpoint
+- **13+ providers** — OpenRouter, Anthropic, OpenAI, Groq, DeepSeek, Gemini, Mistral, xAI, MiniMax, Cohere, Perplexity, DashScope (Qwen), Bailian Coding, and any OpenAI-compatible endpoint
 - **Anthropic native** — Direct HTTP+SSE integration with prompt caching (`cache_control`) for ~90% cost reduction on repeated prefixes
 - **OpenAI-compatible** — Automatic prompt caching for OpenAI, MiniMax, OpenRouter (cache metrics tracked in traces)
 
@@ -557,6 +557,8 @@ When `GOCLAW_*_API_KEY` environment variables are set, the gateway automatically
 | `GOCLAW_MINIMAX_API_KEY`    | MiniMax                  |
 | `GOCLAW_COHERE_API_KEY`     | Cohere                   |
 | `GOCLAW_PERPLEXITY_API_KEY` | Perplexity               |
+| `GOCLAW_DASHSCOPE_API_KEY`  | DashScope (Qwen)         |
+| `GOCLAW_BAILIAN_API_KEY`    | Bailian Coding           |
 
 </details>
 
@@ -763,11 +765,28 @@ docker compose -f docker-compose.yml \
 curl http://localhost:18790/health
 ```
 
-### Upgrading (Managed Mode)
+### Upgrading (Docker Compose)
 
-When upgrading to a new version, the entrypoint automatically runs `goclaw upgrade` before starting. For explicit control, use the upgrade overlay:
+**Simple upgrade** — pull the latest code, rebuild, and restart. The entrypoint automatically runs `goclaw upgrade` (schema migrations + data hooks) before starting:
 
 ```bash
+# Pull latest code
+git pull
+
+# Rebuild and restart (auto-upgrades database on start)
+docker compose -f docker-compose.yml -f docker-compose.managed.yml \
+  -f docker-compose.selfservice.yml up -d --build
+```
+
+Replace the compose files with whichever overlays you use (e.g. add `-f docker-compose.otel.yml` for OTel).
+
+**Explicit upgrade** — if you want to preview changes or run the upgrade separately before restarting:
+
+```bash
+# Check current schema status
+docker compose -f docker-compose.yml -f docker-compose.managed.yml \
+  -f docker-compose.upgrade.yml run --rm upgrade --status
+
 # Preview pending changes (dry-run)
 docker compose -f docker-compose.yml -f docker-compose.managed.yml \
   -f docker-compose.upgrade.yml run --rm upgrade --dry-run
@@ -776,11 +795,7 @@ docker compose -f docker-compose.yml -f docker-compose.managed.yml \
 docker compose -f docker-compose.yml -f docker-compose.managed.yml \
   -f docker-compose.upgrade.yml run --rm upgrade
 
-# Check current schema status
-docker compose -f docker-compose.yml -f docker-compose.managed.yml \
-  -f docker-compose.upgrade.yml run --rm upgrade --status
-
-# Then restart the gateway with the new image
+# Then rebuild and restart the gateway with the new image
 docker compose -f docker-compose.yml -f docker-compose.managed.yml up -d --build
 ```
 

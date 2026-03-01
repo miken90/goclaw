@@ -2,7 +2,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS  = -s -w -X github.com/nextlevelbuilder/goclaw/cmd.Version=$(VERSION)
 BINARY   = goclaw
 
-.PHONY: build run clean version
+.PHONY: build run clean version up down logs
 
 build:
 	CGO_ENABLED=0 go build -ldflags="$(LDFLAGS)" -o $(BINARY) .
@@ -15,3 +15,14 @@ clean:
 
 version:
 	@echo $(VERSION)
+
+COMPOSE = docker compose -f docker-compose.yml -f docker-compose.managed.yml -f docker-compose.selfservice.yml
+
+up:
+	$(COMPOSE) up -d --build
+
+down:
+	$(COMPOSE) down
+
+logs:
+	$(COMPOSE) logs -f goclaw

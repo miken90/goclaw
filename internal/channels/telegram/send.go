@@ -137,6 +137,11 @@ func (c *Channel) sendMediaMessage(ctx context.Context, chatID int64, msg bus.Ou
 			msg.Content = "" // only use for first media
 		}
 
+		// Convert caption from markdown to Telegram HTML (same as regular messages)
+		if caption != "" {
+			caption = markdownToTelegramHTML(caption)
+		}
+
 		// Split caption if too long (Telegram limit: 1024 chars)
 		var followUpText string
 		if len(caption) > telegramCaptionMaxLen {

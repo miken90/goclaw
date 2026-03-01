@@ -51,6 +51,8 @@ func (h *ProvidersHandler) handleListProviderModels(w http.ResponseWriter, r *ht
 		models, err = fetchAnthropicModels(ctx, p.APIKey)
 	case "gemini_native":
 		models, err = fetchGeminiModels(ctx, p.APIKey)
+	case "bailian":
+		models = bailianModels()
 	default:
 		// All other types use OpenAI-compatible /models endpoint
 		apiBase := strings.TrimRight(p.APIBase, "/")
@@ -145,6 +147,22 @@ func fetchGeminiModels(ctx context.Context, apiKey string) ([]ModelInfo, error) 
 	return models, nil
 }
 
+// bailianModels returns a hardcoded list of models available on the
+// Bailian Coding platform (coding-intl.dashscope.aliyuncs.com).
+// The platform does not expose a /v1/models endpoint.
+func bailianModels() []ModelInfo {
+	return []ModelInfo{
+		{ID: "qwen3.5-plus", Name: "Qwen 3.5 Plus"},
+		{ID: "kimi-k2.5", Name: "Kimi K2.5"},
+		{ID: "GLM-5", Name: "GLM-5"},
+		{ID: "MiniMax-M2.5", Name: "MiniMax M2.5"},
+		{ID: "qwen3-max-2026-01-23", Name: "Qwen 3 Max (2026-01-23)"},
+		{ID: "qwen3-coder-next", Name: "Qwen 3 Coder Next"},
+		{ID: "qwen3-coder-plus", Name: "Qwen 3 Coder Plus"},
+		{ID: "glm-4.7", Name: "GLM 4.7"},
+	}
+}
+
 // fetchOpenAIModels calls an OpenAI-compatible /models endpoint.
 func fetchOpenAIModels(ctx context.Context, apiBase, apiKey string) ([]ModelInfo, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", apiBase+"/models", nil)
@@ -180,3 +198,4 @@ func fetchOpenAIModels(ctx context.Context, apiBase, apiKey string) ([]ModelInfo
 	}
 	return models, nil
 }
+

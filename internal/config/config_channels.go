@@ -23,6 +23,17 @@ type TelegramConfig struct {
 	ReactionLevel  string              `json:"reaction_level,omitempty"`   // "off" (default), "minimal", "full" — status emoji reactions
 	MediaMaxBytes  int64               `json:"media_max_bytes,omitempty"`  // max media download size in bytes (default 20MB)
 	LinkPreview    *bool               `json:"link_preview,omitempty"`     // enable URL previews in messages (default true)
+
+	// Optional STT (Speech-to-Text) pipeline for voice/audio inbound messages.
+	// When stt_proxy_url is set, audio/voice messages are transcribed before being forwarded to the agent.
+	STTProxyURL       string `json:"stt_proxy_url,omitempty"`       // base URL of the STT proxy service (e.g. "https://stt.example.com")
+	STTAPIKey         string `json:"stt_api_key,omitempty"`         // Bearer token for the STT proxy
+	STTTenantID       string `json:"stt_tenant_id,omitempty"`       // optional tenant/org identifier forwarded to the STT proxy
+	STTTimeoutSeconds int    `json:"stt_timeout_seconds,omitempty"` // per-request timeout for STT calls (default 30s)
+
+	// Optional audio-aware routing: when set, voice/audio inbound messages are routed to this
+	// agent instead of the default channel agent. Requires the named agent to exist in the config.
+	VoiceAgentID string `json:"voice_agent_id,omitempty"` // agent ID to route voice inbound to (e.g. "speaking-agent")
 }
 
 type DiscordConfig struct {
@@ -99,6 +110,8 @@ type ProvidersConfig struct {
 	MiniMax    ProviderConfig `json:"minimax"`
 	Cohere     ProviderConfig `json:"cohere"`
 	Perplexity ProviderConfig `json:"perplexity"`
+	DashScope  ProviderConfig `json:"dashscope"`
+	Bailian    ProviderConfig `json:"bailian"`
 }
 
 type ProviderConfig struct {
@@ -119,7 +132,9 @@ func (c *Config) HasAnyProvider() bool {
 		p.XAI.APIKey != "" ||
 		p.MiniMax.APIKey != "" ||
 		p.Cohere.APIKey != "" ||
-		p.Perplexity.APIKey != ""
+		p.Perplexity.APIKey != "" ||
+		p.DashScope.APIKey != "" ||
+		p.Bailian.APIKey != ""
 }
 
 // GatewayConfig controls the gateway server.

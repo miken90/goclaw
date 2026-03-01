@@ -247,11 +247,19 @@ func resolvePath(path, workspace string, restrict bool) (string, error) {
 					target = filepath.Join(filepath.Dir(absResolved), target)
 				}
 				target = filepath.Clean(target)
-				if !isPathInside(target, wsReal) {
-					slog.Warn("security.broken_symlink_escape", "path", path, "target", target, "workspace", wsReal)
+
+				// Resolve through existing ancestors to catch chained symlinks
+				// (e.g. link1 → link2 → /outside) where intermediate targets escape.
+				resolved, resolveErr := resolveThroughExistingAncestors(target)
+				if resolveErr != nil {
+					slog.Warn("security.broken_symlink_resolve_failed", "path", path, "target", target)
+					return "", fmt.Errorf("access denied: cannot resolve broken symlink target")
+				}
+				if !isPathInside(resolved, wsReal) {
+					slog.Warn("security.broken_symlink_escape", "path", path, "target", resolved, "workspace", wsReal)
 					return "", fmt.Errorf("access denied: broken symlink target outside workspace")
 				}
-				real = target
+				real = resolved
 			} else {
 				// Truly non-existent file (not a symlink): resolve parent and re-validate.
 				parentReal, parentErr := filepath.EvalSymlinks(filepath.Dir(absResolved))
@@ -273,6 +281,14 @@ func resolvePath(path, workspace string, restrict bool) (string, error) {
 		return "", fmt.Errorf("access denied: path outside workspace")
 	}
 
+	// Reject paths with mutable symlink components (TOCTOU symlink rebind risk).
+	// A symlink in the path whose parent directory is writable could be replaced
+	// between resolution time and actual file operation.
+	if hasMutableSymlinkParent(real) {
+		slog.Warn("security.mutable_symlink_parent", "path", path, "resolved", real)
+		return "", fmt.Errorf("access denied: path contains mutable symlink component")
+	}
+
 	// Reject hardlinked files (nlink > 1) to prevent hardlink-based escapes.
 	if err := checkHardlink(real); err != nil {
 		return "", err
@@ -287,6 +303,68 @@ func isPathInside(child, parent string) bool {
 		return true
 	}
 	return strings.HasPrefix(child, parent+string(filepath.Separator))
+}
+
+// resolveThroughExistingAncestors resolves a path by finding the deepest
+// existing ancestor, canonicalizing it with EvalSymlinks, then appending
+// the remaining non-existent components. This handles broken symlinks
+// whose targets contain intermediate symlinks that escape the workspace.
+func resolveThroughExistingAncestors(target string) (string, error) {
+	// Try full resolution first (target exists and all symlinks resolve)
+	if real, err := filepath.EvalSymlinks(target); err == nil {
+		return real, nil
+	}
+
+	// Walk up to find the deepest existing ancestor
+	current := target
+	var tail []string
+	for {
+		parent := filepath.Dir(current)
+		if parent == current {
+			// Reached filesystem root without finding existing dir
+			break
+		}
+		tail = append([]string{filepath.Base(current)}, tail...)
+		current = parent
+
+		if realParent, err := filepath.EvalSymlinks(current); err == nil {
+			// Found existing ancestor — canonicalize and rebuild
+			result := realParent
+			for _, component := range tail {
+				result = filepath.Join(result, component)
+			}
+			return result, nil
+		}
+	}
+	return filepath.Clean(target), nil
+}
+
+// hasMutableSymlinkParent checks if any component of the resolved path is a symlink
+// whose parent directory is writable by the current process. A writable parent means
+// the symlink could be replaced between path resolution and actual file operation
+// (TOCTOU symlink rebind attack).
+func hasMutableSymlinkParent(path string) bool {
+	clean := filepath.Clean(path)
+	components := strings.Split(clean, string(filepath.Separator))
+	current := string(filepath.Separator)
+	for _, comp := range components {
+		if comp == "" {
+			continue
+		}
+		current = filepath.Join(current, comp)
+		info, err := os.Lstat(current)
+		if err != nil {
+			break // non-existent — stop checking
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			// Symlink found — check if its parent dir is writable
+			parentDir := filepath.Dir(current)
+			if syscall.Access(parentDir, 0x2 /* W_OK */) == nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // checkHardlink rejects regular files with nlink > 1 (hardlink attack prevention).

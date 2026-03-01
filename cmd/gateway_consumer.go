@@ -632,69 +632,6 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 	}
 }
 
-// resolveCronAgent resolves the agent ID for a cron job, falling back to the
-// config default if the requested agent doesn't exist.
-func resolveCronAgent(agentID string, agents *agent.Router, cfg *config.Config) string {
-	if agentID == "" {
-		return cfg.ResolveDefaultAgentID()
-	}
-	normalized := config.NormalizeAgentID(agentID)
-	if _, err := agents.Get(normalized); err != nil {
-		slog.Warn("cron agent not found, falling back to default", "requested", agentID)
-		return cfg.ResolveDefaultAgentID()
-	}
-	return normalized
-}
-
-// makeCronJobHandler creates a cron job handler that sends job messages through the agent.
-func makeCronJobHandler(agents *agent.Router, msgBus *bus.MessageBus, cfg *config.Config) func(job *store.CronJob) (*store.CronJobResult, error) {
-	return func(job *store.CronJob) (*store.CronJobResult, error) {
-		agentID := resolveCronAgent(job.AgentID, agents, cfg)
-		loop, err := agents.Get(agentID)
-		if err != nil {
-			return nil, fmt.Errorf("agent %s not found: %w", agentID, err)
-		}
-
-		sessionKey := sessions.BuildCronSessionKey(agentID, job.ID, fmt.Sprintf("cron-%s", job.ID))
-		channel := job.Payload.Channel
-		if channel == "" {
-			channel = "cron"
-		}
-
-		result, err := loop.Run(context.Background(), agent.RunRequest{
-			SessionKey: sessionKey,
-			Message:    job.Payload.Message,
-			Channel:    channel,
-			ChatID:     job.Payload.To,
-			UserID:     job.UserID,
-			RunID:      fmt.Sprintf("cron-%s", job.ID),
-			Stream:     false,
-		})
-		if err != nil {
-			return nil, err
-		}
-
-		// If job wants delivery to a channel, publish outbound
-		if job.Payload.Deliver && job.Payload.Channel != "" && job.Payload.To != "" {
-			msgBus.PublishOutbound(bus.OutboundMessage{
-				Channel: job.Payload.Channel,
-				ChatID:  job.Payload.To,
-				Content: result.Content,
-			})
-		}
-
-		cronResult := &store.CronJobResult{
-			Content: result.Content,
-		}
-		if result.Usage != nil {
-			cronResult.InputTokens = result.Usage.PromptTokens
-			cronResult.OutputTokens = result.Usage.CompletionTokens
-		}
-
-		return cronResult, nil
-	}
-}
-
 // resolveAgentRoute determines which agent should handle a message
 // based on config bindings. Priority: peer → channel → default.
 // Matching TS resolve-route.ts binding resolution.

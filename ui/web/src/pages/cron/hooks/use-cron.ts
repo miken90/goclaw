@@ -1,6 +1,8 @@
-import { useState, useEffect, useCallback } from "react";
+import { useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWs } from "@/hooks/use-ws";
 import { Methods } from "@/api/protocol";
+import { queryKeys } from "@/lib/query-keys";
 
 export interface CronSchedule {
   kind: "at" | "every" | "cron";
@@ -46,27 +48,23 @@ export interface CronRunLogEntry {
 
 export function useCron() {
   const ws = useWs();
-  const [jobs, setJobs] = useState<CronJob[]>([]);
-  const [loading, setLoading] = useState(false);
+  const queryClient = useQueryClient();
 
-  const load = useCallback(async () => {
-    if (!ws.isConnected) return;
-    setLoading(true);
-    try {
+  const { data: jobs = [], isLoading: loading } = useQuery({
+    queryKey: queryKeys.cron.all,
+    queryFn: async () => {
+      if (!ws.isConnected) return [];
       const res = await ws.call<{ jobs: CronJob[] }>(Methods.CRON_LIST, {
         includeDisabled: true,
       });
-      setJobs(res.jobs ?? []);
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false);
-    }
-  }, [ws]);
+      return res.jobs ?? [];
+    },
+  });
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  const invalidate = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: queryKeys.cron.all }),
+    [queryClient],
+  );
 
   const createJob = useCallback(
     async (params: {
@@ -79,25 +77,25 @@ export function useCron() {
       to?: string;
     }) => {
       await ws.call(Methods.CRON_CREATE, params);
-      load();
+      await invalidate();
     },
-    [ws, load],
+    [ws, invalidate],
   );
 
   const toggleJob = useCallback(
     async (jobId: string, enabled: boolean) => {
       await ws.call(Methods.CRON_TOGGLE, { jobId, enabled });
-      load();
+      await invalidate();
     },
-    [ws, load],
+    [ws, invalidate],
   );
 
   const deleteJob = useCallback(
     async (jobId: string) => {
       await ws.call(Methods.CRON_DELETE, { jobId });
-      load();
+      await invalidate();
     },
-    [ws, load],
+    [ws, invalidate],
   );
 
   const runJob = useCallback(
@@ -119,5 +117,5 @@ export function useCron() {
     [ws],
   );
 
-  return { jobs, loading, refresh: load, createJob, toggleJob, deleteJob, runJob, getRunLog };
+  return { jobs, loading, refresh: invalidate, createJob, toggleJob, deleteJob, runJob, getRunLog };
 }

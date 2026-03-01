@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useRef } from "react";
 import { Radio, Plus, RefreshCw, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -15,25 +15,46 @@ import { ChannelsStatusView, channelTypeLabels } from "./channels-status-view";
 import { useAgents } from "@/pages/agents/hooks/use-agents";
 import { useMinLoading } from "@/hooks/use-min-loading";
 import { useDeferredLoading } from "@/hooks/use-deferred-loading";
-import { usePagination } from "@/hooks/use-pagination";
+import { useDebouncedCallback } from "@/hooks/use-debounced-callback";
 
 export function ChannelsPage() {
   const { channels, loading: statusLoading, refresh: refreshStatus } = useChannels();
+
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [formOpen, setFormOpen] = useState(false);
+  const [editInstance, setEditInstance] = useState<ChannelInstanceData | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ChannelInstanceData | null>(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+
+  const pendingSearchRef = useRef("");
+  const flushSearch = useDebouncedCallback(() => {
+    setDebouncedSearch(pendingSearchRef.current);
+    setPage(1);
+  }, 300);
+
+  const handleSearchChange = (v: string) => {
+    setSearch(v);
+    pendingSearchRef.current = v;
+    flushSearch();
+  };
+
   const {
-    instances, loading: instancesLoading, supported,
+    instances, total, loading: instancesLoading, supported,
     refresh: refreshInstances, createInstance, updateInstance, deleteInstance,
-  } = useChannelInstances();
+  } = useChannelInstances({
+    search: debouncedSearch || undefined,
+    limit: pageSize,
+    offset: (page - 1) * pageSize,
+  });
   const { agents } = useAgents();
 
   const loading = statusLoading || instancesLoading;
   const spinning = useMinLoading(loading);
   const showSkeleton = useDeferredLoading(loading && instances.length === 0);
-
-  const [search, setSearch] = useState("");
-  const [formOpen, setFormOpen] = useState(false);
-  const [editInstance, setEditInstance] = useState<ChannelInstanceData | null>(null);
-  const [deleteTarget, setDeleteTarget] = useState<ChannelInstanceData | null>(null);
-  const [deleteLoading, setDeleteLoading] = useState(false);
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   const refresh = () => {
     refreshStatus();
@@ -44,17 +65,6 @@ export function ChannelsPage() {
   if (!supported) {
     return <ChannelsStatusView channels={channels} loading={statusLoading} spinning={spinning} refresh={refreshStatus} />;
   }
-
-  const filtered = instances.filter(
-    (inst) =>
-      inst.name.toLowerCase().includes(search.toLowerCase()) ||
-      (inst.display_name || "").toLowerCase().includes(search.toLowerCase()) ||
-      inst.channel_type.toLowerCase().includes(search.toLowerCase()),
-  );
-
-  const { pageItems, pagination, setPage, setPageSize, resetPage } = usePagination(filtered);
-
-  useEffect(() => { resetPage(); }, [search, resetPage]);
 
   const handleCreate = async (data: ChannelInstanceInput) => {
     await createInstance(data);
@@ -105,7 +115,7 @@ export function ChannelsPage() {
       <div className="mt-4">
         <SearchInput
           value={search}
-          onChange={setSearch}
+          onChange={handleSearchChange}
           placeholder="Search channels..."
           className="max-w-sm"
         />
@@ -114,11 +124,11 @@ export function ChannelsPage() {
       <div className="mt-4">
         {showSkeleton ? (
           <TableSkeleton rows={5} />
-        ) : filtered.length === 0 ? (
+        ) : instances.length === 0 ? (
           <EmptyState
             icon={Radio}
-            title={search ? "No matching channels" : "No channels"}
-            description={search ? "Try a different search term." : "Add your first channel instance to get started."}
+            title={debouncedSearch ? "No matching channels" : "No channels"}
+            description={debouncedSearch ? "Try a different search term." : "Add your first channel instance to get started."}
           />
         ) : (
           <div className="rounded-md border">
@@ -134,7 +144,7 @@ export function ChannelsPage() {
                 </tr>
               </thead>
               <tbody>
-                {pageItems.map((inst) => {
+                {instances.map((inst) => {
                   const status = getStatus(inst.name);
                   return (
                     <tr key={inst.id} className="border-b last:border-0 hover:bg-muted/30">
@@ -203,12 +213,12 @@ export function ChannelsPage() {
               </tbody>
             </table>
             <Pagination
-              page={pagination.page}
-              pageSize={pagination.pageSize}
-              total={pagination.total}
-              totalPages={pagination.totalPages}
+              page={page}
+              pageSize={pageSize}
+              total={total}
+              totalPages={totalPages}
               onPageChange={setPage}
-              onPageSizeChange={setPageSize}
+              onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
             />
           </div>
         )}

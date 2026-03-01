@@ -94,6 +94,7 @@ func (c *Config) applyEnvOverrides() {
 		}
 	}
 	envStr("GOCLAW_ANTHROPIC_API_KEY", &c.Providers.Anthropic.APIKey)
+	envStr("GOCLAW_ANTHROPIC_BASE_URL", &c.Providers.Anthropic.APIBase)
 	envStr("GOCLAW_OPENAI_API_KEY", &c.Providers.OpenAI.APIKey)
 	envStr("GOCLAW_OPENROUTER_API_KEY", &c.Providers.OpenRouter.APIKey)
 	envStr("GOCLAW_GROQ_API_KEY", &c.Providers.Groq.APIKey)
@@ -104,13 +105,17 @@ func (c *Config) applyEnvOverrides() {
 	envStr("GOCLAW_MINIMAX_API_KEY", &c.Providers.MiniMax.APIKey)
 	envStr("GOCLAW_COHERE_API_KEY", &c.Providers.Cohere.APIKey)
 	envStr("GOCLAW_PERPLEXITY_API_KEY", &c.Providers.Perplexity.APIKey)
+	envStr("GOCLAW_DASHSCOPE_API_KEY", &c.Providers.DashScope.APIKey)
+	envStr("GOCLAW_BAILIAN_API_KEY", &c.Providers.Bailian.APIKey)
 	envStr("GOCLAW_GATEWAY_TOKEN", &c.Gateway.Token)
 	envStr("GOCLAW_TELEGRAM_TOKEN", &c.Channels.Telegram.Token)
+	envStr("GOCLAW_DISCORD_TOKEN", &c.Channels.Discord.Token)
 	envStr("GOCLAW_ZALO_TOKEN", &c.Channels.Zalo.Token)
-	envStr("GOCLAW_FEISHU_APP_ID", &c.Channels.Feishu.AppID)
-	envStr("GOCLAW_FEISHU_APP_SECRET", &c.Channels.Feishu.AppSecret)
-	envStr("GOCLAW_FEISHU_ENCRYPT_KEY", &c.Channels.Feishu.EncryptKey)
-	envStr("GOCLAW_FEISHU_VERIFICATION_TOKEN", &c.Channels.Feishu.VerificationToken)
+	envStr("GOCLAW_LARK_APP_ID", &c.Channels.Feishu.AppID)
+	envStr("GOCLAW_LARK_APP_SECRET", &c.Channels.Feishu.AppSecret)
+	envStr("GOCLAW_LARK_ENCRYPT_KEY", &c.Channels.Feishu.EncryptKey)
+	envStr("GOCLAW_LARK_VERIFICATION_TOKEN", &c.Channels.Feishu.VerificationToken)
+	envStr("GOCLAW_WHATSAPP_BRIDGE_URL", &c.Channels.WhatsApp.BridgeURL)
 
 	// TTS secrets
 	envStr("GOCLAW_TTS_OPENAI_API_KEY", &c.Tts.OpenAI.APIKey)
@@ -122,11 +127,17 @@ func (c *Config) applyEnvOverrides() {
 	if c.Channels.Telegram.Token != "" {
 		c.Channels.Telegram.Enabled = true
 	}
+	if c.Channels.Discord.Token != "" {
+		c.Channels.Discord.Enabled = true
+	}
 	if c.Channels.Zalo.Token != "" {
 		c.Channels.Zalo.Enabled = true
 	}
 	if c.Channels.Feishu.AppID != "" && c.Channels.Feishu.AppSecret != "" {
 		c.Channels.Feishu.Enabled = true
+	}
+	if c.Channels.WhatsApp.BridgeURL != "" {
+		c.Channels.WhatsApp.Enabled = true
 	}
 
 	// Allow overriding default provider/model

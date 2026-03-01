@@ -42,8 +42,18 @@ func (c *Channel) handleBotCommand(ctx context.Context, message *telego.Message,
 
 	// Extract command (strip @botname suffix if present)
 	cmd := strings.SplitN(text, " ", 2)[0]
-	cmd = strings.SplitN(cmd, "@", 2)[0]
 	cmd = strings.ToLower(cmd)
+
+	// In groups, ignore commands addressed to other bots (e.g. /help@other_bot)
+	if isGroup {
+		if parts := strings.SplitN(cmd, "@", 2); len(parts) == 2 {
+			if !strings.EqualFold(parts[1], c.bot.Username()) {
+				return false
+			}
+		}
+	}
+
+	cmd = strings.SplitN(cmd, "@", 2)[0]
 
 	chatIDObj := tu.ID(chatID)
 

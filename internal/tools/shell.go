@@ -75,6 +75,10 @@ var defaultDenyPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\bDYLD_INSERT_LIBRARIES\s*=`),
 	regexp.MustCompile(`\bLD_LIBRARY_PATH\s*=`),
 	regexp.MustCompile(`/etc/ld\.so\.preload`),
+	regexp.MustCompile(`\bGIT_EXTERNAL_DIFF\s*=`),          // git diff arbitrary code exec
+	regexp.MustCompile(`\bGIT_DIFF_OPTS\s*=`),              // git diff behavior injection
+	regexp.MustCompile(`\bBASH_ENV\s*=`),                   // shell init injection
+	regexp.MustCompile(`\bENV\s*=.*\bsh\b`),                // sh init injection
 
 	// ── Container escape ──
 	regexp.MustCompile(`/var/run/docker\.sock|docker\.(sock|socket)`),

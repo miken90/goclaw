@@ -21,6 +21,7 @@ import {
   MemorySection,
   OtherConfigSection,
   QualityGatesSection,
+  ThinkingSection,
 } from "./config-sections";
 
 interface AgentConfigTabProps {
@@ -47,19 +48,22 @@ export function AgentConfigTab({ agent, onUpdate }: AgentConfigTabProps) {
   const [memEnabled, setMemEnabled] = useState(agent.memory_config != null);
   const [mem, setMem] = useState<MemoryConfig>(agent.memory_config ?? {});
 
-  // Extract quality_gates from other_config, manage separately
+  // Extract managed keys from other_config, manage separately
   const otherObj = (agent.other_config ?? {}) as Record<string, unknown>;
   const initialGates = (Array.isArray(otherObj.quality_gates) ? otherObj.quality_gates : []) as QualityGateConfig[];
-  const { quality_gates: _qg, ...otherWithoutGates } = otherObj;
+  const initialThinkingLevel = (typeof otherObj.thinking_level === "string" ? otherObj.thinking_level : "off");
+  const { quality_gates: _qg, thinking_level: _tl, ...otherWithoutManaged } = otherObj;
 
   const [qgEnabled, setQgEnabled] = useState(initialGates.length > 0);
   const [qualityGates, setQualityGates] = useState<QualityGateConfig[]>(initialGates);
 
+  const [thinkingLevel, setThinkingLevel] = useState(initialThinkingLevel);
+
   const [otherEnabled, setOtherEnabled] = useState(
-    agent.other_config != null && Object.keys(otherWithoutGates).length > 0,
+    agent.other_config != null && Object.keys(otherWithoutManaged).length > 0,
   );
   const [otherJson, setOtherJson] = useState(
-    Object.keys(otherWithoutGates).length > 0 ? JSON.stringify(otherWithoutGates, null, 2) : "{}",
+    Object.keys(otherWithoutManaged).length > 0 ? JSON.stringify(otherWithoutManaged, null, 2) : "{}",
   );
 
   const [saving, setSaving] = useState(false);
@@ -86,6 +90,9 @@ export function AgentConfigTab({ agent, onUpdate }: AgentConfigTabProps) {
       }
       if (qgEnabled && qualityGates.length > 0) {
         otherBase.quality_gates = qualityGates;
+      }
+      if (thinkingLevel && thinkingLevel !== "off") {
+        otherBase.thinking_level = thinkingLevel;
       }
       updates.other_config = Object.keys(otherBase).length > 0 ? otherBase : {};
       await onUpdate(updates);
@@ -140,6 +147,11 @@ export function AgentConfigTab({ agent, onUpdate }: AgentConfigTabProps) {
         value={mem}
         onToggle={(v: boolean) => { setMemEnabled(v); if (!v) setMem({}); }}
         onChange={setMem}
+      />
+      <Separator />
+      <ThinkingSection
+        value={thinkingLevel}
+        onChange={setThinkingLevel}
       />
       <Separator />
       <QualityGatesSection

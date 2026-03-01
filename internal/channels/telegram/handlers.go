@@ -164,7 +164,51 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 	var mediaPaths []string
 
 	if len(mediaList) > 0 {
-		// Build media tags for content
+		// First pass: process each media item.
+		// For audio/voice: attempt STT transcription so that buildMediaTags can embed the transcript.
+		// For documents: extract text content to append after the media tags.
+		// Note: buildMediaTags is called AFTER this loop so it picks up populated Transcript fields.
+		var extraContent string
+		for i := range mediaList {
+			m := &mediaList[i]
+
+			switch m.Type {
+			case "audio", "voice":
+				transcript, sttErr := c.transcribeAudio(ctx, m.FilePath)
+				if sttErr != nil {
+					slog.Warn("telegram: STT transcription failed, falling back to media placeholder",
+						"type", m.Type, "error", sttErr,
+					)
+				} else {
+					m.Transcript = transcript
+				}
+
+			case "document":
+				// Extract text content from documents
+				if m.FileName != "" && m.FilePath != "" {
+					docContent, err := extractDocumentContent(m.FilePath, m.FileName)
+					if err != nil {
+						slog.Warn("document extraction failed", "file", m.FileName, "error", err)
+					} else if docContent != "" {
+						extraContent += "\n\n" + docContent
+					}
+				}
+
+			case "video", "animation":
+				// Video: notify user that video is not fully supported yet.
+				// Only add the notice when there is no caption/text — media tags haven't been
+				// prepended yet at this stage of the pipeline.
+				if content == "" {
+					extraContent += "\n\n[Video received — video content analysis is not yet supported, only caption text is processed]"
+				}
+			}
+
+			if m.FilePath != "" {
+				mediaPaths = append(mediaPaths, m.FilePath)
+			}
+		}
+
+		// Build media tags AFTER the processing loop so transcript fields are populated.
 		mediaTags := buildMediaTags(mediaList)
 		if mediaTags != "" {
 			if content != "" {
@@ -174,32 +218,9 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 			}
 		}
 
-		// Process each media item
-		for i := range mediaList {
-			m := &mediaList[i]
-
-			switch m.Type {
-			case "document":
-				// Extract text content from documents
-				if m.FileName != "" && m.FilePath != "" {
-					docContent, err := extractDocumentContent(m.FilePath, m.FileName)
-					if err != nil {
-						slog.Warn("document extraction failed", "file", m.FileName, "error", err)
-					} else if docContent != "" {
-						content += "\n\n" + docContent
-					}
-				}
-
-			case "video", "animation":
-				// Video: notify user that video is not fully supported yet
-				if content == "" || content == buildMediaTags(mediaList) {
-					content += "\n\n[Video received — video content analysis is not yet supported, only caption text is processed]"
-				}
-			}
-
-			if m.FilePath != "" {
-				mediaPaths = append(mediaPaths, m.FilePath)
-			}
+		// Append any extra content accumulated during processing (doc text, video note, etc.)
+		if extraContent != "" {
+			content += extraContent
 		}
 	}
 
@@ -353,6 +374,22 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 		peerKind = "group"
 	}
 
+	// Audio-aware routing: if a voice/audio message was received and a dedicated speaking agent
+	// is configured, route to that agent instead of the default channel agent.
+	// This prevents voice turns from landing on a text-router agent that cannot handle audio.
+	targetAgentID := c.AgentID()
+	if c.config.VoiceAgentID != "" {
+		for _, m := range mediaList {
+			if m.Type == "audio" || m.Type == "voice" {
+				targetAgentID = c.config.VoiceAgentID
+				slog.Debug("telegram: routing voice inbound to speaking agent",
+					"agent_id", targetAgentID, "media_type", m.Type,
+				)
+				break
+			}
+		}
+	}
+
 	c.Bus().PublishInbound(bus.InboundMessage{
 		Channel:      c.Name(),
 		SenderID:     senderID,
@@ -361,7 +398,7 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 		Media:        mediaPaths,
 		PeerKind:     peerKind,
 		UserID:       userID,
-		AgentID:      c.AgentID(),
+		AgentID:      targetAgentID,
 		HistoryLimit: c.historyLimit,
 		Metadata:     metadata,
 	})

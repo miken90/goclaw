@@ -16,6 +16,7 @@ export function useChatMessages(sessionKey: string, agentId: string) {
   const ws = useWs();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streamText, setStreamText] = useState<string | null>(null);
+  const [thinkingText, setThinkingText] = useState<string | null>(null);
   const [toolStream, setToolStream] = useState<ToolStreamEntry[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -24,6 +25,7 @@ export function useChatMessages(sessionKey: string, agentId: string) {
   const runIdRef = useRef<string | null>(null);
   const expectingRunRef = useRef(false);
   const streamRef = useRef("");
+  const thinkingRef = useRef("");
   const agentIdRef = useRef(agentId);
   agentIdRef.current = agentId;
 
@@ -34,12 +36,14 @@ export function useChatMessages(sessionKey: string, agentId: string) {
     setPrevKey(sessionKey);
     setMessages([]);
     setStreamText(null);
+    setThinkingText(null);
     setToolStream([]);
     setIsRunning(false);
     setLoading(true);
     runIdRef.current = null;
     expectingRunRef.current = false;
     streamRef.current = "";
+    thinkingRef.current = "";
   }
 
   // Load history (no loading spinner — the empty state placeholder is shown instead)
@@ -90,8 +94,10 @@ export function useChatMessages(sessionKey: string, agentId: string) {
           expectingRunRef.current = false;
           setIsRunning(true);
           setStreamText(null);
+          setThinkingText(null);
           setToolStream([]);
           streamRef.current = "";
+          thinkingRef.current = "";
         }
         return;
       }
@@ -100,6 +106,12 @@ export function useChatMessages(sessionKey: string, agentId: string) {
       if (!runIdRef.current || event.runId !== runIdRef.current) return;
 
       switch (event.type) {
+        case "thinking": {
+          const content = event.payload?.content ?? "";
+          thinkingRef.current += content;
+          setThinkingText(thinkingRef.current);
+          break;
+        }
         case "chunk": {
           const content = event.payload?.content ?? "";
           streamRef.current += content;
@@ -137,16 +149,20 @@ export function useChatMessages(sessionKey: string, agentId: string) {
           runIdRef.current = null;
           loadHistory();
           setStreamText(null);
+          setThinkingText(null);
           setToolStream([]);
           streamRef.current = "";
+          thinkingRef.current = "";
           break;
         }
         case "run.failed": {
           setIsRunning(false);
           runIdRef.current = null;
           setStreamText(null);
+          setThinkingText(null);
           setToolStream([]);
           streamRef.current = "";
+          thinkingRef.current = "";
           setMessages((prev) => [
             ...prev,
             {
@@ -172,6 +188,7 @@ export function useChatMessages(sessionKey: string, agentId: string) {
   return {
     messages,
     streamText,
+    thinkingText,
     toolStream,
     isRunning,
     loading,

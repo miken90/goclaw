@@ -47,6 +47,7 @@ func New(cfg config.DiscordConfig, msgBus *bus.MessageBus, pairingSvc store.Pair
 		discordgo.IntentsMessageContent
 
 	base := channels.NewBaseChannel("discord", msgBus, cfg.AllowFrom)
+	base.ValidatePolicy(cfg.DMPolicy, cfg.GroupPolicy)
 
 	requireMention := true
 	if cfg.RequireMention != nil {

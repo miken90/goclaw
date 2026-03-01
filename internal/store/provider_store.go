@@ -19,6 +19,8 @@ const (
 	ProviderMiniMax         = "minimax_native"
 	ProviderCohere          = "cohere"
 	ProviderPerplexity      = "perplexity"
+	ProviderDashScope       = "dashscope"
+	ProviderBailian         = "bailian"
 )
 
 // ValidProviderTypes lists all accepted provider_type values.
@@ -34,6 +36,8 @@ var ValidProviderTypes = map[string]bool{
 	ProviderMiniMax:         true,
 	ProviderCohere:          true,
 	ProviderPerplexity:      true,
+	ProviderDashScope:       true,
+	ProviderBailian:         true,
 }
 
 // LLMProviderData represents an LLM provider configuration.

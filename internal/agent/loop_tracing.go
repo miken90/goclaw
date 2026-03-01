@@ -89,10 +89,17 @@ func (l *Loop) emitLLMSpan(ctx context.Context, start time.Time, iteration int, 
 		if resp.Usage != nil {
 			span.InputTokens = resp.Usage.PromptTokens
 			span.OutputTokens = resp.Usage.CompletionTokens
-			if resp.Usage.CacheCreationTokens > 0 || resp.Usage.CacheReadTokens > 0 {
-				meta := map[string]int{
-					"cache_creation_tokens": resp.Usage.CacheCreationTokens,
-					"cache_read_tokens":     resp.Usage.CacheReadTokens,
+			hasMeta := resp.Usage.CacheCreationTokens > 0 || resp.Usage.CacheReadTokens > 0 || resp.Usage.ThinkingTokens > 0
+			if hasMeta {
+				meta := map[string]int{}
+				if resp.Usage.CacheCreationTokens > 0 {
+					meta["cache_creation_tokens"] = resp.Usage.CacheCreationTokens
+				}
+				if resp.Usage.CacheReadTokens > 0 {
+					meta["cache_read_tokens"] = resp.Usage.CacheReadTokens
+				}
+				if resp.Usage.ThinkingTokens > 0 {
+					meta["thinking_tokens"] = resp.Usage.ThinkingTokens
 				}
 				if b, err := json.Marshal(meta); err == nil {
 					span.Metadata = b
@@ -101,7 +108,11 @@ func (l *Loop) emitLLMSpan(ctx context.Context, start time.Time, iteration int, 
 		}
 		span.FinishReason = resp.FinishReason
 		if verbose {
-			span.OutputPreview = truncateStr(resp.Content, 100000)
+			preview := resp.Content
+			if resp.Thinking != "" {
+				preview = "<thinking>\n" + resp.Thinking + "\n</thinking>\n" + resp.Content
+			}
+			span.OutputPreview = truncateStr(preview, 100000)
 		} else {
 			span.OutputPreview = truncateStr(resp.Content, 500)
 		}

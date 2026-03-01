@@ -51,6 +51,7 @@ func New(cfg config.ZaloConfig, msgBus *bus.MessageBus, pairingSvc store.Pairing
 	}
 
 	base := channels.NewBaseChannel("zalo", msgBus, cfg.AllowFrom)
+	base.ValidatePolicy(cfg.DMPolicy, "")
 
 	dmPolicy := cfg.DMPolicy
 	if dmPolicy == "" {

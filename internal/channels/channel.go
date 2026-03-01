@@ -10,6 +10,7 @@ package channels
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
@@ -200,6 +201,19 @@ func (c *BaseChannel) CheckPolicy(peerKind, dmPolicy, groupPolicy, senderID stri
 		return c.IsAllowed(senderID)
 	default: // "open"
 		return true
+	}
+}
+
+// ValidatePolicy logs warnings for common policy misconfigurations.
+// Should be called during channel initialization.
+func (c *BaseChannel) ValidatePolicy(dmPolicy, groupPolicy string) {
+	if dmPolicy == "allowlist" && !c.HasAllowList() {
+		slog.Warn("channel policy misconfiguration: dmPolicy=allowlist but allowFrom is empty — all DMs will be rejected",
+			"channel", c.name)
+	}
+	if groupPolicy == "allowlist" && !c.HasAllowList() {
+		slog.Warn("channel policy misconfiguration: groupPolicy=allowlist but allowFrom is empty — all group messages will be rejected",
+			"channel", c.name)
 	}
 }
 

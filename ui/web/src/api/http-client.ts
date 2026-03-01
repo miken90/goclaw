@@ -78,10 +78,15 @@ export class HttpClient {
   }
 
   private async request<T>(url: string, init: RequestInit): Promise<T> {
-    const res = await fetch(url, {
-      ...init,
-      headers: { ...this.headers(), ...(init.headers as Record<string, string>) },
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        ...init,
+        headers: { ...this.headers(), ...(init.headers as Record<string, string>) },
+      });
+    } catch {
+      throw new ApiError("NETWORK_ERROR", "Cannot connect to server. Check if the gateway is running.");
+    }
 
     if (!res.ok) {
       if (res.status === 401) {

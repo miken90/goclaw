@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState } from "react";
 import { Activity, RefreshCw, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -7,76 +7,33 @@ import { PageHeader } from "@/components/shared/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
 import { Pagination } from "@/components/shared/pagination";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
-import { useWsEvent } from "@/hooks/use-ws-event";
-import { useDebouncedCallback } from "@/hooks/use-debounced-callback";
-import { Events } from "@/api/protocol";
 import { formatDate, formatDuration, formatTokens, computeDurationMs } from "@/lib/format";
 import { useTraces, type TraceData } from "./hooks/use-traces";
 import { TraceDetailDialog } from "./trace-detail-dialog";
 import { useMinLoading } from "@/hooks/use-min-loading";
 import { useDeferredLoading } from "@/hooks/use-deferred-loading";
-import type { AgentEventPayload } from "@/types/chat";
 
 export function TracesPage() {
-  const { traces, total, loading, load, getTrace } = useTraces();
-  const spinning = useMinLoading(loading);
-  const showSkeleton = useDeferredLoading(loading && traces.length === 0);
   const [agentFilter, setAgentFilter] = useState("");
+  const [appliedAgentFilter, setAppliedAgentFilter] = useState("");
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
 
+  const { traces, total, loading, fetching, refresh, getTrace } = useTraces({
+    agentId: appliedAgentFilter || undefined,
+    limit: pageSize,
+    offset: (page - 1) * pageSize,
+  });
+  const spinning = useMinLoading(fetching);
+  const showSkeleton = useDeferredLoading(loading && traces.length === 0);
+
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
-
-  // Ref to capture current filter for debounced callback
-  const agentFilterRef = useRef(agentFilter);
-  agentFilterRef.current = agentFilter;
-  const pageRef = useRef(page);
-  pageRef.current = page;
-  const pageSizeRef = useRef(pageSize);
-  pageSizeRef.current = pageSize;
-
-  useEffect(() => {
-    load({ limit: pageSize, offset: (page - 1) * pageSize });
-  }, [load, page, pageSize]);
-
-  const handleRefresh = () => {
-    load({
-      agentId: agentFilter || undefined,
-      limit: pageSize,
-      offset: (page - 1) * pageSize,
-    });
-  };
-
-  // Auto-refresh when any agent run starts/completes (traces are created synchronously at run start)
-  const debouncedRefresh = useDebouncedCallback(() => {
-    load({
-      agentId: agentFilterRef.current || undefined,
-      limit: pageSizeRef.current,
-      offset: (pageRef.current - 1) * pageSizeRef.current,
-    });
-  }, 3000);
-
-  const handleAgentEvent = useCallback(
-    (payload: unknown) => {
-      const event = payload as AgentEventPayload;
-      if (!event) return;
-      if (
-        event.type === "run.started" ||
-        event.type === "run.completed" ||
-        event.type === "run.failed"
-      ) {
-        debouncedRefresh();
-      }
-    },
-    [debouncedRefresh],
-  );
-
-  useWsEvent(Events.AGENT, handleAgentEvent);
 
   const handleFilterSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    handleRefresh();
+    setAppliedAgentFilter(agentFilter);
+    setPage(1);
   };
 
   return (
@@ -85,7 +42,7 @@ export function TracesPage() {
         title="Traces"
         description="LLM call traces and performance data"
         actions={
-          <Button variant="outline" size="sm" onClick={handleRefresh} disabled={spinning} className="gap-1">
+          <Button variant="outline" size="sm" onClick={refresh} disabled={spinning} className="gap-1">
             <RefreshCw className={"h-3.5 w-3.5" + (spinning ? " animate-spin" : "")} /> Refresh
           </Button>
         }

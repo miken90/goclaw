@@ -1,54 +1,44 @@
-import { useState, useEffect, useCallback } from "react";
+import { useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWs } from "@/hooks/use-ws";
-import { useWsEvent } from "@/hooks/use-ws-event";
-import { useDebouncedCallback } from "@/hooks/use-debounced-callback";
-import { Methods, Events } from "@/api/protocol";
+import { Methods } from "@/api/protocol";
+import { queryKeys } from "@/lib/query-keys";
 import type { SessionInfo, SessionPreview, Message } from "@/types/session";
-import type { AgentEventPayload } from "@/types/chat";
 
-export function useSessions(agentFilter?: string) {
+interface UseSessionsOptions {
+  agentFilter?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export function useSessions(opts: UseSessionsOptions = {}) {
   const ws = useWs();
-  const [sessions, setSessions] = useState<SessionInfo[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(false);
+  const queryClient = useQueryClient();
+  const { agentFilter, limit, offset } = opts;
 
-  const load = useCallback(async (opts?: { limit?: number; offset?: number }) => {
-    if (!ws.isConnected) return;
-    setLoading(true);
-    try {
+  const queryKey = queryKeys.sessions.list({ agentFilter, limit, offset });
+
+  const { data, isLoading: loading } = useQuery({
+    queryKey,
+    queryFn: async () => {
+      if (!ws.isConnected) return { sessions: [] as SessionInfo[], total: 0 };
       const res = await ws.call<{ sessions: SessionInfo[]; total?: number }>(Methods.SESSIONS_LIST, {
         agentId: agentFilter || undefined,
-        limit: opts?.limit,
-        offset: opts?.offset,
+        limit,
+        offset,
       });
-      setSessions(res.sessions ?? []);
-      setTotal(res.total ?? 0);
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false);
-    }
-  }, [ws, agentFilter]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
-  // Auto-refresh when any agent run completes (from any channel)
-  const debouncedRefresh = useDebouncedCallback(load, 2000);
-
-  const handleAgentEvent = useCallback(
-    (payload: unknown) => {
-      const event = payload as AgentEventPayload;
-      if (!event) return;
-      if (event.type === "run.completed" || event.type === "run.failed") {
-        debouncedRefresh();
-      }
+      return { sessions: res.sessions ?? [], total: res.total ?? 0 };
     },
-    [debouncedRefresh],
-  );
+    placeholderData: (prev) => prev,
+  });
 
-  useWsEvent(Events.AGENT, handleAgentEvent);
+  const sessions = data?.sessions ?? [];
+  const total = data?.total ?? 0;
+
+  const invalidate = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all }),
+    [queryClient],
+  );
 
   const preview = useCallback(
     async (key: string): Promise<SessionPreview | null> => {
@@ -66,28 +56,28 @@ export function useSessions(agentFilter?: string) {
     async (key: string) => {
       if (!ws.isConnected) return;
       await ws.call(Methods.SESSIONS_DELETE, { key });
-      setSessions((prev) => prev.filter((s) => s.key !== key));
+      await invalidate();
     },
-    [ws],
+    [ws, invalidate],
   );
 
   const resetSession = useCallback(
     async (key: string) => {
       if (!ws.isConnected) return;
       await ws.call(Methods.SESSIONS_RESET, { key });
-      load();
+      await invalidate();
     },
-    [ws, load],
+    [ws, invalidate],
   );
 
   const patchSession = useCallback(
     async (key: string, updates: { label?: string; model?: string }) => {
       if (!ws.isConnected) return;
       await ws.call(Methods.SESSIONS_PATCH, { key, ...updates });
-      load();
+      await invalidate();
     },
-    [ws, load],
+    [ws, invalidate],
   );
 
-  return { sessions, total, loading, refresh: load, preview, deleteSession, resetSession, patchSession };
+  return { sessions, total, loading, refresh: invalidate, preview, deleteSession, resetSession, patchSession };
 }

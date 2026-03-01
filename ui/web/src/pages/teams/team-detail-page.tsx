@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -16,10 +16,20 @@ interface TeamDetailPageProps {
 }
 
 export function TeamDetailPage({ teamId, onBack }: TeamDetailPageProps) {
-  const { getTeam, getTeamTasks } = useTeams();
+  const { getTeam, getTeamTasks, addMember, removeMember } = useTeams();
   const [team, setTeam] = useState<TeamData | null>(null);
   const [members, setMembers] = useState<TeamMemberData[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const reload = useCallback(async () => {
+    try {
+      const res = await getTeam(teamId);
+      setTeam(res.team);
+      setMembers(res.members ?? []);
+    } catch {
+      // ignore
+    }
+  }, [teamId, getTeam]);
 
   useEffect(() => {
     let cancelled = false;
@@ -39,6 +49,16 @@ export function TeamDetailPage({ teamId, onBack }: TeamDetailPageProps) {
     })();
     return () => { cancelled = true; };
   }, [teamId, getTeam]);
+
+  const handleAddMember = useCallback(async (agentId: string) => {
+    await addMember(teamId, agentId);
+    await reload();
+  }, [teamId, addMember, reload]);
+
+  const handleRemoveMember = useCallback(async (agentId: string) => {
+    await removeMember(teamId, agentId);
+    await reload();
+  }, [teamId, removeMember, reload]);
 
   if (loading || !team) {
     return (
@@ -93,7 +113,12 @@ export function TeamDetailPage({ teamId, onBack }: TeamDetailPageProps) {
           </TabsList>
 
           <TabsContent value="members" className="mt-4">
-            <TeamMembersTab members={members} />
+            <TeamMembersTab
+              teamId={teamId}
+              members={members}
+              onAddMember={handleAddMember}
+              onRemoveMember={handleRemoveMember}
+            />
           </TabsContent>
 
           <TabsContent value="tasks" className="mt-4">
