@@ -206,6 +206,14 @@ func (s *PGAgentStore) List(ctx context.Context, ownerID string) ([]store.AgentD
 	return scanAgentRows(rows)
 }
 
+func (s *PGAgentStore) GetDefault(ctx context.Context) (*store.AgentData, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+agentSelectCols+`
+		 FROM agents WHERE deleted_at IS NULL
+		 ORDER BY is_default DESC, created_at ASC LIMIT 1`)
+	return scanAgentRow(row)
+}
+
 // --- Access Control ---
 
 func (s *PGAgentStore) ShareAgent(ctx context.Context, agentID uuid.UUID, userID, role, grantedBy string) error {
@@ -283,7 +291,22 @@ func (s *PGAgentStore) ListAccessible(ctx context.Context, userID string) ([]sto
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+agentSelectCols+`
 		 FROM agents
-		 WHERE deleted_at IS NULL AND (owner_id = $1 OR is_default = true OR id IN (SELECT agent_id FROM agent_shares WHERE user_id = $1))
+		 WHERE deleted_at IS NULL AND (
+		     owner_id = $1
+		     OR is_default = true
+		     OR id IN (SELECT agent_id FROM agent_shares WHERE user_id = $1)
+		     OR (
+		         agent_type = 'predefined'
+		         AND id IN (
+		             SELECT agent_id FROM channel_instances ci
+		             WHERE ci.enabled = true
+		             AND EXISTS (
+		                 SELECT 1 FROM jsonb_array_elements_text(ci.config->'allow_from') af
+		                 WHERE af = $1
+		             )
+		         )
+		     )
+		 )
 		 ORDER BY created_at DESC`, userID)
 	if err != nil {
 		return nil, err

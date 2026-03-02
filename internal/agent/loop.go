@@ -235,6 +235,7 @@ type RunRequest struct {
 	SessionKey       string // composite key: agent:{agentId}:{channel}:{peerKind}:{chatId}
 	Message          string // user message
 	Media            []string // local file paths to images (already sanitized)
+	ForwardMedia     []string // media paths to forward to output (not deleted, from delegation results)
 	Channel          string // source channel
 	ChatID           string // source chat ID
 	PeerKind         string // "direct" or "group" (for session key building and tool context)
@@ -670,6 +671,9 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 			if mr := parseMediaResult(result.ForLLM); mr != nil {
 				mediaResults = append(mediaResults, *mr)
 			}
+			for _, p := range result.Media {
+				mediaResults = append(mediaResults, MediaResult{Path: p, ContentType: mimeFromExt(filepath.Ext(p))})
+			}
 
 			toolMsg := providers.Message{
 				Role:       "tool",
@@ -778,6 +782,9 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 				if mr := parseMediaResult(r.result.ForLLM); mr != nil {
 					mediaResults = append(mediaResults, *mr)
 				}
+				for _, p := range r.result.Media {
+					mediaResults = append(mediaResults, MediaResult{Path: p, ContentType: mimeFromExt(filepath.Ext(p))})
+				}
 
 				toolMsg := providers.Message{
 					Role:       "tool",
@@ -877,6 +884,11 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 	// 5. Maybe summarize
 	l.maybeSummarize(ctx, req.SessionKey)
 
+	// Include forwarded media from delegation results (not cleaned up like req.Media)
+	for _, p := range req.ForwardMedia {
+		mediaResults = append(mediaResults, MediaResult{Path: p, ContentType: mimeFromExt(filepath.Ext(p))})
+	}
+
 	return &RunResult{
 		Content:    finalContent,
 		RunID:      req.RunID,
@@ -940,6 +952,24 @@ func mimeFromExt(ext string) string {
 		return "audio/mpeg"
 	case ".wav":
 		return "audio/wav"
+	case ".txt":
+		return "text/plain"
+	case ".pdf":
+		return "application/pdf"
+	case ".csv":
+		return "text/csv"
+	case ".json":
+		return "application/json"
+	case ".html", ".htm":
+		return "text/html"
+	case ".xml":
+		return "application/xml"
+	case ".zip":
+		return "application/zip"
+	case ".doc", ".docx":
+		return "application/msword"
+	case ".xls", ".xlsx":
+		return "application/vnd.ms-excel"
 	default:
 		return "application/octet-stream"
 	}

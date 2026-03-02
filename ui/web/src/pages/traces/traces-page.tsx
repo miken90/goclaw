@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Activity, RefreshCw, Search } from "lucide-react";
+import { Activity, GitFork, RefreshCw, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -93,6 +93,9 @@ export function TracesPage() {
                     onClick={() => setSelectedTraceId(trace.id)}
                   >
                     <td className="max-w-[200px] truncate px-4 py-3 font-medium">
+                      {trace.parent_trace_id && (
+                        <GitFork className="mr-1.5 inline-block h-3.5 w-3.5 text-muted-foreground" />
+                      )}
                       {trace.name || "Unnamed"}
                       {trace.channel && (
                         <Badge variant="outline" className="ml-2 text-xs">

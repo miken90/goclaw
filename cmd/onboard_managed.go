@@ -145,6 +145,9 @@ func seedManagedData(dsn string, cfg *config.Config) error {
 	// 7. Seed config_secrets from env vars
 	seedConfigSecrets(ctx, stores, cfg)
 
+	// 8. Seed placeholder providers for UI discoverability
+	seedDefaultPlaceholders(ctx, stores)
+
 	return nil
 }
 
@@ -278,6 +281,58 @@ func seedConfigSecrets(ctx context.Context, stores *store.Stores, cfg *config.Co
 
 	if seeded > 0 {
 		slog.Info("seeded config secrets", "count", seeded)
+	}
+}
+
+// defaultPlaceholderProviders defines disabled placeholder providers seeded for
+// UI discoverability. Users can later enable and configure them via the dashboard.
+var defaultPlaceholderProviders = []store.LLMProviderData{
+	{Name: "openrouter", DisplayName: "OpenRouter", ProviderType: store.ProviderOpenRouter, APIBase: "https://openrouter.ai/api/v1", Enabled: false},
+	{Name: "synthetic", DisplayName: "Synthetic", ProviderType: store.ProviderOpenAICompat, APIBase: "https://api.synthetic.new/openai/v1", Enabled: false},
+	{Name: "alicloud-api", DisplayName: "AliCloud API", ProviderType: store.ProviderDashScope, APIBase: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", Enabled: false},
+	{Name: "alicloud-sub", DisplayName: "AliCloud Sub", ProviderType: store.ProviderBailian, APIBase: "https://coding-intl.dashscope.aliyuncs.com/v1", Enabled: false},
+}
+
+// seedDefaultPlaceholders inserts disabled placeholder providers so they
+// appear in the UI for easy configuration. Idempotent: UNIQUE(name) constraint
+// skips duplicates, and providers whose api_base already exists are skipped
+// to avoid overwriting user-configured entries.
+func seedDefaultPlaceholders(ctx context.Context, stores *store.Stores) {
+	if stores.Providers == nil {
+		return
+	}
+
+	// Build a set of existing api_base values to avoid seeding a placeholder
+	// when a user-configured provider already uses that base URL.
+	existing, err := stores.Providers.ListProviders(ctx)
+	if err != nil {
+		slog.Debug("seedDefaultPlaceholders: list providers failed", "error", err)
+		return
+	}
+	existingBases := make(map[string]bool, len(existing))
+	for _, p := range existing {
+		if p.APIBase != "" {
+			existingBases[p.APIBase] = true
+		}
+	}
+
+	seeded := 0
+	for _, ph := range defaultPlaceholderProviders {
+		// Skip if a provider with this api_base already exists
+		if ph.APIBase != "" && existingBases[ph.APIBase] {
+			continue
+		}
+
+		p := ph // copy
+		if err := stores.Providers.CreateProvider(ctx, &p); err != nil {
+			slog.Debug("seed placeholder skipped (may already exist)", "name", ph.Name, "error", err)
+			continue
+		}
+		seeded++
+	}
+
+	if seeded > 0 {
+		fmt.Printf("  Seeded %d placeholder provider(s)\n", seeded)
 	}
 }
 

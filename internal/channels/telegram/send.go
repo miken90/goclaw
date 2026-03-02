@@ -3,10 +3,12 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"html"
 	"log/slog"
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/mymmrac/telego"
 	tu "github.com/mymmrac/telego/telegoutil"
@@ -19,7 +21,63 @@ import (
 var (
 	parseErrRe           = regexp.MustCompile(`(?i)can't parse entities|parse entities|find end of the entity`)
 	messageNotModifiedRe = regexp.MustCompile(`(?i)message is not modified`)
+	htmlTagRe            = regexp.MustCompile(`<[^>]*>`)
 )
+
+const (
+	sendMaxRetries     = 3
+	sendRetryDelay     = 2 * time.Second
+	photoSizeThreshold = 5 * 1024 * 1024 // 5 MB — images larger than this are sent as documents to avoid Telegram compression
+)
+
+// stripHTML removes HTML tags and unescapes HTML entities for plain-text fallback.
+func stripHTML(s string) string {
+	return html.UnescapeString(htmlTagRe.ReplaceAllString(s, ""))
+}
+
+// isRetryableNetworkErr checks if a Telegram API error is a transient network error worth retrying.
+func isRetryableNetworkErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "timeout") ||
+		strings.Contains(s, "connection reset") ||
+		strings.Contains(s, "broken pipe") ||
+		strings.Contains(s, "EOF") ||
+		strings.Contains(s, "lookup") // DNS resolution failure
+}
+
+// retrySend wraps a Telegram send call with retry logic for transient network errors.
+// Parse errors are NOT retried (handled by caller's HTML fallback).
+// resetFn is called before each retry (e.g. to seek file handles back to start). Can be nil.
+func retrySend(ctx context.Context, name string, resetFn func(), fn func() error) error {
+	var err error
+	for attempt := 1; attempt <= sendMaxRetries; attempt++ {
+		err = fn()
+		if err == nil {
+			return nil
+		}
+		// Don't retry parse errors — caller handles HTML fallback
+		if parseErrRe.MatchString(err.Error()) {
+			return err
+		}
+		if !isRetryableNetworkErr(err) || attempt == sendMaxRetries {
+			return err
+		}
+		slog.Warn("telegram send retry",
+			"func", name, "attempt", attempt, "max", sendMaxRetries, "error", err)
+		if resetFn != nil {
+			resetFn()
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(sendRetryDelay * time.Duration(attempt)):
+		}
+	}
+	return err
+}
 
 // Send delivers an outbound message to a Telegram chat.
 // Supports text-only messages and messages with media attachments.
@@ -137,23 +195,34 @@ func (c *Channel) sendMediaMessage(ctx context.Context, chatID int64, msg bus.Ou
 			msg.Content = "" // only use for first media
 		}
 
-		// Convert caption from markdown to Telegram HTML (same as regular messages)
+		// Convert caption from markdown to Telegram HTML (same as regular messages).
+		// If the HTML caption exceeds Telegram's 1024-byte limit, skip caption entirely
+		// and send the full text as a separate message. Truncating HTML at a byte boundary
+		// can split tags (e.g. cut inside <code>...</code>) causing parse errors.
+		var followUpText string
 		if caption != "" {
 			caption = markdownToTelegramHTML(caption)
+			if len(caption) > telegramCaptionMaxLen {
+				followUpText = caption
+				caption = ""
+			}
 		}
 
-		// Split caption if too long (Telegram limit: 1024 chars)
-		var followUpText string
-		if len(caption) > telegramCaptionMaxLen {
-			followUpText = caption[telegramCaptionMaxLen:]
-			caption = caption[:telegramCaptionMaxLen]
-		}
-
-		// Send based on content type
+		// Send based on content type.
+		// Large images (>photoSizeThreshold) are sent as documents to avoid Telegram compression.
 		ct := strings.ToLower(media.ContentType)
 		switch {
 		case strings.HasPrefix(ct, "image/"):
-			if err := c.sendPhoto(ctx, chatIDObj, media.URL, caption, replyTo, threadID); err != nil {
+			sendAsDoc := false
+			if info, statErr := os.Stat(media.URL); statErr == nil && info.Size() > photoSizeThreshold {
+				sendAsDoc = true
+				slog.Info("large image, sending as document to preserve quality", "path", media.URL, "size", info.Size())
+			}
+			if sendAsDoc {
+				if err := c.sendDocument(ctx, chatIDObj, media.URL, caption, replyTo, threadID); err != nil {
+					return err
+				}
+			} else if err := c.sendPhoto(ctx, chatIDObj, media.URL, caption, replyTo, threadID); err != nil {
 				return err
 			}
 		case strings.HasPrefix(ct, "video/"):
@@ -200,16 +269,17 @@ func (c *Channel) sendHTML(ctx context.Context, chatID int64, html string, reply
 		tgMsg.ReplyParameters = &telego.ReplyParameters{MessageID: replyTo}
 	}
 
-	if _, err := c.bot.SendMessage(ctx, tgMsg); err != nil {
-		if parseErrRe.MatchString(err.Error()) {
-			slog.Warn("HTML parse failed, falling back to plain text", "error", err)
-			tgMsg.ParseMode = ""
-			_, err = c.bot.SendMessage(ctx, tgMsg)
-			return err
-		}
-		return err
+	err := retrySend(ctx, "sendMessage", nil, func() error {
+		_, e := c.bot.SendMessage(ctx, tgMsg)
+		return e
+	})
+	if err != nil && parseErrRe.MatchString(err.Error()) {
+		slog.Warn("HTML parse failed, falling back to plain text", "error", err)
+		tgMsg.ParseMode = ""
+		tgMsg.Text = stripHTML(tgMsg.Text)
+		_, err = c.bot.SendMessage(ctx, tgMsg)
 	}
-	return nil
+	return err
 }
 
 // sendPhoto sends a photo message.
@@ -235,7 +305,17 @@ func (c *Channel) sendPhoto(ctx context.Context, chatID telego.ChatID, filePath,
 		params.ReplyParameters = &telego.ReplyParameters{MessageID: replyTo}
 	}
 
-	_, err = c.bot.SendPhoto(ctx, params)
+	err = retrySend(ctx, "sendPhoto", func() { file.Seek(0, 0) }, func() error {
+		_, e := c.bot.SendPhoto(ctx, params)
+		return e
+	})
+	if err != nil && parseErrRe.MatchString(err.Error()) {
+		slog.Warn("sendPhoto: HTML parse failed, retrying with plain text caption", "error", err)
+		file.Seek(0, 0)
+		params.ParseMode = ""
+		params.Caption = stripHTML(params.Caption)
+		_, err = c.bot.SendPhoto(ctx, params)
+	}
 	return err
 }
 
@@ -262,7 +342,17 @@ func (c *Channel) sendVideo(ctx context.Context, chatID telego.ChatID, filePath,
 		params.ReplyParameters = &telego.ReplyParameters{MessageID: replyTo}
 	}
 
-	_, err = c.bot.SendVideo(ctx, params)
+	err = retrySend(ctx, "sendVideo", func() { file.Seek(0, 0) }, func() error {
+		_, e := c.bot.SendVideo(ctx, params)
+		return e
+	})
+	if err != nil && parseErrRe.MatchString(err.Error()) {
+		slog.Warn("sendVideo: HTML parse failed, retrying with plain text caption", "error", err)
+		file.Seek(0, 0)
+		params.ParseMode = ""
+		params.Caption = stripHTML(params.Caption)
+		_, err = c.bot.SendVideo(ctx, params)
+	}
 	return err
 }
 
@@ -289,7 +379,17 @@ func (c *Channel) sendAudio(ctx context.Context, chatID telego.ChatID, filePath,
 		params.ReplyParameters = &telego.ReplyParameters{MessageID: replyTo}
 	}
 
-	_, err = c.bot.SendAudio(ctx, params)
+	err = retrySend(ctx, "sendAudio", func() { file.Seek(0, 0) }, func() error {
+		_, e := c.bot.SendAudio(ctx, params)
+		return e
+	})
+	if err != nil && parseErrRe.MatchString(err.Error()) {
+		slog.Warn("sendAudio: HTML parse failed, retrying with plain text caption", "error", err)
+		file.Seek(0, 0)
+		params.ParseMode = ""
+		params.Caption = stripHTML(params.Caption)
+		_, err = c.bot.SendAudio(ctx, params)
+	}
 	return err
 }
 
@@ -316,7 +416,17 @@ func (c *Channel) sendDocument(ctx context.Context, chatID telego.ChatID, filePa
 		params.ReplyParameters = &telego.ReplyParameters{MessageID: replyTo}
 	}
 
-	_, err = c.bot.SendDocument(ctx, params)
+	err = retrySend(ctx, "sendDocument", func() { file.Seek(0, 0) }, func() error {
+		_, e := c.bot.SendDocument(ctx, params)
+		return e
+	})
+	if err != nil && parseErrRe.MatchString(err.Error()) {
+		slog.Warn("sendDocument: HTML parse failed, retrying with plain text caption", "error", err)
+		file.Seek(0, 0)
+		params.ParseMode = ""
+		params.Caption = stripHTML(params.Caption)
+		_, err = c.bot.SendDocument(ctx, params)
+	}
 	return err
 }
 

@@ -58,3 +58,14 @@ func (m *TeamToolManager) agentKeyFromID(ctx context.Context, id uuid.UUID) stri
 	}
 	return ag.AgentKey
 }
+
+// broadcastTeamEvent sends a real-time event via the message bus for team activity visibility.
+func (m *TeamToolManager) broadcastTeamEvent(name string, payload map[string]string) {
+	if m.msgBus == nil {
+		return
+	}
+	m.msgBus.Broadcast(bus.Event{
+		Name:    name,
+		Payload: payload,
+	})
+}

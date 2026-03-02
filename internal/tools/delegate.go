@@ -41,7 +41,8 @@ type DelegationTask struct {
 	OriginTraceID    uuid.UUID `json:"-"`
 	OriginRootSpanID uuid.UUID `json:"-"`
 
-	// Team task auto-completion
+	// Team tracking
+	TeamID     uuid.UUID `json:"-"` // from link.TeamID (for delegation history)
 	TeamTaskID uuid.UUID `json:"-"`
 
 	cancelFunc context.CancelFunc `json:"-"`
@@ -74,6 +75,23 @@ type DelegateRunRequest struct {
 type DelegateRunResult struct {
 	Content    string
 	Iterations int
+	MediaPaths []string // media file paths from tool results (e.g. generated images)
+}
+
+// DelegateArtifacts holds forwarded artifacts from delegation results.
+// Used to accumulate artifacts from intermediate completions until the final
+// announce fires. New artifact types (files, voice, etc.) should be added here.
+type DelegateArtifacts struct {
+	Media   []string                // file paths to forward (images, documents, audio, etc.)
+	Results []DelegateResultSummary // result summaries from completed delegations
+}
+
+// DelegateResultSummary is a compact representation of a delegation result
+// included in the final announce so the lead has all results in one message.
+type DelegateResultSummary struct {
+	AgentKey string
+	Content  string
+	HasMedia bool
 }
 
 // AgentRunFunc runs an agent by key with the given request.
@@ -84,7 +102,8 @@ type AgentRunFunc func(ctx context.Context, agentKey string, req DelegateRunRequ
 type DelegateResult struct {
 	Content      string
 	Iterations   int
-	DelegationID string // for async: the delegation ID to track/cancel
+	DelegationID string   // for async: the delegation ID to track/cancel
+	MediaPaths   []string // media file paths from delegation result
 }
 
 // linkSettings holds per-user restriction rules from agent_links.settings JSONB.
@@ -107,6 +126,7 @@ type DelegateManager struct {
 	hookEngine   *hooks.Engine       // optional: quality gate evaluation
 
 	active            sync.Map // delegationID → *DelegationTask
+	pendingArtifacts  sync.Map // sourceAgentID string → *DelegateArtifacts
 	completedMu       sync.Mutex
 	completedSessions []string // session keys pending cleanup
 }
@@ -190,7 +210,7 @@ func (dm *DelegateManager) Delegate(ctx context.Context, opts DelegateOpts) (*De
 	dm.saveDelegationHistory(task, result.Content, nil, duration)
 	slog.Info("delegation completed", "id", task.ID, "target", opts.TargetAgentKey, "iterations", result.Iterations)
 
-	return &DelegateResult{Content: result.Content, Iterations: result.Iterations, DelegationID: task.ID}, nil
+	return &DelegateResult{Content: result.Content, Iterations: result.Iterations, DelegationID: task.ID, MediaPaths: result.MediaPaths}, nil
 }
 
 // DelegateAsync spawns a delegation in the background and announces the result back.
@@ -227,25 +247,72 @@ func (dm *DelegateManager) DelegateAsync(ctx context.Context, opts DelegateOpts)
 		result, runErr := dm.runAgent(taskCtx, opts.TargetAgentKey, runReq)
 		duration := time.Since(startTime)
 
+		// Count sibling delegations still running (exclude self)
+		siblings := dm.ListActive(task.SourceAgentID)
+		siblingCount := 0
+		for _, s := range siblings {
+			if s.ID != task.ID {
+				siblingCount++
+			}
+		}
+		isLastDelegation := siblingCount == 0
+
 		// Announce result to parent via message bus
 		if dm.msgBus != nil && task.OriginChannel != "" {
 			elapsed := time.Since(task.CreatedAt)
-			dm.msgBus.PublishInbound(bus.InboundMessage{
-				Channel:  "system",
-				SenderID: fmt.Sprintf("delegate:%s", task.ID),
-				ChatID:   task.OriginChatID,
-				Content:  formatDelegateAnnounce(task, result, runErr, elapsed),
-				UserID:   task.UserID,
-				Metadata: map[string]string{
-					"origin_channel":      task.OriginChannel,
-					"origin_peer_kind":    task.OriginPeerKind,
-					"parent_agent":        task.SourceAgentKey,
-					"delegation_id":       task.ID,
-					"target_agent":        task.TargetAgentKey,
-					"origin_trace_id":     task.OriginTraceID.String(),
-					"origin_root_span_id": task.OriginRootSpanID.String(),
-				},
-			})
+
+			if siblingCount > 0 {
+				// Intermediate completion: accumulate artifacts + result summary.
+				// The final announce includes all sibling results so the lead doesn't
+				// need to call team_tasks to aggregate.
+				arts := &DelegateArtifacts{}
+				if result != nil {
+					arts.Media = result.MediaPaths
+					arts.Results = []DelegateResultSummary{{
+						AgentKey: task.TargetAgentKey,
+						Content:  result.Content,
+						HasMedia: len(result.MediaPaths) > 0,
+					}}
+				} else if runErr != nil {
+					arts.Results = []DelegateResultSummary{{
+						AgentKey: task.TargetAgentKey,
+						Content:  fmt.Sprintf("[failed] %s", runErr.Error()),
+					}}
+				}
+				dm.accumulateArtifacts(task.SourceAgentID, arts)
+				slog.Info("delegation announce suppressed (siblings still running)",
+					"id", task.ID, "target", task.TargetAgentKey, "siblings", siblingCount)
+			} else {
+				// Last completion: collect all accumulated artifacts + own result
+				artifacts := dm.collectArtifacts(task.SourceAgentID)
+				if result != nil {
+					artifacts.Media = append(artifacts.Media, result.MediaPaths...)
+					artifacts.Results = append(artifacts.Results, DelegateResultSummary{
+						AgentKey: task.TargetAgentKey,
+						Content:  result.Content,
+						HasMedia: len(result.MediaPaths) > 0,
+					})
+				}
+
+				announceMsg := bus.InboundMessage{
+					Channel:  "system",
+					SenderID: fmt.Sprintf("delegate:%s", task.ID),
+					ChatID:   task.OriginChatID,
+					Content:  formatDelegateAnnounce(task, artifacts, runErr, elapsed),
+					UserID:   task.UserID,
+					Metadata: map[string]string{
+						"origin_channel":      task.OriginChannel,
+						"origin_peer_kind":    task.OriginPeerKind,
+						"parent_agent":        task.SourceAgentKey,
+						"delegation_id":       task.ID,
+						"target_agent":        task.TargetAgentKey,
+						"origin_trace_id":     task.OriginTraceID.String(),
+						"origin_root_span_id": task.OriginRootSpanID.String(),
+					},
+					Media: artifacts.Media,
+				}
+				dm.msgBus.PublishInbound(announceMsg)
+			}
 		}
 
 		if runErr != nil {
@@ -265,7 +332,9 @@ func (dm *DelegateManager) DelegateAsync(ctx context.Context, opts DelegateOpts)
 				resultContent := ""
 				if result != nil {
 					resultContent = result.Content
-					dm.autoCompleteTeamTask(task, resultContent)
+					if isLastDelegation {
+						dm.autoCompleteTeamTask(task, resultContent)
+					}
 				}
 				dm.saveDelegationHistory(task, resultContent, nil, duration)
 			}
@@ -355,6 +424,11 @@ func (dm *DelegateManager) prepareDelegation(ctx context.Context, opts DelegateO
 		OriginTraceID:    tracing.TraceIDFromContext(ctx),
 		OriginRootSpanID: tracing.ParentSpanIDFromContext(ctx),
 		TeamTaskID:       opts.TeamTaskID,
+	}
+
+	// Carry team_id from the link (for delegation history filtering by team)
+	if link.TeamID != nil {
+		task.TeamID = *link.TeamID
 	}
 
 	return task, link, nil

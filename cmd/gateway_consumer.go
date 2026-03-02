@@ -152,11 +152,21 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 				"- Address the group naturally. If the history shows a multi-person conversation, consider the full context before answering."
 		}
 
+		// Delegation announces carry media as ForwardMedia (not deleted, forwarded to output).
+		// User-uploaded media goes in Media (loaded as images for LLM, then deleted).
+		var reqMedia, fwdMedia []string
+		if msg.Metadata["delegation_id"] != "" || msg.Metadata["subagent_id"] != "" {
+			fwdMedia = msg.Media
+		} else {
+			reqMedia = msg.Media
+		}
+
 		// Schedule through main lane (per-session concurrency controlled by maxConcurrent)
 		outCh := sched.ScheduleWithOpts(ctx, "main", agent.RunRequest{
 			SessionKey:        sessionKey,
 			Message:           msg.Content,
-			Media:             msg.Media,
+			Media:             reqMedia,
+			ForwardMedia:      fwdMedia,
 			Channel:           msg.Channel,
 			ChatID:            msg.ChatID,
 			PeerKind:          peerKind,
@@ -332,6 +342,7 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			outCh := sched.Schedule(ctx, scheduler.LaneSubagent, agent.RunRequest{
 				SessionKey:       sessionKey,
 				Message:          msg.Content,
+				ForwardMedia:     msg.Media,
 				Channel:          origChannel,
 				ChatID:           msg.ChatID,
 				PeerKind:         origPeerKind,
@@ -356,7 +367,8 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 				}
 
 				// Suppress empty/NO_REPLY (matching TS normalize-reply.ts / tokens.ts).
-				if outcome.Result.Content == "" || agent.IsSilentReply(outcome.Result.Content) {
+				isSilent := outcome.Result.Content == "" || agent.IsSilentReply(outcome.Result.Content)
+				if isSilent && len(outcome.Result.Media) == 0 {
 					slog.Info("subagent announce: suppressed silent/empty reply",
 						"subagent", senderID,
 						"label", label,
@@ -365,11 +377,22 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 				}
 
 				// Deliver agent's reformulated response to origin channel.
-				msgBus.PublishOutbound(bus.OutboundMessage{
+				announceContent := outcome.Result.Content
+				if isSilent {
+					announceContent = "" // suppress NO_REPLY text but still send media
+				}
+				outMsg := bus.OutboundMessage{
 					Channel: origCh,
 					ChatID:  chatID,
-					Content: outcome.Result.Content,
-				})
+					Content: announceContent,
+				}
+				for _, mr := range outcome.Result.Media {
+					outMsg.Media = append(outMsg.Media, bus.MediaAttachment{
+						URL:         mr.Path,
+						ContentType: mr.ContentType,
+					})
+				}
+				msgBus.PublishOutbound(outMsg)
 			}(origChannel, msg.ChatID, msg.SenderID, msg.Metadata["subagent_label"])
 			continue
 		}
@@ -417,6 +440,7 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			outCh := sched.Schedule(ctx, scheduler.LaneDelegate, agent.RunRequest{
 				SessionKey:       sessionKey,
 				Message:          msg.Content,
+				ForwardMedia:     msg.Media,
 				Channel:          origChannel,
 				ChatID:           msg.ChatID,
 				PeerKind:         origPeerKind,
@@ -438,15 +462,27 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 					})
 					return
 				}
-				if outcome.Result.Content == "" || agent.IsSilentReply(outcome.Result.Content) {
+				isSilent := outcome.Result.Content == "" || agent.IsSilentReply(outcome.Result.Content)
+				if isSilent && len(outcome.Result.Media) == 0 {
 					slog.Info("delegate announce: suppressed silent/empty reply", "delegation", senderID)
 					return
 				}
-				msgBus.PublishOutbound(bus.OutboundMessage{
+				announceContent := outcome.Result.Content
+				if isSilent {
+					announceContent = "" // suppress NO_REPLY text but still send media
+				}
+				outMsg := bus.OutboundMessage{
 					Channel: origCh,
 					ChatID:  chatID,
-					Content: outcome.Result.Content,
-				})
+					Content: announceContent,
+				}
+				for _, mr := range outcome.Result.Media {
+					outMsg.Media = append(outMsg.Media, bus.MediaAttachment{
+						URL:         mr.Path,
+						ContentType: mr.ContentType,
+					})
+				}
+				msgBus.PublishOutbound(outMsg)
 			}(origChannel, msg.ChatID, msg.SenderID)
 			continue
 		}

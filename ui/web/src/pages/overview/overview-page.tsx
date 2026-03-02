@@ -1,11 +1,15 @@
 import { useEffect, useState, useCallback } from "react";
-import { Activity, Bot, History, Zap } from "lucide-react";
+import { Activity, Bot, History, Zap, AlertTriangle } from "lucide-react";
+import { Link } from "react-router";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatusBadge } from "@/components/shared/status-badge";
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { useAuthStore } from "@/stores/use-auth-store";
 import { useWsCall } from "@/hooks/use-ws-call";
 import { useWsEvent } from "@/hooks/use-ws-event";
+import { useProviders } from "@/pages/providers/hooks/use-providers";
 import { Methods, Events } from "@/api/protocol";
+import { ROUTES } from "@/lib/constants";
 
 interface HealthPayload {
   status?: string;
@@ -52,7 +56,11 @@ export function OverviewPage() {
   const connected = useAuthStore((s) => s.connected);
   const { call: fetchHealth, data: health } = useWsCall<HealthPayload>(Methods.HEALTH);
   const { call: fetchStatus, data: status } = useWsCall<StatusPayload>(Methods.STATUS);
+  const { providers, loading: providersLoading } = useProviders();
   const [, setLastUpdate] = useState(0);
+
+  const hasNoProviders = !providersLoading && providers.length === 0;
+  const hasNoEnabledProviders = !providersLoading && providers.length > 0 && !providers.some((p) => p.enabled);
 
   useEffect(() => {
     if (connected) {
@@ -81,6 +89,23 @@ export function OverviewPage() {
           />
         }
       />
+
+      {(hasNoProviders || hasNoEnabledProviders) && (
+        <Alert>
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>
+            {hasNoProviders ? "No LLM providers configured" : "No LLM providers enabled"}
+          </AlertTitle>
+          <AlertDescription>
+            {hasNoProviders
+              ? "You need to add at least one LLM provider before agents can work. "
+              : "All providers are currently disabled. Enable at least one to start using agents. "}
+            <Link to={ROUTES.PROVIDERS} className="font-medium underline underline-offset-4 hover:text-foreground">
+              Go to Provider Settings
+            </Link>
+          </AlertDescription>
+        </Alert>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard

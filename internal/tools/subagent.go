@@ -131,7 +131,6 @@ var SubagentDenyLeaf = []string{
 	"sessions_history",
 	"sessions_spawn",
 	"spawn",
-	"subagent",
 }
 
 // Spawn creates a new subagent task that runs asynchronously.

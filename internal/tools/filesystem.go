@@ -9,8 +9,17 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
 	"github.com/nextlevelbuilder/goclaw/internal/sandbox"
 )
+
+// virtualSystemFiles are files dynamically injected into the system prompt.
+// They don't exist on disk — if the model tries to read them, return a hint.
+var virtualSystemFiles = map[string]string{
+	bootstrap.TeamFile:       "TEAM.md is already loaded in your system prompt. Refer to the TEAM.md section in your context above for team member information.",
+	bootstrap.DelegationFile: "DELEGATION.md is already loaded in your system prompt. Refer to the DELEGATION.md section in your context above for delegation instructions and available agents.",
+	bootstrap.AvailabilityFile: "AVAILABILITY.md is already loaded in your system prompt. Refer to the AVAILABILITY.md section in your context above for agent availability information.",
+}
 
 // ReadFileTool reads file contents, optionally through a sandbox container.
 type ReadFileTool struct {
@@ -87,6 +96,13 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 			}
 			return SilentResult(content)
 		}
+	}
+
+	// Virtual system files: TEAM.md, DELEGATION.md, AVAILABILITY.md are injected
+	// into the system prompt and don't exist on disk. Return a helpful hint.
+	baseName := filepath.Base(path)
+	if hint, ok := virtualSystemFiles[baseName]; ok {
+		return SilentResult(hint)
 	}
 
 	// Virtual FS: route memory files to DB (managed mode)

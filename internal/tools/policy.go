@@ -14,7 +14,7 @@ var toolGroups = map[string][]string{
 	"web":        {"web_search", "web_fetch"},
 	"fs":         {"read_file", "write_file", "list_files", "edit_file", "search", "glob"},
 	"runtime":    {"exec", "process"},
-	"sessions":   {"sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "subagents", "session_status"},
+	"sessions":   {"sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "session_status"},
 	"ui":         {"browser", "canvas"},
 	"automation": {"cron", "gateway"},
 	"messaging":  {"message"},
@@ -24,7 +24,7 @@ var toolGroups = map[string][]string{
 	"goclaw": {
 		"browser", "canvas", "nodes", "cron", "message", "gateway",
 		"agents_list", "sessions_list", "sessions_history", "sessions_send",
-		"sessions_spawn", "subagents", "session_status",
+		"sessions_spawn", "session_status",
 		"memory_search", "memory_get", "web_search", "web_fetch", "read_image", "create_image",
 	},
 }

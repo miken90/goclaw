@@ -242,8 +242,12 @@ func (m *AgentsMethods) handleFilesSet(_ context.Context, client *gateway.Client
 			return
 		}
 
-		// Invalidate agent cache so new bootstrap content takes effect
+		// Invalidate both caches so the new content is served immediately
+		// without waiting for the ContextFileInterceptor's 5-minute TTL to expire.
 		m.agents.InvalidateAgent(params.AgentID)
+		if m.interceptor != nil {
+			m.interceptor.InvalidateAgent(ag.ID)
+		}
 
 		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
 			"agentId": params.AgentID,

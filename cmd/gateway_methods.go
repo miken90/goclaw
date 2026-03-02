@@ -12,12 +12,12 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 )
 
-func registerAllMethods(server *gateway.Server, agents *agent.Router, sessStore store.SessionStore, cronStore store.CronStore, pairingStore store.PairingStore, cfg *config.Config, cfgPath, workspace, dataDir string, msgBus *bus.MessageBus, execApprovalMgr *tools.ExecApprovalManager, agentStore store.AgentStore, isManaged bool, skillStore store.SkillStore, configSecretsStore store.ConfigSecretsStore, teamStore store.TeamStore) *methods.PairingMethods {
+func registerAllMethods(server *gateway.Server, agents *agent.Router, sessStore store.SessionStore, cronStore store.CronStore, pairingStore store.PairingStore, cfg *config.Config, cfgPath, workspace, dataDir string, msgBus *bus.MessageBus, execApprovalMgr *tools.ExecApprovalManager, agentStore store.AgentStore, isManaged bool, skillStore store.SkillStore, configSecretsStore store.ConfigSecretsStore, teamStore store.TeamStore, contextFileInterceptor *tools.ContextFileInterceptor) *methods.PairingMethods {
 	router := server.Router()
 
 	// Phase 1: Core methods
 	methods.NewChatMethods(agents, sessStore, isManaged, server.RateLimiter()).Register(router)
-	methods.NewAgentsMethods(agents, cfg, cfgPath, workspace, agentStore, isManaged).Register(router)
+	methods.NewAgentsMethods(agents, cfg, cfgPath, workspace, agentStore, isManaged, contextFileInterceptor).Register(router)
 	methods.NewSessionsMethods(sessStore).Register(router)
 	methods.NewConfigMethods(cfg, cfgPath, isManaged, configSecretsStore).Register(router)
 

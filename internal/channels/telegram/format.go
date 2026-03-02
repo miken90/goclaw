@@ -11,10 +11,41 @@ import (
 // --- Markdown to Telegram HTML conversion ---
 // Adapted from PicoClaw's telegram.go, extended with table support (matching TS "code" mode).
 
+// htmlTagToMarkdown converts common HTML tags in LLM output to markdown equivalents
+// so they survive the escapeHTML step and get re-converted by the markdown pipeline.
+var htmlToMdReplacers = []struct {
+	re   *regexp.Regexp
+	repl string
+}{
+	{regexp.MustCompile(`(?i)<br\s*/?>`), "\n"},
+	{regexp.MustCompile(`(?i)</?p\s*>`), "\n"},
+	{regexp.MustCompile(`(?i)<b>([\s\S]*?)</b>`), "**$1**"},
+	{regexp.MustCompile(`(?i)<strong>([\s\S]*?)</strong>`), "**$1**"},
+	{regexp.MustCompile(`(?i)<i>([\s\S]*?)</i>`), "_$1_"},
+	{regexp.MustCompile(`(?i)<em>([\s\S]*?)</em>`), "_$1_"},
+	{regexp.MustCompile(`(?i)<s>([\s\S]*?)</s>`), "~~$1~~"},
+	{regexp.MustCompile(`(?i)<strike>([\s\S]*?)</strike>`), "~~$1~~"},
+	{regexp.MustCompile(`(?i)<del>([\s\S]*?)</del>`), "~~$1~~"},
+	{regexp.MustCompile(`(?i)<code>([\s\S]*?)</code>`), "`$1`"},
+	{regexp.MustCompile(`(?i)<a\s+href="([^"]+)"[^>]*>([\s\S]*?)</a>`), "[$2]($1)"},
+}
+
+func htmlTagToMarkdown(text string) string {
+	for _, r := range htmlToMdReplacers {
+		text = r.re.ReplaceAllString(text, r.repl)
+	}
+	return text
+}
+
 func markdownToTelegramHTML(text string) string {
 	if text == "" {
 		return ""
 	}
+
+	// Pre-process: convert any HTML tags in LLM output to markdown equivalents.
+	// LLMs sometimes output raw HTML (e.g. <b>bold</b>) which would get escaped
+	// by escapeHTML() and displayed as literal "<b>bold</b>" text.
+	text = htmlTagToMarkdown(text)
 
 	// Extract markdown tables FIRST — uses dedicated \x00TB placeholders.
 	// Tables render as <pre> (monospace block) WITHOUT <code> wrapper,

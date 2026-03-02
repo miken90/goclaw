@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/store"
+	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
 )
 
 // TeamTasksTool exposes the shared team task list to agents.
@@ -93,6 +94,8 @@ func (t *TeamTasksTool) Execute(ctx context.Context, args map[string]interface{}
 	}
 }
 
+const listTasksLimit = 20
+
 func (t *TeamTasksTool) executeList(ctx context.Context, args map[string]interface{}) *Result {
 	team, _, err := t.manager.resolveTeam(ctx)
 	if err != nil {
@@ -111,10 +114,21 @@ func (t *TeamTasksTool) executeList(ctx context.Context, args map[string]interfa
 		tasks[i].Result = nil
 	}
 
-	out, _ := json.Marshal(map[string]interface{}{
+	hasMore := len(tasks) > listTasksLimit
+	if hasMore {
+		tasks = tasks[:listTasksLimit]
+	}
+
+	resp := map[string]interface{}{
 		"tasks": tasks,
 		"count": len(tasks),
-	})
+	}
+	if hasMore {
+		resp["note"] = fmt.Sprintf("Showing first %d tasks. Use action=search with a query to find older tasks.", listTasksLimit)
+		resp["has_more"] = true
+	}
+
+	out, _ := json.Marshal(resp)
 	return SilentResult(string(out))
 }
 
@@ -228,6 +242,13 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]inter
 		return ErrorResult("failed to create task: " + err.Error())
 	}
 
+	t.manager.broadcastTeamEvent(protocol.EventTeamTaskCreated, map[string]string{
+		"team_id": team.ID.String(),
+		"task_id": task.ID.String(),
+		"subject": subject,
+		"status":  status,
+	})
+
 	return NewResult(fmt.Sprintf("Task created: %s (id=%s, status=%s)", subject, task.ID, status))
 }
 
@@ -280,6 +301,14 @@ func (t *TeamTasksTool) executeComplete(ctx context.Context, args map[string]int
 
 	if err := t.manager.teamStore.CompleteTask(ctx, taskID, result); err != nil {
 		return ErrorResult("failed to complete task: " + err.Error())
+	}
+
+	// Resolve team for event payload
+	if team, _, teamErr := t.manager.resolveTeam(ctx); teamErr == nil {
+		t.manager.broadcastTeamEvent(protocol.EventTeamTaskCompleted, map[string]string{
+			"team_id": team.ID.String(),
+			"task_id": taskIDStr,
+		})
 	}
 
 	return NewResult(fmt.Sprintf("Task %s completed. Dependent tasks have been unblocked.", taskIDStr))

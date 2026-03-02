@@ -72,11 +72,8 @@ func builtinToolSeedData() []store.BuiltinToolDef {
 			Metadata: json.RawMessage(`{"config_hint":"Config → Cron"}`),
 		},
 
-		// subagents
-		{Name: "spawn", DisplayName: "Spawn Subagent", Description: "Spawn an asynchronous background subagent", Category: "subagents", Enabled: true,
-			Metadata: json.RawMessage(`{"config_hint":"Config → Agents Defaults"}`),
-		},
-		{Name: "subagent", DisplayName: "Subagent", Description: "Run a synchronous subagent and wait for result", Category: "subagents", Enabled: true,
+		// subagents & delegation (unified spawn tool)
+		{Name: "spawn", DisplayName: "Spawn / Delegate", Description: "Spawn a subagent or delegate to another agent", Category: "subagents", Enabled: true,
 			Metadata: json.RawMessage(`{"config_hint":"Config → Agents Defaults"}`),
 		},
 
@@ -84,9 +81,6 @@ func builtinToolSeedData() []store.BuiltinToolDef {
 		{Name: "skill_search", DisplayName: "Skill Search", Description: "Search available skills by keyword or description", Category: "skills", Enabled: true},
 
 		// delegation
-		{Name: "delegate", DisplayName: "Delegate", Description: "Delegate a task to another agent", Category: "delegation", Enabled: true,
-			Requires: []string{"managed_mode", "agent_links"},
-		},
 		{Name: "delegate_search", DisplayName: "Delegate Search", Description: "Search for agents to delegate tasks to", Category: "delegation", Enabled: true,
 			Requires: []string{"managed_mode", "agent_links"},
 		},

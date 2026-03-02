@@ -137,11 +137,10 @@ func (m *TeamsMethods) handleCreate(_ context.Context, client *gateway.Client, r
 		}
 	}
 
-	// Auto-create bidirectional agent_links between all team members.
-	// This enables delegation between teammates.
+	// Auto-create outbound agent_links from lead to each member.
+	// Only the lead can delegate to members.
 	if m.linkStore != nil {
-		allAgents := append([]*store.AgentData{leadAgent}, memberAgents...)
-		m.autoCreateTeamLinks(ctx, team.ID, allAgents, client.UserID())
+		m.autoCreateTeamLinks(ctx, team.ID, leadAgent, memberAgents, client.UserID())
 	}
 
 	// Invalidate agent caches so TEAM.md gets injected
@@ -353,18 +352,11 @@ func (m *TeamsMethods) handleAddMember(_ context.Context, client *gateway.Client
 		return
 	}
 
-	// Auto-create bidirectional links between new member and existing members
+	// Auto-create outbound link from lead to new member
 	if m.linkStore != nil {
-		existingMembers, _ := m.teamStore.ListMembers(ctx, teamID)
-		for _, member := range existingMembers {
-			if member.AgentID == ag.ID {
-				continue
-			}
-			memberAgent, err := m.agentStore.GetByID(ctx, member.AgentID)
-			if err != nil {
-				continue
-			}
-			m.autoCreateTeamLinks(ctx, teamID, []*store.AgentData{ag, memberAgent}, client.UserID())
+		leadAgent, err := m.agentStore.GetByID(ctx, team.LeadAgentID)
+		if err == nil {
+			m.autoCreateTeamLinks(ctx, teamID, leadAgent, []*store.AgentData{ag}, client.UserID())
 		}
 	}
 
@@ -464,25 +456,27 @@ func (m *TeamsMethods) invalidateTeamCaches(ctx context.Context, teamID uuid.UUI
 
 // --- helpers ---
 
-// autoCreateTeamLinks creates bidirectional agent_links between all team members.
-// Silently skips existing links (UNIQUE constraint).
-func (m *TeamsMethods) autoCreateTeamLinks(ctx context.Context, teamID uuid.UUID, agents []*store.AgentData, createdBy string) {
-	for i := 0; i < len(agents); i++ {
-		for j := i + 1; j < len(agents); j++ {
-			link := &store.AgentLinkData{
-				SourceAgentID: agents[i].ID,
-				TargetAgentID: agents[j].ID,
-				Direction:     store.LinkDirectionBidirectional,
-				TeamID:        &teamID,
-				Description:   "auto-created by team",
-				MaxConcurrent: 3,
-				Status:        store.LinkStatusActive,
-				CreatedBy:     createdBy,
-			}
-			if err := m.linkStore.CreateLink(ctx, link); err != nil {
-				slog.Debug("teams: auto-link already exists or failed",
-					"source", agents[i].AgentKey, "target", agents[j].AgentKey, "error", err)
-			}
+// autoCreateTeamLinks creates outbound agent_links from lead to each member.
+// Only the lead can delegate to members — members cannot delegate back to lead
+// or to other members. Silently skips existing links (UNIQUE constraint).
+func (m *TeamsMethods) autoCreateTeamLinks(ctx context.Context, teamID uuid.UUID, leadAgent *store.AgentData, members []*store.AgentData, createdBy string) {
+	for _, member := range members {
+		if member.ID == leadAgent.ID {
+			continue
+		}
+		link := &store.AgentLinkData{
+			SourceAgentID: leadAgent.ID,
+			TargetAgentID: member.ID,
+			Direction:     store.LinkDirectionOutbound,
+			TeamID:        &teamID,
+			Description:   "auto-created by team",
+			MaxConcurrent: 3,
+			Status:        store.LinkStatusActive,
+			CreatedBy:     createdBy,
+		}
+		if err := m.linkStore.CreateLink(ctx, link); err != nil {
+			slog.Debug("teams: auto-link already exists or failed",
+				"source", leadAgent.AgentKey, "target", member.AgentKey, "error", err)
 		}
 	}
 }

@@ -45,13 +45,6 @@ export function SummoningModal({
     }
   }, [open]);
 
-  // Auto-close modal after completion
-  useEffect(() => {
-    if (status === "completed") {
-      const timer = setTimeout(() => onOpenChange(false), 1500);
-      return () => clearTimeout(timer);
-    }
-  }, [status, onOpenChange]);
 
   const handleSummoningEvent = useCallback(
     (payload: unknown) => {

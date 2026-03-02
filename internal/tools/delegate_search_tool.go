@@ -102,7 +102,7 @@ func (t *DelegateSearchTool) Execute(ctx context.Context, args map[string]interf
 	}, "", "  ")
 
 	return NewResult(string(data) +
-		"\n\nUse `delegate(agent=\"<agent_key>\", task=\"your task\")` to delegate to one of these agents.")
+		"\n\nUse `spawn(agent=\"<agent_key>\", task=\"your task\")` to delegate to one of these agents.")
 }
 
 // hybridSearch merges FTS and embedding results with weighted scoring.

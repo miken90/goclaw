@@ -171,16 +171,18 @@ func NewManagedResolver(deps ResolverDeps) ResolverFunc {
 
 		// Inject negative context so the model doesn't waste iterations probing
 		// unavailable capabilities (team_tasks, delegate_search, etc.).
-		if !hasTeam || !hasDelegation {
+		// Note: team agents have delegation targets via team links (TEAM.md),
+		// so only inject "no delegation" when both hasDelegation and hasTeam are false.
+		if !hasTeam || (!hasDelegation && !hasTeam) {
 			var notes []string
 			if !hasTeam {
 				notes = append(notes, "You are NOT part of any team. Do not use team_tasks or team_message tools.")
 			}
-			if !hasDelegation {
-				notes = append(notes, "You have NO delegation targets. Do not use delegate or delegate_search tools.")
+			if !hasDelegation && !hasTeam {
+				notes = append(notes, "You have NO delegation targets. Do not use spawn with agent parameter or delegate_search tools.")
 			}
 			contextFiles = append(contextFiles, bootstrap.ContextFile{
-				Path:    "AVAILABILITY.md",
+				Path:    bootstrap.AvailabilityFile,
 				Content: strings.Join(notes, "\n"),
 			})
 		}
@@ -328,9 +330,9 @@ func filterManualLinks(targets []store.AgentLinkData) []store.AgentLinkData {
 func buildDelegateAgentsMD(targets []store.AgentLinkData) string {
 	var sb strings.Builder
 	sb.WriteString("# Agent Delegation\n\n")
-	sb.WriteString("You have the `delegate` tool available. Use it to delegate tasks to other specialized agents.\n")
+	sb.WriteString("Use `spawn` with the `agent` parameter to delegate tasks to other specialized agents.\n")
 	sb.WriteString("The agent list below is complete and authoritative — answer questions about available agents directly from it.\n")
-	sb.WriteString("Only use `delegate` when you need to actually assign work, not to check who is available.\n\n")
+	sb.WriteString("Only delegate when you need to actually assign work, not to check who is available.\n\n")
 	sb.WriteString("## Available Agents\n")
 
 	for _, t := range targets {
@@ -342,7 +344,7 @@ func buildDelegateAgentsMD(targets []store.AgentLinkData) string {
 		if t.TargetDescription != "" {
 			sb.WriteString(t.TargetDescription + "\n")
 		}
-		sb.WriteString(fmt.Sprintf("→ `delegate(agent=\"%s\", task=\"describe the task\")`\n", t.TargetAgentKey))
+		sb.WriteString(fmt.Sprintf("→ `spawn(agent=\"%s\", task=\"describe the task\")`\n", t.TargetAgentKey))
 	}
 
 	sb.WriteString("\n## When to Delegate\n\n")
@@ -358,16 +360,16 @@ func buildDelegateAgentsMD(targets []store.AgentLinkData) string {
 func buildDelegateSearchInstruction(targetCount int) string {
 	return fmt.Sprintf(`# Agent Delegation
 
-You have the `+"`delegate`"+` and `+"`delegate_search`"+` tools available.
+You have the `+"`spawn`"+` tool (with `+"`agent`"+` parameter) and `+"`delegate_search`"+` tool available.
 Do NOT look for delegation info on disk — it is provided here.
 
 You have access to %d specialized agents. To find the right one:
 
 1. `+"`delegate_search(query=\"your keywords\")`"+` — search agents by expertise
-2. `+"`delegate(agent=\"agent-key\", task=\"describe the task\")`"+` — delegate the task
+2. `+"`spawn(agent=\"agent-key\", task=\"describe the task\")`"+` — delegate the task
 
 Example:
-- User asks about billing → `+"`delegate_search(query=\"billing payment\")`"+` → `+"`delegate(agent=\"billing-agent\", task=\"...\")`"+`
+- User asks about billing → `+"`delegate_search(query=\"billing payment\")`"+` → `+"`spawn(agent=\"billing-agent\", task=\"...\")`"+`
 
 Do NOT guess agent keys. Always search first.
 `, targetCount)
@@ -398,6 +400,8 @@ func buildTeamMD(team *store.TeamData, members []store.TeamMemberData, selfID uu
 	for _, m := range members {
 		if m.AgentID == selfID {
 			sb.WriteString(fmt.Sprintf("- **you** (%s)", m.Role))
+		} else if m.DisplayName != "" {
+			sb.WriteString(fmt.Sprintf("- **%s** `%s` (%s)", m.DisplayName, m.AgentKey, m.Role))
 		} else {
 			sb.WriteString(fmt.Sprintf("- **%s** (%s)", m.AgentKey, m.Role))
 		}
@@ -410,12 +414,33 @@ func buildTeamMD(team *store.TeamData, members []store.TeamMemberData, selfID uu
 	// Workflow guidance
 	sb.WriteString("\n## Workflow\n\n")
 	if selfRole == store.TeamRoleLead {
-		sb.WriteString("**MANDATORY**: ALWAYS use `team_tasks` to track work. NEVER call `delegate` without a task.\n\n")
+		sb.WriteString("**MANDATORY**: ALWAYS use `team_tasks` to track work. NEVER delegate without a task.\n\n")
+		sb.WriteString("**ONE task per ONE delegation.** Each task tracks one unit of work for one agent.\n")
+		sb.WriteString("When delegating to multiple agents, create a SEPARATE task for each.\n\n")
 		sb.WriteString("Every delegation MUST follow these 2 steps:\n")
 		sb.WriteString("1. `team_tasks` action=create, subject=<brief title> → returns task_id\n")
-		sb.WriteString("2. `delegate` agent=<member>, task=<instructions>, team_task_id=<the task_id from step 1>\n\n")
-		sb.WriteString("The system ENFORCES this — delegation without team_task_id will be rejected.\n")
-		sb.WriteString("The task auto-completes when delegation finishes.\n\n")
+		sb.WriteString("2. `spawn` agent=<member>, task=<instructions>, team_task_id=<the task_id from step 1>\n\n")
+		sb.WriteString("Example (2 agents):\n")
+		sb.WriteString("```\n")
+		sb.WriteString("team_tasks action=create, subject=\"Create illustration\" → task_id=A\n")
+		sb.WriteString("team_tasks action=create, subject=\"Write caption\" → task_id=B\n")
+		sb.WriteString("spawn agent=artist, task=\"...\", team_task_id=A\n")
+		sb.WriteString("spawn agent=writer, task=\"...\", team_task_id=B\n")
+		sb.WriteString("```\n\n")
+		sb.WriteString("The system ENFORCES this — spawn with agent but without team_task_id will be rejected.\n")
+		sb.WriteString("Each task auto-completes when its delegation finishes.\n\n")
+		sb.WriteString("When multiple delegations run in parallel, the system collects ALL results and delivers\n")
+		sb.WriteString("them to you in a single combined notification. Do NOT present partial results.\n\n")
+		sb.WriteString("## Orchestration Patterns\n\n")
+		sb.WriteString("You can orchestrate multiple rounds — not just one-shot parallel delegation:\n")
+		sb.WriteString("- **Sequential**: A finishes → review result → delegate to B with A's output as context\n")
+		sb.WriteString("- **Iterative**: A produces draft → delegate to B for review → delegate back to A with feedback\n")
+		sb.WriteString("- **Mixed**: A+B in parallel → review both → delegate to C combining their outputs\n\n")
+		sb.WriteString("After receiving delegation results, decide: present to user (if done) or continue orchestrating.\n\n")
+		sb.WriteString("**Communication**: When updating the user, distinguish between:\n")
+		sb.WriteString("- First delegation round → \"assigning to team\" / notifying who is working on what\n")
+		sb.WriteString("- Follow-up rounds (after receiving results) → \"updating tasks\" / sharing progress and next steps\n")
+		sb.WriteString("Never repeat the same announcement phrasing for follow-up delegations.\n\n")
 		sb.WriteString("`team_tasks` actions:\n")
 		sb.WriteString("- action=list → active tasks (pending/in_progress/blocked), no results shown\n")
 		sb.WriteString("- action=list, status=all → all tasks including completed\n")
@@ -427,6 +452,8 @@ func buildTeamMD(team *store.TeamData, members []store.TeamMemberData, selfID uu
 	} else {
 		sb.WriteString("As a member, when you receive a delegated task, just do the work.\n")
 		sb.WriteString("Task completion is handled automatically by the system.\n\n")
+		sb.WriteString("For long-running tasks, send progress updates to your lead:\n")
+		sb.WriteString("`team_message` action=send, to=<lead_key>, text=<progress update>\n\n")
 		sb.WriteString("`team_tasks` actions:\n")
 		sb.WriteString("- action=list → check team task board (active tasks)\n")
 		sb.WriteString("- action=get, task_id=<id> → read a completed task's full result\n")

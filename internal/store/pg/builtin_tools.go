@@ -141,6 +141,16 @@ func (s *PGBuiltinToolStore) Seed(ctx context.Context, tools []store.BuiltinTool
 		}
 	}
 
+	// Reconcile: remove stale entries not in the current seed list
+	names := make([]string, len(tools))
+	for i, t := range tools {
+		names[i] = t.Name
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM builtin_tools WHERE name != ALL($1)`, pqStringArray(names)); err != nil {
+		return fmt.Errorf("reconcile stale builtin tools: %w", err)
+	}
+
 	return tx.Commit()
 }
 

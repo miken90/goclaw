@@ -7,6 +7,7 @@ import (
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
+	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
 )
 
 // TeamMessageTool exposes the team mailbox to agents.
@@ -97,6 +98,17 @@ func (t *TeamMessageTool) executeSend(ctx context.Context, args map[string]inter
 	fromKey := t.manager.agentKeyFromID(ctx, agentID)
 	t.publishTeammateMessage(fromKey, toKey, text, ctx)
 
+	preview := text
+	if len(preview) > 100 {
+		preview = preview[:100] + "..."
+	}
+	t.manager.broadcastTeamEvent(protocol.EventTeamMessageSent, map[string]string{
+		"team_id": team.ID.String(),
+		"from":    fromKey,
+		"to":      toKey,
+		"preview": preview,
+	})
+
 	return NewResult(fmt.Sprintf("Message sent to %s.", toKey))
 }
 
@@ -134,6 +146,17 @@ func (t *TeamMessageTool) executeBroadcast(ctx context.Context, args map[string]
 			t.publishTeammateMessage(fromKey, m.AgentKey, text, ctx)
 		}
 	}
+
+	preview := text
+	if len(preview) > 100 {
+		preview = preview[:100] + "..."
+	}
+	t.manager.broadcastTeamEvent(protocol.EventTeamMessageSent, map[string]string{
+		"team_id": team.ID.String(),
+		"from":    fromKey,
+		"to":      "broadcast",
+		"preview": preview,
+	})
 
 	return NewResult(fmt.Sprintf("Broadcast sent to all teammates."))
 }

@@ -26,6 +26,13 @@ const (
 	// Agent handoff event (payload: from_agent, to_agent, reason).
 	EventHandoff = "handoff"
 
+	// Team activity events (real-time team workflow visibility).
+	EventTeamTaskCreated     = "team.task.created"
+	EventTeamTaskCompleted   = "team.task.completed"
+	EventTeamMessageSent     = "team.message.sent"
+	EventDelegationStarted   = "delegation.started"
+	EventDelegationCompleted = "delegation.completed"
+
 	// Cache invalidation events (internal, not forwarded to WS clients).
 	EventCacheInvalidate = "cache.invalidate"
 )

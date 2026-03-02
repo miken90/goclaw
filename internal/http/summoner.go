@@ -39,6 +39,9 @@ var summoningFiles = []string{
 // fileTagRe parses <file name="SOUL.md">content</file> from LLM output.
 var fileTagRe = regexp.MustCompile(`(?s)<file\s+name="([^"]+)">\s*(.*?)\s*</file>`)
 
+// identityNameRe extracts the Name field from IDENTITY.md format: - **Name:** value
+var identityNameRe = regexp.MustCompile(`(?m)^-\s*\*\*Name:\*\*\s*(.+)$`)
+
 // frontmatterTagRe parses <frontmatter>short expertise summary</frontmatter> from LLM output.
 var frontmatterTagRe = regexp.MustCompile(`(?s)<frontmatter>\s*(.*?)\s*</frontmatter>`)
 
@@ -81,14 +84,21 @@ func (s *AgentSummoner) SummonAgent(agentID uuid.UUID, providerName, model, desc
 
 	s.storeFiles(ctx, agentID, files)
 
-	// Save frontmatter — use LLM-generated if available, otherwise fallback to truncated description
+	// Save frontmatter + display_name extracted from IDENTITY.md
+	updates := map[string]any{}
 	fm := files[frontmatterKey]
 	if fm == "" {
 		fm = truncateUTF8(description, 200)
 	}
 	if fm != "" {
-		if err := s.agents.Update(ctx, agentID, map[string]any{"frontmatter": fm}); err != nil {
-			slog.Warn("summoning: failed to save frontmatter", "agent", agentID, "error", err)
+		updates["frontmatter"] = fm
+	}
+	if name := extractIdentityName(files[bootstrap.IdentityFile]); name != "" {
+		updates["display_name"] = name
+	}
+	if len(updates) > 0 {
+		if err := s.agents.Update(ctx, agentID, updates); err != nil {
+			slog.Warn("summoning: failed to save agent metadata", "agent", agentID, "error", err)
 		}
 	}
 
@@ -129,10 +139,17 @@ func (s *AgentSummoner) RegenerateAgent(agentID uuid.UUID, providerName, model, 
 
 	s.storeFiles(ctx, agentID, files)
 
-	// Update frontmatter if LLM generated one
+	// Update frontmatter + display_name if IDENTITY.md was regenerated
+	updates := map[string]any{}
 	if fm, ok := files[frontmatterKey]; ok && fm != "" {
-		if err := s.agents.Update(ctx, agentID, map[string]any{"frontmatter": fm}); err != nil {
-			slog.Warn("summoning: failed to save frontmatter", "agent", agentID, "error", err)
+		updates["frontmatter"] = fm
+	}
+	if name := extractIdentityName(files[bootstrap.IdentityFile]); name != "" {
+		updates["display_name"] = name
+	}
+	if len(updates) > 0 {
+		if err := s.agents.Update(ctx, agentID, updates); err != nil {
+			slog.Warn("summoning: failed to save agent metadata", "agent", agentID, "error", err)
 		}
 	}
 
@@ -331,6 +348,19 @@ Output format:
 </file>
 `)
 	return sb.String()
+}
+
+// extractIdentityName extracts the Name field from IDENTITY.md content.
+// Matches format: - **Name:** value
+func extractIdentityName(content string) string {
+	if content == "" {
+		return ""
+	}
+	m := identityNameRe.FindStringSubmatch(content)
+	if len(m) < 2 {
+		return ""
+	}
+	return strings.TrimSpace(m[1])
 }
 
 // truncateUTF8 truncates s to at most maxLen runes, appending "…" if truncated.

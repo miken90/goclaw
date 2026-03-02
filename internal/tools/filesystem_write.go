@@ -59,6 +59,10 @@ func (t *WriteFileTool) Parameters() map[string]interface{} {
 				"type":        "string",
 				"description": "Content to write",
 			},
+			"deliver": map[string]interface{}{
+				"type":        "boolean",
+				"description": "If true, deliver this file to the user as an attachment (image, document, etc.)",
+			},
 		},
 		"required": []string{"path", "content"},
 	}
@@ -67,6 +71,7 @@ func (t *WriteFileTool) Parameters() map[string]interface{} {
 func (t *WriteFileTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
 	path, _ := args["path"].(string)
 	content, _ := args["content"].(string)
+	deliver, _ := args["deliver"].(bool)
 	if path == "" {
 		return ErrorResult("path is required")
 	}
@@ -94,7 +99,7 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]interface{}
 	// Sandbox routing (sandboxKey from ctx — thread-safe)
 	sandboxKey := ToolSandboxKeyFromCtx(ctx)
 	if t.sandboxMgr != nil && sandboxKey != "" {
-		return t.executeInSandbox(ctx, path, content, sandboxKey)
+		return t.executeInSandbox(ctx, path, content, sandboxKey, deliver)
 	}
 
 	// Host execution — use per-user workspace from context if available (managed mode)
@@ -118,10 +123,14 @@ func (t *WriteFileTool) Execute(ctx context.Context, args map[string]interface{}
 		return ErrorResult(fmt.Sprintf("failed to write file: %v", err))
 	}
 
-	return SilentResult(fmt.Sprintf("File written: %s (%d bytes)", path, len(content)))
+	result := SilentResult(fmt.Sprintf("File written: %s (%d bytes)", path, len(content)))
+	if deliver {
+		result.Media = []string{resolved}
+	}
+	return result
 }
 
-func (t *WriteFileTool) executeInSandbox(ctx context.Context, path, content, sandboxKey string) *Result {
+func (t *WriteFileTool) executeInSandbox(ctx context.Context, path, content, sandboxKey string, deliver bool) *Result {
 	bridge, err := t.getFsBridge(ctx, sandboxKey)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("sandbox error: %v", err))
@@ -131,7 +140,17 @@ func (t *WriteFileTool) executeInSandbox(ctx context.Context, path, content, san
 		return ErrorResult(fmt.Sprintf("failed to write file: %v", err))
 	}
 
-	return SilentResult(fmt.Sprintf("File written: %s (%d bytes)", path, len(content)))
+	result := SilentResult(fmt.Sprintf("File written: %s (%d bytes)", path, len(content)))
+	if deliver {
+		// Sandbox workspace is bind-mounted — resolve to host path for delivery
+		workspace := ToolWorkspaceFromCtx(ctx)
+		if workspace == "" {
+			workspace = t.workspace
+		}
+		hostPath := filepath.Join(workspace, path)
+		result.Media = []string{hostPath}
+	}
+	return result
 }
 
 func (t *WriteFileTool) getFsBridge(ctx context.Context, sandboxKey string) (*sandbox.FsBridge, error) {

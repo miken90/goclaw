@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -68,6 +69,30 @@ func (dm *DelegateManager) ActiveCountForTarget(targetID uuid.UUID) int {
 	return count
 }
 
+// accumulateArtifacts merges new artifacts into the pending set for a source agent.
+// Called for intermediate delegation completions (when siblings are still running).
+func (dm *DelegateManager) accumulateArtifacts(sourceAgentID uuid.UUID, arts *DelegateArtifacts) {
+	key := sourceAgentID.String()
+	existing, _ := dm.pendingArtifacts.Load(key)
+	var merged DelegateArtifacts
+	if existing != nil {
+		merged = *existing.(*DelegateArtifacts)
+	}
+	merged.Media = append(merged.Media, arts.Media...)
+	merged.Results = append(merged.Results, arts.Results...)
+	dm.pendingArtifacts.Store(key, &merged)
+}
+
+// collectArtifacts retrieves and removes all accumulated artifacts for a source agent.
+// Called when the last delegation completes (siblingCount == 0).
+func (dm *DelegateManager) collectArtifacts(sourceAgentID uuid.UUID) *DelegateArtifacts {
+	key := sourceAgentID.String()
+	if pending, ok := dm.pendingArtifacts.LoadAndDelete(key); ok {
+		return pending.(*DelegateArtifacts)
+	}
+	return &DelegateArtifacts{}
+}
+
 // trackCompleted records a delegate session key for deferred cleanup.
 func (dm *DelegateManager) trackCompleted(task *DelegationTask) {
 	if dm.sessionStore == nil {
@@ -101,6 +126,7 @@ func (dm *DelegateManager) flushCompletedSessions() {
 // autoCompleteTeamTask attempts to claim+complete the associated team task.
 // Called after a delegation finishes successfully. Errors are logged but not fatal.
 // On success, flushes all tracked delegate sessions (task done = context no longer needed).
+// Also persists a team message record for audit trail / visualization.
 func (dm *DelegateManager) autoCompleteTeamTask(task *DelegationTask, resultContent string) {
 	if dm.teamStore == nil || task.TeamTaskID == uuid.Nil {
 		return
@@ -114,6 +140,23 @@ func (dm *DelegateManager) autoCompleteTeamTask(task *DelegationTask, resultCont
 			"task_id", task.TeamTaskID, "delegation_id", task.ID)
 		// Task done — flush delegate sessions
 		dm.flushCompletedSessions()
+
+		// Persist delegation completion as team message for audit trail
+		if task.TeamID != uuid.Nil {
+			summary := resultContent
+			if len(summary) > 500 {
+				summary = summary[:500] + "..."
+			}
+			taskID := task.TeamTaskID
+			_ = dm.teamStore.SendMessage(context.Background(), &store.TeamMessageData{
+				TeamID:      task.TeamID,
+				FromAgentID: task.TargetAgentID,
+				ToAgentID:   &task.SourceAgentID,
+				Content:     fmt.Sprintf("[Delegation completed] %s", summary),
+				MessageType: store.TeamMessageTypeChat,
+				TaskID:      &taskID,
+			})
+		}
 	}
 }
 
@@ -134,6 +177,9 @@ func (dm *DelegateManager) saveDelegationHistory(task *DelegationTask, resultCon
 		DurationMS:    int(duration.Milliseconds()),
 	}
 
+	if task.TeamID != uuid.Nil {
+		record.TeamID = &task.TeamID
+	}
 	if task.TeamTaskID != uuid.Nil {
 		record.TeamTaskID = &task.TeamTaskID
 	}

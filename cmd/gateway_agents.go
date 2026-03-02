@@ -369,7 +369,7 @@ func setupTTS(cfg *config.Config) *tts.Manager {
 // setupHeartbeat creates and configures the heartbeat service from config.
 // Returns nil if heartbeats are disabled (every="0m" or no config).
 // Matching TS startHeartbeatRunner().
-func setupHeartbeat(cfg *config.Config, router *agent.Router, sess store.SessionStore, msgBus *bus.MessageBus, workspace string) *heartbeat.Service {
+func setupHeartbeat(cfg *config.Config, router *agent.Router, sess store.SessionStore, msgBus *bus.MessageBus, workspace string, managedStores *store.Stores) *heartbeat.Service {
 	hbCfg := cfg.Agents.Defaults.Heartbeat
 
 	// Determine interval
@@ -389,7 +389,7 @@ func setupHeartbeat(cfg *config.Config, router *agent.Router, sess store.Session
 		return nil
 	}
 
-	agentID := cfg.ResolveDefaultAgentID()
+	agentID := resolveDefaultAgentManaged(cfg, managedStores)
 
 	svcCfg := heartbeat.Config{
 		AgentID:   agentID,
@@ -439,4 +439,22 @@ func setupHeartbeat(cfg *config.Config, router *agent.Router, sess store.Session
 // parseDuration parses a duration string like "30m", "1h", "0m".
 func parseDuration(s string) (time.Duration, error) {
 	return time.ParseDuration(s)
+}
+
+// resolveDefaultAgentManaged resolves the default agent ID, falling back to the
+// managed-mode DB when config returns the generic "default" (which doesn't exist
+// as a real agent in managed mode — agents live in the DB, not config).
+func resolveDefaultAgentManaged(cfg *config.Config, managedStores *store.Stores) string {
+	agentID := cfg.ResolveDefaultAgentID()
+
+	if managedStores == nil || managedStores.Agents == nil || agentID != config.DefaultAgentID {
+		return agentID
+	}
+
+	agent, err := managedStores.Agents.GetDefault(context.Background())
+	if err != nil {
+		slog.Warn("resolveDefaultAgentManaged: no default agent in DB", "error", err)
+		return agentID
+	}
+	return agent.AgentKey
 }

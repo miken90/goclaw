@@ -30,7 +30,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   sessions: "Sessions",
   messaging: "Messaging",
   scheduling: "Scheduling",
-  subagents: "Subagents",
+  subagents: "Agents",
   skills: "Skills",
   delegation: "Delegation",
   teams: "Teams",

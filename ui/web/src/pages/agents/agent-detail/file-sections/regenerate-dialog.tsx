@@ -38,7 +38,7 @@ export function RegenerateDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="h-4 w-4" />
@@ -54,7 +54,7 @@ export function RegenerateDialog({
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             placeholder="e.g. Make the agent more formal, add Vietnamese language support, change the name to Luna..."
-            className="min-h-[100px]"
+            className="min-h-[100px] max-h-[300px] resize-none"
           />
         </div>
         <DialogFooter>

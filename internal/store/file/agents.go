@@ -378,6 +378,15 @@ func (s *FileAgentStore) List(_ context.Context, _ string) ([]store.AgentData, e
 	return agents, nil
 }
 
+func (s *FileAgentStore) GetDefault(_ context.Context) (*store.AgentData, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, entry := range s.agents {
+		return entry.data, nil
+	}
+	return nil, fmt.Errorf("no agents configured")
+}
+
 func (s *FileAgentStore) ShareAgent(_ context.Context, _ uuid.UUID, _, _, _ string) error {
 	return fmt.Errorf("agent sharing not supported in standalone mode")
 }

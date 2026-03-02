@@ -176,6 +176,7 @@ type AgentStore interface {
 	Update(ctx context.Context, id uuid.UUID, updates map[string]any) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, ownerID string) ([]AgentData, error)
+	GetDefault(ctx context.Context) (*AgentData, error) // agent with is_default=true, or first available
 
 	// Access control
 	ShareAgent(ctx context.Context, agentID uuid.UUID, userID, role, grantedBy string) error

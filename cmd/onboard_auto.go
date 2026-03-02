@@ -140,6 +140,15 @@ func runAutoOnboard(cfgPath string) bool {
 			m.Close()
 		}
 
+		// Verify provider connectivity for all configured providers before seeding.
+		// Only the primary provider's auth failure blocks bootstrap.
+		fmt.Println("  Verifying provider connectivity...")
+		if fatalErrors := verifyAllProviders(cfg, provider); len(fatalErrors) > 0 {
+			slog.Error("auto-onboard: primary provider verification failed", "errors", fatalErrors)
+			fmt.Printf("  Provider verification FAILED: primary provider %q has invalid API key\n", provider)
+			return false
+		}
+
 		// Seed default data (non-fatal if already exists)
 		fmt.Print("  Seeding default agent/provider...")
 		if err := seedManagedData(cfg.Database.PostgresDSN, cfg); err != nil {

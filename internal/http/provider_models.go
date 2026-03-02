@@ -194,7 +194,7 @@ func fetchOpenAIModels(ctx context.Context, apiBase, apiKey string) ([]ModelInfo
 
 	models := make([]ModelInfo, 0, len(result.Data))
 	for _, m := range result.Data {
-		models = append(models, ModelInfo{ID: m.ID, Name: m.OwnedBy})
+		models = append(models, ModelInfo{ID: m.ID, Name: m.ID})
 	}
 	return models, nil
 }

@@ -1,5 +1,4 @@
-import { useState, useEffect } from "react";
-import { Link } from "react-router";
+import { useState, useEffect, useCallback } from "react";
 import {
   Dialog,
   DialogContent,
@@ -8,7 +7,10 @@ import {
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { formatDate, formatDuration } from "@/lib/format";
+import { useHttp } from "@/hooks/use-ws";
+import { TraceDetailDialog } from "@/pages/traces/trace-detail-dialog";
 import type { DelegationHistoryRecord } from "@/types/delegation";
+import type { TraceData, SpanData } from "@/types/trace";
 
 interface DelegationDetailDialogProps {
   delegationId: string;
@@ -19,6 +21,19 @@ interface DelegationDetailDialogProps {
 export function DelegationDetailDialog({ delegationId, onClose, getDelegation }: DelegationDetailDialogProps) {
   const [record, setRecord] = useState<DelegationHistoryRecord | null>(null);
   const [loading, setLoading] = useState(true);
+  const [viewingTraceId, setViewingTraceId] = useState<string | null>(null);
+  const http = useHttp();
+
+  const getTrace = useCallback(
+    async (traceId: string): Promise<{ trace: TraceData; spans: SpanData[] } | null> => {
+      try {
+        return await http.get<{ trace: TraceData; spans: SpanData[] }>(`/v1/traces/${traceId}`);
+      } catch {
+        return null;
+      }
+    },
+    [http],
+  );
 
   useEffect(() => {
     setLoading(true);
@@ -38,7 +53,7 @@ export function DelegationDetailDialog({ delegationId, onClose, getDelegation }:
 
   return (
     <Dialog open onOpenChange={() => onClose()}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-3xl">
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>Delegation Detail</DialogTitle>
         </DialogHeader>
@@ -90,12 +105,13 @@ export function DelegationDetailDialog({ delegationId, onClose, getDelegation }:
             {record.trace_id && (
               <div className="text-sm">
                 <span className="text-muted-foreground">Trace:</span>{" "}
-                <Link
-                  to={`/traces/${record.trace_id}`}
-                  className="font-mono text-xs text-primary hover:underline"
+                <button
+                  type="button"
+                  onClick={() => setViewingTraceId(record.trace_id!)}
+                  className="cursor-pointer font-mono text-xs text-primary hover:underline"
                 >
                   {record.trace_id.slice(0, 12)}...
-                </Link>
+                </button>
               </div>
             )}
 
@@ -125,6 +141,15 @@ export function DelegationDetailDialog({ delegationId, onClose, getDelegation }:
           </div>
         )}
       </DialogContent>
+
+      {viewingTraceId && (
+        <TraceDetailDialog
+          traceId={viewingTraceId}
+          onClose={() => setViewingTraceId(null)}
+          getTrace={getTrace}
+          onNavigateTrace={setViewingTraceId}
+        />
+      )}
     </Dialog>
   );
 }
