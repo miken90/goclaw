@@ -254,6 +254,7 @@ type RunRequest struct {
 	ExtraSystemPrompt string   // optional: injected into system prompt (skills, subagent context, etc.)
 	SkillFilter       []string // per-request skill override: nil=use agent default, []=no skills, ["x","y"]=whitelist
 	HistoryLimit      int      // max user turns to keep in context (0=unlimited, from channel config)
+	ToolAllow         []string // per-group tool allow list (nil = no restriction, supports "group:xxx")
 	LocalKey         string    // composite key with topic/thread suffix for routing (e.g. "-100123:topic:42")
 	ParentTraceID    uuid.UUID // if set, reuse parent trace instead of creating new (announce runs)
 	ParentRootSpanID uuid.UUID // if set, nest announce agent span under this parent span
@@ -573,8 +574,13 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 
 		// Build provider request with policy-filtered tools
 		var toolDefs []providers.ToolDefinition
+		var allowedTools map[string]bool
 		if l.toolPolicy != nil {
-			toolDefs = l.toolPolicy.FilterTools(l.tools, l.id, l.provider.Name(), l.agentToolPolicy, nil, false, false)
+			toolDefs = l.toolPolicy.FilterTools(l.tools, l.id, l.provider.Name(), l.agentToolPolicy, req.ToolAllow, false, false)
+			allowedTools = make(map[string]bool, len(toolDefs))
+			for _, td := range toolDefs {
+				allowedTools[td.Function.Name] = true
+			}
 		} else {
 			toolDefs = l.tools.ProviderDefs()
 		}
@@ -703,7 +709,13 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 			argsHash := loopDetector.record(tc.Name, tc.Arguments)
 
 			toolSpanStart := time.Now().UTC()
-			result := l.tools.ExecuteWithContext(ctx, tc.Name, tc.Arguments, req.Channel, req.ChatID, req.PeerKind, req.SessionKey, nil)
+			var result *tools.Result
+			if allowedTools != nil && !allowedTools[tc.Name] {
+				slog.Warn("security.tool_policy_blocked", "agent", l.id, "tool", tc.Name)
+				result = tools.ErrorResult("tool not allowed by policy: " + tc.Name)
+			} else {
+				result = l.tools.ExecuteWithContext(ctx, tc.Name, tc.Arguments, req.Channel, req.ChatID, req.PeerKind, req.SessionKey, nil)
+			}
 
 			l.emitToolSpan(ctx, toolSpanStart, tc.Name, tc.ID, string(argsJSON), result)
 
@@ -796,7 +808,13 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 					argsJSON, _ := json.Marshal(tc.Arguments)
 					slog.Info("tool call", "agent", l.id, "tool", tc.Name, "args_len", len(argsJSON), "parallel", true)
 					spanStart := time.Now().UTC()
-					result := l.tools.ExecuteWithContext(ctx, tc.Name, tc.Arguments, req.Channel, req.ChatID, req.PeerKind, req.SessionKey, nil)
+					var result *tools.Result
+					if allowedTools != nil && !allowedTools[tc.Name] {
+						slog.Warn("security.tool_policy_blocked", "agent", l.id, "tool", tc.Name)
+						result = tools.ErrorResult("tool not allowed by policy: " + tc.Name)
+					} else {
+						result = l.tools.ExecuteWithContext(ctx, tc.Name, tc.Arguments, req.Channel, req.ChatID, req.PeerKind, req.SessionKey, nil)
+					}
 					resultCh <- indexedResult{idx: idx, tc: tc, result: result, argsJSON: string(argsJSON), spanStart: spanStart}
 				}(i, tc)
 			}

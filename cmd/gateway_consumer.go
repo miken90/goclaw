@@ -199,6 +199,7 @@ func consumeInboundMessages(ctx context.Context, msgBus *bus.MessageBus, agents 
 			RunID:             runID,
 			Stream:            enableStream,
 			HistoryLimit:      msg.HistoryLimit,
+			ToolAllow:         msg.ToolAllow,
 			ExtraSystemPrompt: extraPrompt,
 			SkillFilter:       skillFilter,
 		}, scheduler.ScheduleOpts{

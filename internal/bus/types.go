@@ -14,6 +14,7 @@ type InboundMessage struct {
 	AgentID      string            `json:"agent_id,omitempty"`    // target agent (for multi-agent routing)
 	UserID       string            `json:"user_id,omitempty"`     // external user ID for per-user scoping (memory, bootstrap)
 	HistoryLimit int               `json:"history_limit,omitempty"` // max turns to keep in context (0=unlimited, from channel config)
+	ToolAllow    []string          `json:"tool_allow,omitempty"`    // per-group tool allow list (nil = no restriction)
 	Metadata     map[string]string `json:"metadata,omitempty"`
 }
 

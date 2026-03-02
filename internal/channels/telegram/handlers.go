@@ -441,6 +441,7 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 		UserID:       userID,
 		AgentID:      targetAgentID,
 		HistoryLimit: c.historyLimit,
+		ToolAllow:    topicCfg.tools,
 		Metadata:     metadata,
 	})
 

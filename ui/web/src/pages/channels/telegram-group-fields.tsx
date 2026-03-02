@@ -8,6 +8,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { groupPolicyOptions } from "./channel-schemas";
+import { ToolNameSelect } from "@/components/shared/tool-name-select";
 
 export interface TelegramGroupConfigValues {
   group_policy?: string;
@@ -15,6 +16,7 @@ export interface TelegramGroupConfigValues {
   enabled?: boolean;
   allow_from?: string[];
   skills?: string[];
+  tools?: string[];
   system_prompt?: string;
 }
 
@@ -139,6 +141,18 @@ export function TelegramGroupFields({ config, onChange, idPrefix }: Props) {
           rows={2}
           className="font-mono text-sm"
         />
+      </div>
+
+      <div className="grid gap-1.5">
+        <Label>Tool Allow</Label>
+        <ToolNameSelect
+          value={config.tools ?? []}
+          onChange={(v) => update({ tools: v.length > 0 ? v : undefined })}
+          placeholder="Select allowed tools (empty = inherit all)..."
+        />
+        <p className="text-xs text-muted-foreground">
+          Restrict which tools are available in this group. Supports group names like &quot;group:web&quot;, &quot;group:fs&quot;. Empty = inherit all tools.
+        </p>
       </div>
 
       <div className="grid gap-1.5">

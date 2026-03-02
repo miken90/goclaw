@@ -48,6 +48,7 @@ type TelegramGroupConfig struct {
 	AllowFrom      FlexibleStringSlice             `json:"allow_from,omitempty"`       // override allow_from for this group
 	Enabled        *bool                           `json:"enabled,omitempty"`          // disable bot for this group (default: true)
 	Skills         []string                        `json:"skills,omitempty"`           // skill whitelist (nil = all, [] = none)
+	Tools          []string                        `json:"tools,omitempty"`            // tool allow list (nil = all, supports "group:xxx")
 	SystemPrompt   string                          `json:"system_prompt,omitempty"`    // extra system prompt for this group
 	Topics         map[string]*TelegramTopicConfig `json:"topics,omitempty"`           // per-topic overrides (key: thread ID string)
 }
@@ -58,6 +59,7 @@ type TelegramTopicConfig struct {
 	RequireMention *bool               `json:"require_mention,omitempty"`
 	GroupPolicy    string              `json:"group_policy,omitempty"`
 	Skills         []string            `json:"skills,omitempty"`
+	Tools          []string            `json:"tools,omitempty"` // tool allow list (nil = inherit, supports "group:xxx")
 	Enabled        *bool               `json:"enabled,omitempty"`
 	AllowFrom      FlexibleStringSlice `json:"allow_from,omitempty"`
 	SystemPrompt   string              `json:"system_prompt,omitempty"`

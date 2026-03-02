@@ -16,6 +16,7 @@ type resolvedTopicConfig struct {
 	allowFrom      []string
 	enabled        *bool
 	skills         []string // nil = inherit, non-nil = override (empty = no skills)
+	tools          []string // nil = inherit (all tools), non-nil = override (supports "group:xxx")
 	systemPrompt   string   // concatenated group + topic prompts
 }
 
@@ -73,6 +74,9 @@ func mergeGroupInto(dst *resolvedTopicConfig, src *config.TelegramGroupConfig) {
 	if src.Skills != nil {
 		dst.skills = src.Skills
 	}
+	if src.Tools != nil {
+		dst.tools = src.Tools
+	}
 	if src.SystemPrompt != "" {
 		dst.systemPrompt = src.SystemPrompt
 	}
@@ -96,6 +100,10 @@ func mergeTopicInto(dst *resolvedTopicConfig, src *config.TelegramTopicConfig, g
 	// Skills: topic overrides group (firstDefined pattern, matching TS).
 	if src.Skills != nil {
 		dst.skills = src.Skills
+	}
+	// Tools: topic overrides group (same firstDefined pattern as skills).
+	if src.Tools != nil {
+		dst.tools = src.Tools
 	}
 	// SystemPrompt: concatenate group + topic (both may exist, matching TS).
 	if src.SystemPrompt != "" {
