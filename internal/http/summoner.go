@@ -281,13 +281,13 @@ func (s *AgentSummoner) buildCreatePrompt(description string) string {
 
 1. Language: Write ALL content in the SAME LANGUAGE as the <description>. If description is in Vietnamese, write in Vietnamese. If in English, write in English. BUT keep ALL headings and section titles in English exactly as in the templates.
 
-2. SOUL.md rules:
-   - KEEP the exact English headings: "# SOUL.md - Who You Are", "## Core Truths", "## Boundaries", "## Vibe", "## Continuity"
-   - KEEP the general advice in "## Core Truths" — do NOT inject agent-specific references there. Core Truths are universal personality traits.
-   - CUSTOMIZE "## Vibe" to reflect this agent's unique personality and communication style.
-   - CUSTOMIZE "## Boundaries" if the agent has specific boundaries mentioned in the description.
-   - Keep "## Continuity" as-is (just translate if needed).
-   - Do NOT add the agent's name or role references into Core Truths or Boundaries.
+2. SOUL.md section guide — each section has a specific purpose:
+   - "## Core Truths" — universal personality traits. KEEP the general advice. Do NOT inject agent-specific references here.
+   - "## Boundaries" — rules and limits. CUSTOMIZE only if the description mentions specific boundaries.
+   - "## Vibe" — communication style and personality ONLY. How the agent talks, its tone, its attitude. Do NOT put technical knowledge here.
+   - "## Expertise" — domain-specific knowledge, technical skills, specialized instructions, keywords, parameters. If the description mentions any specialized domain (e.g. image generation, coding, writing), put that knowledge HERE. Remove the placeholder text. If no domain expertise, omit this section entirely.
+   - "## Continuity" — keep as-is (just translate if needed).
+   - KEEP the exact English headings. Do NOT add the agent's name into Core Truths or Boundaries.
 
 3. IDENTITY.md rules:
    - KEEP the exact English heading: "# IDENTITY.md - Who Am I?"
@@ -333,18 +333,34 @@ func (s *AgentSummoner) buildEditPrompt(existing []store.AgentContextFileData, e
 	sb.WriteString("</current_files>\n\n")
 	fmt.Fprintf(&sb, "<edit_instructions>\n%s\n</edit_instructions>\n\n", editPrompt)
 	sb.WriteString(`IMPORTANT RULES:
-1. Write ALL content in the SAME LANGUAGE as the existing files. Only keep headings and technical terms in English.
-2. Keep ALL English headings exactly as they are (e.g. "## Core Truths", "## Vibe").
-3. Only output files that need changes. Omit unchanged files.
+
+1. Language: Write ALL content in the SAME LANGUAGE as the existing files. Keep headings in English.
+
+2. SOUL.md section guide — place content in the RIGHT section:
+   - "## Core Truths" — universal personality traits. Do NOT add domain-specific content here.
+   - "## Boundaries" — rules and limits.
+   - "## Vibe" — communication style and personality ONLY. Tone, attitude, how the agent talks. NOT technical knowledge.
+   - "## Expertise" — domain-specific knowledge, technical skills, keywords, parameters, specialized instructions. If the edit adds domain knowledge (e.g. image generation techniques, coding standards, writing styles), it goes HERE. Create this section if it doesn't exist yet (between Vibe and Continuity).
+   - "## Continuity" — memory/persistence rules. Usually unchanged.
+
+3. Output the COMPLETE updated file content, not just the changed parts. The output will REPLACE the entire file.
+
+4. Only output files that actually need changes. Omit unchanged files entirely.
+
+5. If the edit changes the agent's expertise, also update the frontmatter summary.
 
 Output format:
 
+<frontmatter>
+(updated expertise summary, or omit if unchanged)
+</frontmatter>
+
 <file name="SOUL.md">
-(updated content, or omit if unchanged)
+(complete updated content)
 </file>
 
 <file name="IDENTITY.md">
-(updated content, or omit if unchanged)
+(complete updated content, or omit if unchanged)
 </file>
 `)
 	return sb.String()

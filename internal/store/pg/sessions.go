@@ -283,10 +283,10 @@ func (s *PGSessionStore) List(agentID string) []store.SessionInfo {
 	if agentID != "" {
 		prefix := "agent:" + agentID + ":%"
 		rows, err = s.db.Query(
-			"SELECT session_key, messages, created_at, updated_at FROM sessions WHERE session_key LIKE $1 ORDER BY updated_at DESC", prefix)
+			"SELECT session_key, messages, created_at, updated_at, label, channel FROM sessions WHERE session_key LIKE $1 ORDER BY updated_at DESC", prefix)
 	} else {
 		rows, err = s.db.Query(
-			"SELECT session_key, messages, created_at, updated_at FROM sessions ORDER BY updated_at DESC")
+			"SELECT session_key, messages, created_at, updated_at, label, channel FROM sessions ORDER BY updated_at DESC")
 	}
 	if err != nil {
 		return nil
@@ -298,7 +298,8 @@ func (s *PGSessionStore) List(agentID string) []store.SessionInfo {
 		var key string
 		var msgsJSON []byte
 		var createdAt, updatedAt time.Time
-		if err := rows.Scan(&key, &msgsJSON, &createdAt, &updatedAt); err != nil {
+		var label, channel *string
+		if err := rows.Scan(&key, &msgsJSON, &createdAt, &updatedAt, &label, &channel); err != nil {
 			continue
 		}
 		var msgs []providers.Message
@@ -308,6 +309,8 @@ func (s *PGSessionStore) List(agentID string) []store.SessionInfo {
 			MessageCount: len(msgs),
 			Created:      createdAt,
 			Updated:      updatedAt,
+			Label:        derefStr(label),
+			Channel:      derefStr(channel),
 		})
 	}
 	return result
@@ -343,11 +346,11 @@ func (s *PGSessionStore) ListPaged(opts store.SessionListOpts) store.SessionList
 	var selectArgs []interface{}
 
 	if opts.AgentID != "" {
-		selectQ = `SELECT session_key, jsonb_array_length(messages), created_at, updated_at
+		selectQ = `SELECT session_key, jsonb_array_length(messages), created_at, updated_at, label, channel
 		           FROM sessions WHERE session_key LIKE $1 ORDER BY updated_at DESC LIMIT $2 OFFSET $3`
 		selectArgs = []interface{}{whereArgs[0], limit, offset}
 	} else {
-		selectQ = `SELECT session_key, jsonb_array_length(messages), created_at, updated_at
+		selectQ = `SELECT session_key, jsonb_array_length(messages), created_at, updated_at, label, channel
 		           FROM sessions ORDER BY updated_at DESC LIMIT $1 OFFSET $2`
 		selectArgs = []interface{}{limit, offset}
 	}
@@ -363,7 +366,8 @@ func (s *PGSessionStore) ListPaged(opts store.SessionListOpts) store.SessionList
 		var key string
 		var msgCount int
 		var createdAt, updatedAt time.Time
-		if err := rows.Scan(&key, &msgCount, &createdAt, &updatedAt); err != nil {
+		var label, channel *string
+		if err := rows.Scan(&key, &msgCount, &createdAt, &updatedAt, &label, &channel); err != nil {
 			continue
 		}
 		result = append(result, store.SessionInfo{
@@ -371,6 +375,8 @@ func (s *PGSessionStore) ListPaged(opts store.SessionListOpts) store.SessionList
 			MessageCount: msgCount,
 			Created:      createdAt,
 			Updated:      updatedAt,
+			Label:        derefStr(label),
+			Channel:      derefStr(channel),
 		})
 	}
 	if result == nil {

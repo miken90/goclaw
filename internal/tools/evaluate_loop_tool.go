@@ -145,8 +145,10 @@ func (t *EvaluateLoopTool) Execute(ctx context.Context, args map[string]interfac
 		if isApproved(evalResult.Content) {
 			// Auto-complete team task on the final successful round.
 			if teamTaskID != uuid.Nil && t.manager.teamStore != nil {
-				_ = t.manager.teamStore.ClaimTask(ctx, teamTaskID, uuid.Nil)
-				_ = t.manager.teamStore.CompleteTask(ctx, teamTaskID, lastOutput)
+				if teamTask, getErr := t.manager.teamStore.GetTask(ctx, teamTaskID); getErr == nil {
+					_ = t.manager.teamStore.ClaimTask(ctx, teamTaskID, uuid.Nil, teamTask.TeamID)
+					_ = t.manager.teamStore.CompleteTask(ctx, teamTaskID, teamTask.TeamID, lastOutput)
+				}
 			}
 
 			return NewResult(fmt.Sprintf(

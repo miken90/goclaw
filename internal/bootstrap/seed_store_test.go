@@ -79,8 +79,8 @@ func (s *seedStubStore) GetUserOverride(_ context.Context, _ uuid.UUID, _ string
 func (s *seedStubStore) SetUserOverride(_ context.Context, _ *store.UserAgentOverrideData) error {
 	return nil
 }
-func (s *seedStubStore) GetOrCreateUserProfile(_ context.Context, _ uuid.UUID, _, _ string) (bool, error) {
-	return false, nil
+func (s *seedStubStore) GetOrCreateUserProfile(_ context.Context, _ uuid.UUID, _, _, _ string) (bool, string, error) {
+	return false, "", nil
 }
 func (s *seedStubStore) IsGroupFileWriter(_ context.Context, _ uuid.UUID, _, _ string) (bool, error) {
 	return false, nil

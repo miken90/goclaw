@@ -43,6 +43,15 @@ func formatDelegateAnnounce(task *DelegationTask, artifacts *DelegateArtifacts, 
 	// Render each delegation result
 	for i, r := range artifacts.Results {
 		msg += fmt.Sprintf("--- Result from %q ---\n%s\n", r.AgentKey, r.Content)
+		if len(r.Deliverables) > 0 {
+			for _, d := range r.Deliverables {
+				preview := d
+				if len(preview) > 4000 {
+					preview = preview[:4000] + "\n[...truncated, full content in team_tasks]"
+				}
+				msg += fmt.Sprintf("\n[Deliverable]\n%s\n", preview)
+			}
+		}
 		if r.HasMedia {
 			msg += "[media file(s) attached — will be delivered automatically. Do NOT recreate or call create_image.]\n"
 		}

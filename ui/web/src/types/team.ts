@@ -1,5 +1,12 @@
 /** Team data types matching Go internal/store/team_store.go */
 
+export interface TeamAccessSettings {
+  allow_user_ids?: string[];
+  deny_user_ids?: string[];
+  allow_channels?: string[];
+  deny_channels?: string[];
+}
+
 export interface TeamData {
   id: string;
   name: string;

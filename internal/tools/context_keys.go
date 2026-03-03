@@ -17,6 +17,7 @@ const (
 	ctxChannel    toolContextKey = "tool_channel"
 	ctxChatID     toolContextKey = "tool_chat_id"
 	ctxPeerKind   toolContextKey = "tool_peer_kind"
+	ctxLocalKey   toolContextKey = "tool_local_key" // composite key with topic/thread suffix for routing
 	ctxSandboxKey toolContextKey = "tool_sandbox_key"
 	ctxAsyncCB    toolContextKey = "tool_async_cb"
 	ctxWorkspace  toolContextKey = "tool_workspace"
@@ -47,6 +48,17 @@ func WithToolPeerKind(ctx context.Context, peerKind string) context.Context {
 
 func ToolPeerKindFromCtx(ctx context.Context) string {
 	v, _ := ctx.Value(ctxPeerKind).(string)
+	return v
+}
+
+// WithToolLocalKey injects the composite local key (e.g. "-100123:topic:42") into context.
+// Used by delegation/subagent to preserve topic routing info for announce-back.
+func WithToolLocalKey(ctx context.Context, localKey string) context.Context {
+	return context.WithValue(ctx, ctxLocalKey, localKey)
+}
+
+func ToolLocalKeyFromCtx(ctx context.Context) string {
+	v, _ := ctx.Value(ctxLocalKey).(string)
 	return v
 }
 

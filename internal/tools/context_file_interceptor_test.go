@@ -65,8 +65,8 @@ func (s *stubAgentStore) GetUserOverride(_ context.Context, _ uuid.UUID, _ strin
 func (s *stubAgentStore) SetUserOverride(_ context.Context, _ *store.UserAgentOverrideData) error {
 	return nil
 }
-func (s *stubAgentStore) GetOrCreateUserProfile(_ context.Context, _ uuid.UUID, _, _ string) (bool, error) {
-	return false, nil
+func (s *stubAgentStore) GetOrCreateUserProfile(_ context.Context, _ uuid.UUID, _, _, _ string) (bool, string, error) {
+	return false, "", nil
 }
 func (s *stubAgentStore) IsGroupFileWriter(_ context.Context, _ uuid.UUID, _, _ string) (bool, error) {
 	return false, nil

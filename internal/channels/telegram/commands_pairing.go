@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/mymmrac/telego"
@@ -54,14 +55,17 @@ func (c *Channel) sendPairingReply(ctx context.Context, chatID int64, userID, us
 
 // sendGroupPairingReply generates a pairing code for a group and sends the reply.
 // Debounces: won't send another reply to the same group within 60 seconds.
-func (c *Channel) sendGroupPairingReply(ctx context.Context, chatID int64, chatIDStr, groupSenderID string) {
+// messageThreadID should be set for forum groups so the reply lands in the correct topic.
+// localKey is the composite key (e.g. "-100123:topic:42") stored as chat_id in the pairing
+// request so that the approval notification can be routed to the correct forum topic.
+func (c *Channel) sendGroupPairingReply(ctx context.Context, chatID int64, chatIDStr, groupSenderID, localKey string, messageThreadID int) {
 	if lastSent, ok := c.pairingReplySent.Load(chatIDStr); ok {
 		if time.Since(lastSent.(time.Time)) < pairingReplyDebounce {
 			return
 		}
 	}
 
-	code, err := c.pairingService.RequestPairing(groupSenderID, c.Name(), chatIDStr, "default")
+	code, err := c.pairingService.RequestPairing(groupSenderID, c.Name(), localKey, "default")
 	if err != nil {
 		slog.Debug("group pairing request failed", "chat_id", chatIDStr, "error", err)
 		return
@@ -72,6 +76,9 @@ func (c *Channel) sendGroupPairingReply(ctx context.Context, chatID int64, chatI
 		code, code,
 	)
 	msg := tu.Message(tu.ID(chatID), replyText)
+	if messageThreadID > 0 {
+		msg.MessageThreadID = messageThreadID
+	}
 	if _, err := c.bot.SendMessage(ctx, msg); err != nil {
 		slog.Warn("failed to send group pairing reply", "chat_id", chatIDStr, "error", err)
 	} else {
@@ -81,8 +88,9 @@ func (c *Channel) sendGroupPairingReply(ctx context.Context, chatID int64, chatI
 }
 
 // SendPairingApproved sends the approval notification to a user.
+// chatID may contain a topic suffix (e.g. "-100123:topic:42") for forum groups.
 func (c *Channel) SendPairingApproved(ctx context.Context, chatID, botName string) error {
-	id, err := parseChatID(chatID)
+	id, err := parseRawChatID(chatID)
 	if err != nil {
 		return fmt.Errorf("invalid chat ID: %w", err)
 	}
@@ -91,6 +99,22 @@ func (c *Channel) SendPairingApproved(ctx context.Context, chatID, botName strin
 	}
 
 	msg := tu.Message(tu.ID(id), fmt.Sprintf("✅ %s access approved. Send a message to start chatting.", botName))
+
+	// Extract thread ID from topic/thread suffix for forum groups.
+	if idx := strings.Index(chatID, ":topic:"); idx > 0 {
+		var threadID int
+		fmt.Sscanf(chatID[idx+7:], "%d", &threadID)
+		if threadID > 0 {
+			msg.MessageThreadID = threadID
+		}
+	} else if idx := strings.Index(chatID, ":thread:"); idx > 0 {
+		var threadID int
+		fmt.Sscanf(chatID[idx+8:], "%d", &threadID)
+		if threadID > 0 {
+			msg.MessageThreadID = threadID
+		}
+	}
+
 	_, err = c.bot.SendMessage(ctx, msg)
 	return err
 }

@@ -261,28 +261,39 @@ func (s *FileAgentStore) DeleteUserContextFile(_ context.Context, agentID uuid.U
 
 // --- User profiles (SQLite) ---
 
-func (s *FileAgentStore) GetOrCreateUserProfile(_ context.Context, agentID uuid.UUID, userID, workspace string) (bool, error) {
+func (s *FileAgentStore) GetOrCreateUserProfile(_ context.Context, agentID uuid.UUID, userID, workspace, channel string) (bool, string, error) {
+	// Build workspace with channel segment for isolation.
+	effectiveWs := workspace
+	if channel != "" {
+		effectiveWs = filepath.Join(workspace, channel)
+	}
+
 	result, err := s.db.Exec(
 		`INSERT OR IGNORE INTO user_profiles (agent_id, user_id, workspace) VALUES (?, ?, ?)`,
-		agentID.String(), userID, workspace,
+		agentID.String(), userID, effectiveWs,
 	)
 	if err != nil {
-		return false, err
+		return false, effectiveWs, err
 	}
 	affected, err := result.RowsAffected()
 	if err != nil {
-		return false, err
+		return false, effectiveWs, err
 	}
 	if affected > 0 {
-		return true, nil // new profile
+		return true, effectiveWs, nil // new profile
 	}
 
-	// Existing profile — update last_seen
-	_, _ = s.db.Exec(
-		`UPDATE user_profiles SET last_seen_at = CURRENT_TIMESTAMP WHERE agent_id = ? AND user_id = ?`,
+	// Existing profile — update last_seen, return stored workspace
+	var storedWs sql.NullString
+	_ = s.db.QueryRow(
+		`UPDATE user_profiles SET last_seen_at = CURRENT_TIMESTAMP WHERE agent_id = ? AND user_id = ? RETURNING workspace`,
 		agentID.String(), userID,
-	)
-	return false, nil
+	).Scan(&storedWs)
+	ws := effectiveWs
+	if storedWs.Valid && storedWs.String != "" {
+		ws = storedWs.String
+	}
+	return false, ws, nil
 }
 
 // --- Group file writers (SQLite) ---

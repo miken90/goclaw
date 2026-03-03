@@ -368,3 +368,16 @@ func ExpandHome(path string) string {
 	}
 	return home
 }
+
+// ContractHome replaces the user home directory prefix with ~.
+// Reverse of ExpandHome — used to store portable paths in the database.
+func ContractHome(path string) string {
+	if path == "" {
+		return path
+	}
+	home, _ := os.UserHomeDir()
+	if home != "" && strings.HasPrefix(path, home) {
+		return "~" + path[len(home):]
+	}
+	return path
+}

@@ -156,6 +156,7 @@ type TeamStore interface {
 	// Team CRUD
 	CreateTeam(ctx context.Context, team *TeamData) error
 	GetTeam(ctx context.Context, teamID uuid.UUID) (*TeamData, error)
+	UpdateTeam(ctx context.Context, teamID uuid.UUID, updates map[string]any) error
 	DeleteTeam(ctx context.Context, teamID uuid.UUID) error
 	ListTeams(ctx context.Context) ([]TeamData, error)
 
@@ -167,6 +168,10 @@ type TeamStore interface {
 	// GetTeamForAgent returns the team that the given agent belongs to.
 	// Returns nil, nil if the agent is not in any team.
 	GetTeamForAgent(ctx context.Context, agentID uuid.UUID) (*TeamData, error)
+
+	// KnownUserIDs returns distinct user IDs from sessions of team member agents.
+	// Used by team settings UI to populate user select boxes.
+	KnownUserIDs(ctx context.Context, teamID uuid.UUID, limit int) ([]string, error)
 
 	// Tasks (shared task list)
 	CreateTask(ctx context.Context, task *TeamTaskData) error
@@ -181,10 +186,12 @@ type TeamStore interface {
 
 	// ClaimTask atomically transitions a task from pending to in_progress.
 	// Only one agent can claim a given task (row-level lock, race-safe).
-	ClaimTask(ctx context.Context, taskID, agentID uuid.UUID) error
+	// teamID is validated in the WHERE clause to prevent cross-team task claiming.
+	ClaimTask(ctx context.Context, taskID, agentID, teamID uuid.UUID) error
 
 	// CompleteTask marks a task as completed and unblocks dependent tasks.
-	CompleteTask(ctx context.Context, taskID uuid.UUID, result string) error
+	// teamID is validated in the WHERE clause to prevent cross-team task completion.
+	CompleteTask(ctx context.Context, taskID, teamID uuid.UUID, result string) error
 
 	// Delegation history
 	SaveDelegationHistory(ctx context.Context, record *DelegationHistoryData) error

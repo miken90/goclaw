@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/agent"
+	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/gateway"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
@@ -19,10 +20,22 @@ type TeamsMethods struct {
 	agentStore  store.AgentStore
 	linkStore   store.AgentLinkStore // for auto-creating bidirectional links
 	agentRouter *agent.Router        // for cache invalidation
+	msgBus      *bus.MessageBus      // for pub/sub cache invalidation
 }
 
-func NewTeamsMethods(teamStore store.TeamStore, agentStore store.AgentStore, linkStore store.AgentLinkStore, agentRouter *agent.Router) *TeamsMethods {
-	return &TeamsMethods{teamStore: teamStore, agentStore: agentStore, linkStore: linkStore, agentRouter: agentRouter}
+func NewTeamsMethods(teamStore store.TeamStore, agentStore store.AgentStore, linkStore store.AgentLinkStore, agentRouter *agent.Router, msgBus *bus.MessageBus) *TeamsMethods {
+	return &TeamsMethods{teamStore: teamStore, agentStore: agentStore, linkStore: linkStore, agentRouter: agentRouter, msgBus: msgBus}
+}
+
+// emitTeamCacheInvalidate broadcasts a cache invalidation event for team data.
+func (m *TeamsMethods) emitTeamCacheInvalidate() {
+	if m.msgBus == nil {
+		return
+	}
+	m.msgBus.Broadcast(bus.Event{
+		Name:    protocol.EventCacheInvalidate,
+		Payload: bus.CacheInvalidatePayload{Kind: bus.CacheKindTeam},
+	})
 }
 
 func (m *TeamsMethods) Register(router *gateway.MethodRouter) {
@@ -33,6 +46,8 @@ func (m *TeamsMethods) Register(router *gateway.MethodRouter) {
 	router.Register(protocol.MethodTeamsTaskList, m.handleTaskList)
 	router.Register(protocol.MethodTeamsMembersAdd, m.handleAddMember)
 	router.Register(protocol.MethodTeamsMembersRemove, m.handleRemoveMember)
+	router.Register(protocol.MethodTeamsUpdate, m.handleUpdate)
+	router.Register(protocol.MethodTeamsKnownUsers, m.handleKnownUsers)
 }
 
 // --- List ---
@@ -438,20 +453,125 @@ func (m *TeamsMethods) handleRemoveMember(_ context.Context, client *gateway.Cli
 	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{"ok": true}))
 }
 
-// invalidateTeamCaches invalidates agent caches for all members of a team.
+// invalidateTeamCaches invalidates agent caches for all members of a team
+// and emits a pub/sub event for TeamToolManager cache invalidation.
 func (m *TeamsMethods) invalidateTeamCaches(ctx context.Context, teamID uuid.UUID) {
-	if m.agentRouter == nil {
-		return
-	}
-	members, err := m.teamStore.ListMembers(ctx, teamID)
-	if err != nil {
-		return
-	}
-	for _, member := range members {
-		if member.AgentKey != "" {
-			m.agentRouter.InvalidateAgent(member.AgentKey)
+	if m.agentRouter != nil {
+		members, err := m.teamStore.ListMembers(ctx, teamID)
+		if err == nil {
+			for _, member := range members {
+				if member.AgentKey != "" {
+					m.agentRouter.InvalidateAgent(member.AgentKey)
+				}
+			}
 		}
 	}
+	m.emitTeamCacheInvalidate()
+}
+
+// --- Update (settings) ---
+
+type teamsUpdateParams struct {
+	TeamID   string                 `json:"teamId"`
+	Settings map[string]interface{} `json:"settings"`
+}
+
+func (m *TeamsMethods) handleUpdate(_ context.Context, client *gateway.Client, req *protocol.RequestFrame) {
+	if m.teamStore == nil {
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInternal, "teams not available (standalone mode)"))
+		return
+	}
+
+	var params teamsUpdateParams
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, "invalid params"))
+		return
+	}
+
+	if params.TeamID == "" {
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, "teamId is required"))
+		return
+	}
+
+	teamID, err := uuid.Parse(params.TeamID)
+	if err != nil {
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, "invalid teamId"))
+		return
+	}
+
+	ctx := context.Background()
+
+	// Validate team exists
+	if _, err := m.teamStore.GetTeam(ctx, teamID); err != nil {
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInternal, "team not found: "+err.Error()))
+		return
+	}
+
+	// Validate settings against teamAccessSettings schema (strip unknown fields)
+	type teamAccessSettings struct {
+		AllowUserIDs  []string `json:"allow_user_ids"`
+		DenyUserIDs   []string `json:"deny_user_ids"`
+		AllowChannels []string `json:"allow_channels"`
+		DenyChannels  []string `json:"deny_channels"`
+	}
+	raw, _ := json.Marshal(params.Settings)
+	var access teamAccessSettings
+	if err := json.Unmarshal(raw, &access); err != nil {
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, "invalid settings: "+err.Error()))
+		return
+	}
+	cleaned, _ := json.Marshal(access)
+
+	updates := map[string]any{"settings": json.RawMessage(cleaned)}
+	if err := m.teamStore.UpdateTeam(ctx, teamID, updates); err != nil {
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInternal, "failed to update team: "+err.Error()))
+		return
+	}
+
+	m.invalidateTeamCaches(ctx, teamID)
+
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{"ok": true}))
+}
+
+// --- Known Users ---
+
+type teamsKnownUsersParams struct {
+	TeamID string `json:"teamId"`
+}
+
+func (m *TeamsMethods) handleKnownUsers(_ context.Context, client *gateway.Client, req *protocol.RequestFrame) {
+	if m.teamStore == nil {
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInternal, "teams not available (standalone mode)"))
+		return
+	}
+
+	var params teamsKnownUsersParams
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, "invalid params"))
+		return
+	}
+
+	if params.TeamID == "" {
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, "teamId is required"))
+		return
+	}
+
+	teamID, err := uuid.Parse(params.TeamID)
+	if err != nil {
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, "invalid teamId"))
+		return
+	}
+
+	ctx := context.Background()
+	users, err := m.teamStore.KnownUserIDs(ctx, teamID, 100)
+	if err != nil {
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInternal, err.Error()))
+		return
+	}
+
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+		"users": users,
+	}))
 }
 
 // --- helpers ---

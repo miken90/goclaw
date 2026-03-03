@@ -50,6 +50,14 @@ func BuildGroupTopicSessionKey(agentID, channel, chatID string, topicID int) str
 	return fmt.Sprintf("agent:%s:%s:group:%s:topic:%d", agentID, channel, chatID, topicID)
 }
 
+// BuildDMThreadSessionKey builds the session key for a DM thread (topic in private chat).
+// Preserves message_thread_id for session isolation within the same DM.
+//
+//	agent:{agentId}:{channel}:direct:{peerID}:thread:{threadID}
+func BuildDMThreadSessionKey(agentID, channel, peerID string, threadID int) string {
+	return fmt.Sprintf("agent:%s:%s:direct:%s:thread:%d", agentID, channel, peerID, threadID)
+}
+
 // BuildSubagentSessionKey builds the session key for a subagent.
 //
 //	agent:{agentId}:subagent:{label}

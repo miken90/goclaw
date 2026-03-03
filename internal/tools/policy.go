@@ -8,24 +8,28 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 )
 
-// Tool groups map group names to tool names (matching TS tool-policy.ts TOOL_GROUPS).
+// Tool groups map group names to tool names.
 var toolGroups = map[string][]string{
 	"memory":     {"memory_search", "memory_get"},
 	"web":        {"web_search", "web_fetch"},
-	"fs":         {"read_file", "write_file", "list_files", "edit_file", "search", "glob"},
-	"runtime":    {"exec", "process"},
-	"sessions":   {"sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "session_status"},
-	"ui":         {"browser", "canvas"},
-	"automation": {"cron", "gateway"},
-	"messaging":  {"message"},
-	"nodes":      {"nodes"},
-	// Composite group: all goclaw native tools (excludes provider plugins).
-	// Matching TS group:goclaw.
+	"fs":         {"read_file", "write_file", "list_files", "edit"},
+	"runtime":    {"exec"},
+	"sessions":   {"sessions_list", "sessions_history", "sessions_send", "spawn", "session_status"},
+	"ui":         {"browser"},
+	"automation": {"cron"},
+	"messaging":  {"message", "create_forum_topic"},
+	"delegation": {"handoff", "delegate_search", "evaluate_loop"},
+	"team":       {"team_tasks", "team_message"},
+	// Composite group: all goclaw native tools (excludes MCP/custom plugins).
 	"goclaw": {
-		"browser", "canvas", "nodes", "cron", "message", "gateway",
-		"agents_list", "sessions_list", "sessions_history", "sessions_send",
-		"sessions_spawn", "session_status",
-		"memory_search", "memory_get", "web_search", "web_fetch", "read_image", "create_image",
+		"read_file", "write_file", "list_files", "edit", "exec",
+		"web_search", "web_fetch", "browser",
+		"memory_search", "memory_get",
+		"sessions_list", "sessions_history", "sessions_send", "spawn", "session_status",
+		"cron", "message", "create_forum_topic",
+		"read_image", "create_image", "skill_search", "tts",
+		"handoff", "delegate_search", "evaluate_loop",
+		"team_tasks", "team_message",
 	},
 }
 
@@ -49,15 +53,17 @@ func UnregisterToolGroup(name string) {
 // Tool profiles define preset allow sets.
 var toolProfiles = map[string][]string{
 	"minimal":   {"session_status"},
-	"coding":    {"group:fs", "group:runtime", "group:sessions", "group:memory", "read_image", "create_image"},
-	"messaging": {"group:messaging", "sessions_list", "sessions_history", "sessions_send", "session_status"},
+	"coding":    {"group:fs", "group:runtime", "group:sessions", "group:memory", "group:web", "read_image", "create_image", "skill_search"},
+	"messaging": {"group:messaging", "group:web", "sessions_list", "sessions_history", "sessions_send", "session_status", "read_image", "skill_search"},
 	"full":      {}, // empty = no restrictions
 }
 
 // Tool aliases map alternative names to canonical names.
 var toolAliases = map[string]string{
-	"bash":        "exec",
-	"apply-patch": "apply_patch",
+	"bash":             "exec",
+	"apply-patch":      "apply_patch",
+	"edit_file":        "edit",
+	"sessions_spawn":   "spawn",
 }
 
 // Subagent deny lists — tools subagents cannot use.
@@ -69,7 +75,7 @@ var subagentDenyList = []string{
 
 // Leaf subagent deny — additional restrictions at max spawn depth.
 var leafSubagentDenyList = []string{
-	"sessions_list", "sessions_history", "sessions_spawn",
+	"sessions_list", "sessions_history", "spawn",
 }
 
 // PolicyEngine evaluates tool access based on layered config policies.

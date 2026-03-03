@@ -111,6 +111,8 @@ func (f *FileSessionStore) List(agentID string) []store.SessionInfo {
 			MessageCount: item.MessageCount,
 			Created:      item.Created,
 			Updated:      item.Updated,
+			Label:        item.Label,
+			Channel:      item.Channel,
 		}
 	}
 	return result

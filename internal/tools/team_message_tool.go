@@ -82,6 +82,22 @@ func (t *TeamMessageTool) executeSend(ctx context.Context, args map[string]inter
 		return ErrorResult(err.Error())
 	}
 
+	// Validate recipient is in the same team (prevent cross-team messaging).
+	members, err := t.manager.teamStore.ListMembers(ctx, team.ID)
+	if err != nil {
+		return ErrorResult("failed to verify team membership: " + err.Error())
+	}
+	isMember := false
+	for _, m := range members {
+		if m.AgentID == toAgentID {
+			isMember = true
+			break
+		}
+	}
+	if !isMember {
+		return ErrorResult(fmt.Sprintf("agent %q is not a member of your team", toKey))
+	}
+
 	// Persist to DB
 	msg := &store.TeamMessageData{
 		TeamID:      team.ID,
@@ -196,6 +212,15 @@ func (t *TeamMessageTool) publishTeammateMessage(fromKey, toKey, text string, ct
 	originChannel := ToolChannelFromCtx(ctx)
 	originPeerKind := ToolPeerKindFromCtx(ctx)
 
+	teamMeta := map[string]string{
+		"origin_channel":   originChannel,
+		"origin_peer_kind": originPeerKind,
+		"from_agent":       fromKey,
+		"to_agent":         toKey,
+	}
+	if localKey := ToolLocalKeyFromCtx(ctx); localKey != "" {
+		teamMeta["origin_local_key"] = localKey
+	}
 	t.manager.msgBus.PublishInbound(bus.InboundMessage{
 		Channel:  "system",
 		SenderID: fmt.Sprintf("teammate:%s", fromKey),
@@ -203,11 +228,6 @@ func (t *TeamMessageTool) publishTeammateMessage(fromKey, toKey, text string, ct
 		Content:  fmt.Sprintf("[Team message from %s]: %s", fromKey, text),
 		UserID:   userID,
 		AgentID:  toKey,
-		Metadata: map[string]string{
-			"origin_channel":   originChannel,
-			"origin_peer_kind": originPeerKind,
-			"from_agent":       fromKey,
-			"to_agent":         toKey,
-		},
+		Metadata: teamMeta,
 	})
 }

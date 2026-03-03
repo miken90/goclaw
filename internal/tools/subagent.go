@@ -54,6 +54,7 @@ type SubagentTask struct {
 	OriginChannel   string `json:"originChannel,omitempty"`
 	OriginChatID    string `json:"originChatId,omitempty"`
 	OriginPeerKind  string `json:"originPeerKind,omitempty"`  // "direct" or "group" (for session key building)
+	OriginLocalKey  string `json:"originLocalKey,omitempty"`  // composite key with topic/thread suffix for routing
 	OriginUserID    string `json:"originUserId,omitempty"`    // parent's userID for per-user scoping propagation
 	CreatedAt        int64  `json:"createdAt"`
 	CompletedAt      int64  `json:"completedAt,omitempty"`
@@ -192,6 +193,7 @@ func (sm *SubagentManager) Spawn(
 		OriginChannel:    channel,
 		OriginChatID:     chatID,
 		OriginPeerKind:   peerKind,
+		OriginLocalKey:   ToolLocalKeyFromCtx(ctx),
 		OriginUserID:     store.UserIDFromContext(ctx),
 		OriginTraceID:    tracing.TraceIDFromContext(ctx),
 		OriginRootSpanID: tracing.ParentSpanIDFromContext(ctx),
@@ -241,6 +243,7 @@ func (sm *SubagentManager) RunSync(
 		Depth:            depth + 1,
 		OriginChannel:    channel,
 		OriginChatID:     chatID,
+		OriginLocalKey:   ToolLocalKeyFromCtx(ctx),
 		OriginUserID:     store.UserIDFromContext(ctx),
 		OriginTraceID:    tracing.TraceIDFromContext(ctx),
 		OriginRootSpanID: tracing.ParentSpanIDFromContext(ctx),

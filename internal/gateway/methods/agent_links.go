@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/agent"
+	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/gateway"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
@@ -14,13 +15,14 @@ import (
 
 // AgentLinksMethods handles agents.links.* RPC methods.
 type AgentLinksMethods struct {
-	linkStore    store.AgentLinkStore
-	agentStore   store.AgentStore
-	agentRouter  *agent.Router // for cache invalidation when links change
+	linkStore   store.AgentLinkStore
+	agentStore  store.AgentStore
+	agentRouter *agent.Router   // for cache invalidation when links change
+	msgBus      *bus.MessageBus // for pub/sub cache invalidation
 }
 
-func NewAgentLinksMethods(linkStore store.AgentLinkStore, agentStore store.AgentStore, agentRouter *agent.Router) *AgentLinksMethods {
-	return &AgentLinksMethods{linkStore: linkStore, agentStore: agentStore, agentRouter: agentRouter}
+func NewAgentLinksMethods(linkStore store.AgentLinkStore, agentStore store.AgentStore, agentRouter *agent.Router, msgBus *bus.MessageBus) *AgentLinksMethods {
+	return &AgentLinksMethods{linkStore: linkStore, agentStore: agentStore, agentRouter: agentRouter, msgBus: msgBus}
 }
 
 func (m *AgentLinksMethods) Register(router *gateway.MethodRouter) {
@@ -177,6 +179,7 @@ func (m *AgentLinksMethods) handleCreate(_ context.Context, client *gateway.Clie
 		m.agentRouter.InvalidateAgent(sourceAgent.AgentKey)
 		m.agentRouter.InvalidateAgent(targetAgent.AgentKey)
 	}
+	m.emitTeamCacheInvalidate()
 
 	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
 		"link": link,
@@ -255,6 +258,7 @@ func (m *AgentLinksMethods) handleUpdate(_ context.Context, client *gateway.Clie
 
 	// Invalidate affected agents so AGENTS.md gets regenerated
 	m.invalidateLinkAgents(ctx, linkID)
+	m.emitTeamCacheInvalidate()
 
 	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{"ok": true}))
 }
@@ -302,8 +306,21 @@ func (m *AgentLinksMethods) handleDelete(_ context.Context, client *gateway.Clie
 	if link != nil {
 		m.invalidateLinkAgentsByID(ctx, link.SourceAgentID, link.TargetAgentID)
 	}
+	m.emitTeamCacheInvalidate()
 
 	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{"ok": true}))
+}
+
+// emitTeamCacheInvalidate broadcasts a cache invalidation event for team data.
+// Called when links change since team-member links affect team resolution.
+func (m *AgentLinksMethods) emitTeamCacheInvalidate() {
+	if m.msgBus == nil {
+		return
+	}
+	m.msgBus.Broadcast(bus.Event{
+		Name:    protocol.EventCacheInvalidate,
+		Payload: bus.CacheInvalidatePayload{Kind: bus.CacheKindTeam},
+	})
 }
 
 // invalidateLinkAgents fetches a link by ID and invalidates both source and target agent caches.

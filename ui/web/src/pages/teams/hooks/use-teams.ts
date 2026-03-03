@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import { useWs } from "@/hooks/use-ws";
 import { Methods } from "@/api/protocol";
-import type { TeamData, TeamMemberData, TeamTaskData } from "@/types/team";
+import type { TeamData, TeamMemberData, TeamTaskData, TeamAccessSettings } from "@/types/team";
 
 export function useTeams() {
   const ws = useWs();
@@ -80,5 +80,23 @@ export function useTeams() {
     [ws],
   );
 
-  return { teams, loading, load, createTeam, deleteTeam, getTeam, getTeamTasks, addMember, removeMember };
+  const updateTeamSettings = useCallback(
+    async (teamId: string, settings: TeamAccessSettings) => {
+      await ws.call(Methods.TEAMS_UPDATE, { teamId, settings });
+    },
+    [ws],
+  );
+
+  const getKnownUsers = useCallback(
+    async (teamId: string): Promise<string[]> => {
+      const res = await ws.call<{ users: string[] }>(
+        Methods.TEAMS_KNOWN_USERS,
+        { teamId },
+      );
+      return res.users ?? [];
+    },
+    [ws],
+  );
+
+  return { teams, loading, load, createTeam, deleteTeam, getTeam, getTeamTasks, addMember, removeMember, updateTeamSettings, getKnownUsers };
 }

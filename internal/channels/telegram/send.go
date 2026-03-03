@@ -21,6 +21,7 @@ import (
 var (
 	parseErrRe           = regexp.MustCompile(`(?i)can't parse entities|parse entities|find end of the entity`)
 	messageNotModifiedRe = regexp.MustCompile(`(?i)message is not modified`)
+	threadNotFoundRe     = regexp.MustCompile(`(?i)message thread not found`)
 	htmlTagRe            = regexp.MustCompile(`<[^>]*>`)
 )
 
@@ -106,6 +107,17 @@ func (c *Channel) Send(ctx context.Context, msg bus.OutboundMessage) error {
 	}
 	if v := msg.Metadata["message_thread_id"]; v != "" {
 		fmt.Sscanf(v, "%d", &threadID)
+	}
+
+	// Fallback: extract threadID from localKey suffix (e.g. "-100123:topic:42").
+	// This covers cases where metadata is absent, such as pairing approval notifications
+	// routed via SendToChannel which only has a chatID string.
+	if threadID == 0 {
+		if idx := strings.Index(localKey, ":topic:"); idx > 0 {
+			fmt.Sscanf(localKey[idx+7:], "%d", &threadID)
+		} else if idx := strings.Index(localKey, ":thread:"); idx > 0 {
+			fmt.Sscanf(localKey[idx+8:], "%d", &threadID)
+		}
 	}
 
 	// Placeholder update (e.g. LLM retry notification): edit the placeholder
@@ -241,10 +253,11 @@ func (c *Channel) sendMediaMessage(ctx context.Context, chatID int64, msg bus.Ou
 		// Only reply to the first media item
 		replyTo = 0
 
-		// Send follow-up text if caption was split
+		// Send follow-up text if caption was split.
+		// followUpText is already HTML (from markdownToTelegramHTML above), so
+		// just chunk and send — do NOT convert again (double-escaping breaks entities).
 		if followUpText != "" {
-			htmlContent := markdownToTelegramHTML(followUpText)
-			chunks := chunkHTML(htmlContent, telegramMaxMessageLen)
+			chunks := chunkHTML(followUpText, telegramMaxMessageLen)
 			for _, chunk := range chunks {
 				if err := c.sendHTML(ctx, chatID, chunk, 0, threadID); err != nil {
 					return err
@@ -277,6 +290,12 @@ func (c *Channel) sendHTML(ctx context.Context, chatID int64, html string, reply
 		slog.Warn("HTML parse failed, falling back to plain text", "error", err)
 		tgMsg.ParseMode = ""
 		tgMsg.Text = stripHTML(tgMsg.Text)
+		_, err = c.bot.SendMessage(ctx, tgMsg)
+	}
+	// TS ref: withTelegramThreadFallback — retry without thread ID when topic is deleted.
+	if err != nil && tgMsg.MessageThreadID != 0 && threadNotFoundRe.MatchString(err.Error()) {
+		slog.Warn("thread not found, retrying without message_thread_id", "thread_id", tgMsg.MessageThreadID)
+		tgMsg.MessageThreadID = 0
 		_, err = c.bot.SendMessage(ctx, tgMsg)
 	}
 	return err
@@ -316,6 +335,12 @@ func (c *Channel) sendPhoto(ctx context.Context, chatID telego.ChatID, filePath,
 		params.Caption = stripHTML(params.Caption)
 		_, err = c.bot.SendPhoto(ctx, params)
 	}
+	if err != nil && params.MessageThreadID != 0 && threadNotFoundRe.MatchString(err.Error()) {
+		slog.Warn("sendPhoto: thread not found, retrying without thread", "thread_id", params.MessageThreadID)
+		file.Seek(0, 0)
+		params.MessageThreadID = 0
+		_, err = c.bot.SendPhoto(ctx, params)
+	}
 	return err
 }
 
@@ -351,6 +376,12 @@ func (c *Channel) sendVideo(ctx context.Context, chatID telego.ChatID, filePath,
 		file.Seek(0, 0)
 		params.ParseMode = ""
 		params.Caption = stripHTML(params.Caption)
+		_, err = c.bot.SendVideo(ctx, params)
+	}
+	if err != nil && params.MessageThreadID != 0 && threadNotFoundRe.MatchString(err.Error()) {
+		slog.Warn("sendVideo: thread not found, retrying without thread", "thread_id", params.MessageThreadID)
+		file.Seek(0, 0)
+		params.MessageThreadID = 0
 		_, err = c.bot.SendVideo(ctx, params)
 	}
 	return err
@@ -390,6 +421,12 @@ func (c *Channel) sendAudio(ctx context.Context, chatID telego.ChatID, filePath,
 		params.Caption = stripHTML(params.Caption)
 		_, err = c.bot.SendAudio(ctx, params)
 	}
+	if err != nil && params.MessageThreadID != 0 && threadNotFoundRe.MatchString(err.Error()) {
+		slog.Warn("sendAudio: thread not found, retrying without thread", "thread_id", params.MessageThreadID)
+		file.Seek(0, 0)
+		params.MessageThreadID = 0
+		_, err = c.bot.SendAudio(ctx, params)
+	}
 	return err
 }
 
@@ -425,6 +462,12 @@ func (c *Channel) sendDocument(ctx context.Context, chatID telego.ChatID, filePa
 		file.Seek(0, 0)
 		params.ParseMode = ""
 		params.Caption = stripHTML(params.Caption)
+		_, err = c.bot.SendDocument(ctx, params)
+	}
+	if err != nil && params.MessageThreadID != 0 && threadNotFoundRe.MatchString(err.Error()) {
+		slog.Warn("sendDocument: thread not found, retrying without thread", "thread_id", params.MessageThreadID)
+		file.Seek(0, 0)
+		params.MessageThreadID = 0
 		_, err = c.bot.SendDocument(ctx, params)
 	}
 	return err

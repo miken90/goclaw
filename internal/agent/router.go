@@ -177,6 +177,18 @@ func (r *Router) AbortRun(runID, sessionKey string) bool {
 	return true
 }
 
+// InvalidateUserWorkspace clears the cached workspace for a user across all cached agent loops.
+// Used when user_agent_profiles.workspace changes (e.g. admin reassignment).
+func (r *Router) InvalidateUserWorkspace(userID string) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, entry := range r.agents {
+		if loop, ok := entry.agent.(*Loop); ok {
+			loop.InvalidateUserWorkspace(userID)
+		}
+	}
+}
+
 // AbortRunsForSession cancels all active runs for a session key.
 // Returns the list of aborted run IDs.
 func (r *Router) AbortRunsForSession(sessionKey string) []string {

@@ -33,6 +33,78 @@ func checkUserPermission(settings json.RawMessage, userID string) error {
 	return nil
 }
 
+// teamAccessSettings defines access control rules stored in agent_teams.settings JSONB.
+// Empty/nil lists mean "no restriction". Deny lists take precedence over allow lists.
+type teamAccessSettings struct {
+	AllowUserIDs  []string `json:"allow_user_ids"`
+	DenyUserIDs   []string `json:"deny_user_ids"`
+	AllowChannels []string `json:"allow_channels"`
+	DenyChannels  []string `json:"deny_channels"`
+}
+
+// checkTeamAccess validates whether a user/channel combination is authorized
+// for team operations. Returns nil if access is allowed.
+// System channels ("delegate", "system") always pass.
+// Empty settings = open access (no restrictions).
+func checkTeamAccess(settings json.RawMessage, userID, channel string) error {
+	if len(settings) == 0 || string(settings) == "{}" {
+		return nil
+	}
+	var s teamAccessSettings
+	if json.Unmarshal(settings, &s) != nil {
+		return nil // malformed = fail open
+	}
+
+	// System/internal access always allowed
+	if channel == "delegate" || channel == "system" {
+		return nil
+	}
+
+	// User check: deny > allow
+	if userID != "" {
+		for _, denied := range s.DenyUserIDs {
+			if denied == userID {
+				return fmt.Errorf("user not authorized for this team")
+			}
+		}
+		if len(s.AllowUserIDs) > 0 {
+			found := false
+			for _, allowed := range s.AllowUserIDs {
+				if allowed == userID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("user not authorized for this team")
+			}
+		}
+	}
+
+	// Channel check: deny > allow
+	if channel != "" {
+		for _, denied := range s.DenyChannels {
+			if denied == channel {
+				return fmt.Errorf("channel %q not authorized for this team", channel)
+			}
+		}
+		if len(s.AllowChannels) > 0 {
+			found := false
+			for _, allowed := range s.AllowChannels {
+				if allowed == channel {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return fmt.Errorf("channel %q not authorized for this team", channel)
+			}
+		}
+	}
+
+	return nil
+}
+
 func parseMaxDelegationLoad(otherConfig json.RawMessage) int {
 	if len(otherConfig) == 0 {
 		return defaultMaxDelegationLoad

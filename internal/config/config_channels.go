@@ -34,6 +34,33 @@ type TelegramConfig struct {
 	// Optional audio-aware routing: when set, voice/audio inbound messages are routed to this
 	// agent instead of the default channel agent. Requires the named agent to exist in the config.
 	VoiceAgentID string `json:"voice_agent_id,omitempty"` // agent ID to route voice inbound to (e.g. "speaking-agent")
+
+	// Per-group (and per-topic) overrides. Key is chat ID string (e.g. "-100123456") or "*" for wildcard.
+	// TS ref: channels.telegram.groups in src/config/types.telegram.ts.
+	Groups map[string]*TelegramGroupConfig `json:"groups,omitempty"`
+}
+
+// TelegramGroupConfig defines per-group overrides for a Telegram channel.
+// Matching TS TelegramGroupConfig in src/config/types.telegram.ts.
+type TelegramGroupConfig struct {
+	GroupPolicy    string                          `json:"group_policy,omitempty"`     // override group policy for this group
+	RequireMention *bool                           `json:"require_mention,omitempty"`  // override require_mention for this group
+	AllowFrom      FlexibleStringSlice             `json:"allow_from,omitempty"`       // override allow_from for this group
+	Enabled        *bool                           `json:"enabled,omitempty"`          // disable bot for this group (default: true)
+	Skills         []string                        `json:"skills,omitempty"`           // skill whitelist (nil = all, [] = none)
+	SystemPrompt   string                          `json:"system_prompt,omitempty"`    // extra system prompt for this group
+	Topics         map[string]*TelegramTopicConfig `json:"topics,omitempty"`           // per-topic overrides (key: thread ID string)
+}
+
+// TelegramTopicConfig defines per-topic overrides within a Telegram group.
+// Matching TS TelegramTopicConfig in src/config/types.telegram.ts.
+type TelegramTopicConfig struct {
+	RequireMention *bool               `json:"require_mention,omitempty"`
+	GroupPolicy    string              `json:"group_policy,omitempty"`
+	Skills         []string            `json:"skills,omitempty"`
+	Enabled        *bool               `json:"enabled,omitempty"`
+	AllowFrom      FlexibleStringSlice `json:"allow_from,omitempty"`
+	SystemPrompt   string              `json:"system_prompt,omitempty"`
 }
 
 type DiscordConfig struct {

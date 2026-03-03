@@ -22,6 +22,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/cron"
 	"github.com/nextlevelbuilder/goclaw/internal/gateway"
 	"github.com/nextlevelbuilder/goclaw/internal/gateway/methods"
+	mcpbridge "github.com/nextlevelbuilder/goclaw/internal/mcp"
 	"github.com/nextlevelbuilder/goclaw/internal/pairing"
 	"github.com/nextlevelbuilder/goclaw/internal/permissions"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
@@ -32,7 +33,6 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/internal/store/file"
 	"github.com/nextlevelbuilder/goclaw/internal/store/pg"
-	mcpbridge "github.com/nextlevelbuilder/goclaw/internal/mcp"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 	"github.com/nextlevelbuilder/goclaw/internal/tracing"
 	"github.com/nextlevelbuilder/goclaw/pkg/browser"
@@ -113,6 +113,9 @@ func runGateway() {
 			slog.Info("seeded workspace templates", "files", seededFiles)
 		}
 	}
+
+	// Detect server IPs for output scrubbing (prevents IP leaks via web_fetch, exec, etc.)
+	tools.DetectServerIPs(context.Background())
 
 	// Create tool registry with all tools
 	toolsReg := tools.NewRegistry()
@@ -229,20 +232,24 @@ func runGateway() {
 				if len(items) > 1 {
 					label = fmt.Sprintf("%d tasks", len(items))
 				}
+				batchMeta := map[string]string{
+					"origin_channel":      meta.OriginChannel,
+					"origin_peer_kind":    meta.OriginPeerKind,
+					"parent_agent":        meta.ParentAgent,
+					"subagent_label":      label,
+					"origin_trace_id":     meta.OriginTraceID,
+					"origin_root_span_id": meta.OriginRootSpanID,
+				}
+				if meta.OriginLocalKey != "" {
+					batchMeta["origin_local_key"] = meta.OriginLocalKey
+				}
 				msgBus.PublishInbound(bus.InboundMessage{
 					Channel:  "system",
 					SenderID: senderID,
 					ChatID:   meta.OriginChatID,
 					Content:  content,
 					UserID:   meta.OriginUserID,
-					Metadata: map[string]string{
-						"origin_channel":      meta.OriginChannel,
-						"origin_peer_kind":    meta.OriginPeerKind,
-						"parent_agent":        meta.ParentAgent,
-						"subagent_label":      label,
-						"origin_trace_id":     meta.OriginTraceID,
-						"origin_root_span_id": meta.OriginRootSpanID,
-					},
+					Metadata: batchMeta,
 				})
 			},
 			func(parentID string) int {
@@ -294,6 +301,17 @@ func runGateway() {
 		dataDir = config.ExpandHome("~/.goclaw/data")
 	}
 	os.MkdirAll(dataDir, 0755)
+
+	// Block exec from accessing sensitive directories (data dir, .goclaw, config file).
+	// Prevents `cp /app/data/config.json workspace/` and similar exfiltration.
+	if execTool, ok := toolsReg.Get("exec"); ok {
+		if et, ok := execTool.(*tools.ExecTool); ok {
+			et.DenyPaths(dataDir, ".goclaw/")
+			if cfgPath := os.Getenv("GOCLAW_CONFIG"); cfgPath != "" {
+				et.DenyPaths(cfgPath)
+			}
+		}
+	}
 
 	// --- Mode-based store creation ---
 	// Standalone: file-based adapters wrapping sessions/cron/pairing packages.
@@ -737,6 +755,16 @@ func runGateway() {
 		}
 	}
 
+	// TODO: create_forum_topic tool — disabled for now, re-enable when needed.
+	// toolsReg.Register(tools.NewCreateForumTopicTool(func() tools.ForumTopicCreator {
+	// 	for _, name := range channelMgr.GetEnabledChannels() {
+	// 		ch, ok := channelMgr.GetChannel(name)
+	// 		if !ok { continue }
+	// 		if fc, ok := ch.(tools.ForumTopicCreator); ok { return fc }
+	// 	}
+	// 	return nil
+	// }))
+
 	// Register channels RPC methods (after channelMgr is initialized with all channels)
 	methods.NewChannelsMethods(channelMgr).Register(server.Router())
 
@@ -747,24 +775,24 @@ func runGateway() {
 
 	// Register agent links WS RPC methods (managed mode only)
 	if managedStores != nil && managedStores.AgentLinks != nil && managedStores.Agents != nil {
-		methods.NewAgentLinksMethods(managedStores.AgentLinks, managedStores.Agents, agentRouter).Register(server.Router())
+		methods.NewAgentLinksMethods(managedStores.AgentLinks, managedStores.Agents, agentRouter, msgBus).Register(server.Router())
 	}
 
 	// Register agent teams WS RPC methods (managed mode only)
 	if managedStores != nil && managedStores.Teams != nil {
-		methods.NewTeamsMethods(managedStores.Teams, managedStores.Agents, managedStores.AgentLinks, agentRouter).Register(server.Router())
+		methods.NewTeamsMethods(managedStores.Teams, managedStores.Agents, managedStores.AgentLinks, agentRouter, msgBus).Register(server.Router())
 	}
 
 	// Cache invalidation: reload channel instances on changes.
 	// Runs in a goroutine because Reload() is heavy (stops channels, waits for polling exit,
 	// sleeps 500ms, reloads from DB, starts new channels) and Broadcast handlers must be non-blocking.
 	if instanceLoader != nil {
-		msgBus.Subscribe("cache:channel_instances", func(event bus.Event) {
+		msgBus.Subscribe(bus.TopicCacheChannelInstances, func(event bus.Event) {
 			if event.Name != protocol.EventCacheInvalidate {
 				return
 			}
 			payload, ok := event.Payload.(bus.CacheInvalidatePayload)
-			if !ok || payload.Kind != "channel_instances" {
+			if !ok || payload.Kind != bus.CacheKindChannelInstances {
 				return
 			}
 			go instanceLoader.Reload(context.Background())
@@ -843,7 +871,7 @@ func runGateway() {
 	// Subscribe to agent events for channel streaming/reaction forwarding.
 	// Events emitted by agent loops are broadcast to the bus; we forward them
 	// to the channel manager which routes to StreamingChannel/ReactionChannel.
-	msgBus.Subscribe("channel-streaming", func(event bus.Event) {
+	msgBus.Subscribe(bus.TopicChannelStreaming, func(event bus.Event) {
 		if event.Name != protocol.EventAgent {
 			return
 		}

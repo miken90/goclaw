@@ -42,6 +42,8 @@ type SessionInfo struct {
 	MessageCount int       `json:"messageCount"`
 	Created      time.Time `json:"created"`
 	Updated      time.Time `json:"updated"`
+	Label        string    `json:"label,omitempty"`
+	Channel      string    `json:"channel,omitempty"`
 }
 
 // SessionListOpts holds pagination options for ListPaged.

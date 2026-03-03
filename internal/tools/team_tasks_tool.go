@@ -133,6 +133,11 @@ func (t *TeamTasksTool) executeList(ctx context.Context, args map[string]interfa
 }
 
 func (t *TeamTasksTool) executeGet(ctx context.Context, args map[string]interface{}) *Result {
+	team, _, err := t.manager.resolveTeam(ctx)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+
 	taskIDStr, _ := args["task_id"].(string)
 	if taskIDStr == "" {
 		return ErrorResult("task_id is required for get action")
@@ -145,6 +150,9 @@ func (t *TeamTasksTool) executeGet(ctx context.Context, args map[string]interfac
 	task, err := t.manager.teamStore.GetTask(ctx, taskID)
 	if err != nil {
 		return ErrorResult("failed to get task: " + err.Error())
+	}
+	if task.TeamID != team.ID {
+		return ErrorResult("task does not belong to your team")
 	}
 
 	// Truncate result for context protection (full result in DB)
@@ -253,7 +261,7 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]inter
 }
 
 func (t *TeamTasksTool) executeClaim(ctx context.Context, args map[string]interface{}) *Result {
-	_, agentID, err := t.manager.resolveTeam(ctx)
+	team, agentID, err := t.manager.resolveTeam(ctx)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
@@ -267,7 +275,7 @@ func (t *TeamTasksTool) executeClaim(ctx context.Context, args map[string]interf
 		return ErrorResult("invalid task_id")
 	}
 
-	if err := t.manager.teamStore.ClaimTask(ctx, taskID, agentID); err != nil {
+	if err := t.manager.teamStore.ClaimTask(ctx, taskID, agentID, team.ID); err != nil {
 		return ErrorResult("failed to claim task: " + err.Error())
 	}
 
@@ -275,7 +283,7 @@ func (t *TeamTasksTool) executeClaim(ctx context.Context, args map[string]interf
 }
 
 func (t *TeamTasksTool) executeComplete(ctx context.Context, args map[string]interface{}) *Result {
-	_, agentID, err := t.manager.resolveTeam(ctx)
+	team, agentID, err := t.manager.resolveTeam(ctx)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
@@ -297,19 +305,16 @@ func (t *TeamTasksTool) executeComplete(ctx context.Context, args map[string]int
 	// Auto-claim if the task is still pending (saves an extra tool call).
 	// ClaimTask is atomic — only one agent can succeed, others get an error.
 	// Ignore claim error: task may already be in_progress (claimed by us or someone else).
-	_ = t.manager.teamStore.ClaimTask(ctx, taskID, agentID)
+	_ = t.manager.teamStore.ClaimTask(ctx, taskID, agentID, team.ID)
 
-	if err := t.manager.teamStore.CompleteTask(ctx, taskID, result); err != nil {
+	if err := t.manager.teamStore.CompleteTask(ctx, taskID, team.ID, result); err != nil {
 		return ErrorResult("failed to complete task: " + err.Error())
 	}
 
-	// Resolve team for event payload
-	if team, _, teamErr := t.manager.resolveTeam(ctx); teamErr == nil {
-		t.manager.broadcastTeamEvent(protocol.EventTeamTaskCompleted, map[string]string{
-			"team_id": team.ID.String(),
-			"task_id": taskIDStr,
-		})
-	}
+	t.manager.broadcastTeamEvent(protocol.EventTeamTaskCompleted, map[string]string{
+		"team_id": team.ID.String(),
+		"task_id": taskIDStr,
+	})
 
 	return NewResult(fmt.Sprintf("Task %s completed. Dependent tasks have been unblocked.", taskIDStr))
 }

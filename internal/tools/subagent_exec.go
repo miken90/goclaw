@@ -35,6 +35,7 @@ func (sm *SubagentManager) runTask(ctx context.Context, task *SubagentTask, call
 			OriginChannel:    task.OriginChannel,
 			OriginChatID:     task.OriginChatID,
 			OriginPeerKind:   task.OriginPeerKind,
+			OriginLocalKey:   task.OriginLocalKey,
 			OriginUserID:     task.OriginUserID,
 			ParentAgent:      task.ParentID,
 			OriginTraceID:    task.OriginTraceID.String(),
@@ -50,21 +51,25 @@ func (sm *SubagentManager) runTask(ctx context.Context, task *SubagentTask, call
 			remainingActive := sm.CountRunningForParent(task.ParentID)
 			announceContent := FormatBatchedAnnounce([]AnnounceQueueItem{item}, remainingActive)
 
+			announceMeta := map[string]string{
+				"origin_channel":      task.OriginChannel,
+				"origin_peer_kind":    task.OriginPeerKind,
+				"parent_agent":        task.ParentID,
+				"subagent_id":         task.ID,
+				"subagent_label":      task.Label,
+				"origin_trace_id":     task.OriginTraceID.String(),
+				"origin_root_span_id": task.OriginRootSpanID.String(),
+			}
+			if task.OriginLocalKey != "" {
+				announceMeta["origin_local_key"] = task.OriginLocalKey
+			}
 			sm.msgBus.PublishInbound(bus.InboundMessage{
 				Channel:  "system",
 				SenderID: fmt.Sprintf("subagent:%s", task.ID),
 				ChatID:   task.OriginChatID,
 				Content:  announceContent,
 				UserID:   task.OriginUserID,
-				Metadata: map[string]string{
-					"origin_channel":      task.OriginChannel,
-					"origin_peer_kind":    task.OriginPeerKind,
-					"parent_agent":        task.ParentID,
-					"subagent_id":         task.ID,
-					"subagent_label":      task.Label,
-					"origin_trace_id":     task.OriginTraceID.String(),
-					"origin_root_span_id": task.OriginRootSpanID.String(),
-				},
+				Metadata: announceMeta,
 			})
 		}
 	}

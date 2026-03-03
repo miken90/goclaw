@@ -229,8 +229,31 @@ func parseRawChatID(key string) (int64, error) {
 	raw := key
 	if idx := strings.Index(key, ":topic:"); idx > 0 {
 		raw = key[:idx]
+	} else if idx := strings.Index(key, ":thread:"); idx > 0 {
+		raw = key[:idx]
 	}
 	return parseChatID(raw)
+}
+
+// CreateForumTopic creates a new forum topic in a supergroup.
+// Implements tools.ForumTopicCreator interface.
+func (c *Channel) CreateForumTopic(ctx context.Context, chatID int64, name string, iconColor int, iconEmojiID string) (int, string, error) {
+	params := &telego.CreateForumTopicParams{
+		ChatID: telego.ChatID{ID: chatID},
+		Name:   name,
+	}
+	if iconColor > 0 {
+		params.IconColor = iconColor
+	}
+	if iconEmojiID != "" {
+		params.IconCustomEmojiID = iconEmojiID
+	}
+
+	topic, err := c.bot.CreateForumTopic(ctx, params)
+	if err != nil {
+		return 0, "", fmt.Errorf("telegram API: %w", err)
+	}
+	return topic.MessageThreadID, topic.Name, nil
 }
 
 // telegramGeneralTopicID is the fixed topic ID for the "General" topic in forum supergroups.

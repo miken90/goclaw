@@ -69,9 +69,33 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 		}
 	}
 
-	// Group policy check (matching TS: groupPolicy ?? "open").
+	// DM thread detection: preserve message_thread_id in private chats for session isolation.
+	// Telegram supports topics/threads in bot DMs.
+	dmThreadID := 0
+	if !isGroup && message.MessageThreadID > 0 {
+		dmThreadID = message.MessageThreadID
+	}
+
+	chatID := message.Chat.ID
+	chatIDStr := fmt.Sprintf("%d", chatID)
+
+	// Resolve per-topic config (matching TS resolveTelegramGroupConfig).
+	// Merges: global defaults → wildcard group ("*") → specific group → specific topic.
+	var topicCfg resolvedTopicConfig
 	if isGroup {
-		groupPolicy := c.config.GroupPolicy
+		topicCfg = resolveTopicConfig(c.config, chatIDStr, messageThreadID)
+	}
+
+	// Group policy + enabled check (matching TS: groupPolicy ?? "open").
+	if isGroup {
+		// Per-topic enabled gate: if explicitly disabled, reject.
+		if !topicCfg.isEnabled() {
+			slog.Debug("telegram group message rejected: topic disabled",
+				"chat_id", chatID, "topic_id", messageThreadID)
+			return
+		}
+
+		groupPolicy := topicCfg.groupPolicy
 		if groupPolicy == "" {
 			groupPolicy = "open"
 		}
@@ -81,9 +105,16 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 			slog.Debug("telegram group message rejected: groups disabled", "chat_id", message.Chat.ID)
 			return
 		case "allowlist":
-			if !c.IsAllowed(userID) && !c.IsAllowed(senderID) {
+			allowed := false
+			for _, a := range topicCfg.allowFrom {
+				if a == userID || a == senderID {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
 				slog.Debug("telegram group message rejected by allowlist",
-					"user_id", userID, "username", user.Username, "chat_id", message.Chat.ID,
+					"user_id", userID, "username", user.Username, "chat_id", chatID,
 				)
 				return
 			}
@@ -131,20 +162,21 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 		}
 	}
 
-	chatID := message.Chat.ID
-	chatIDStr := fmt.Sprintf("%d", chatID)
-
 	// Build composite localKey for sync.Map operations.
 	// Forum topics get separate state (placeholders, streams, reactions, history).
 	// TS ref: buildTelegramGroupPeerId() in src/telegram/bot/helpers.ts.
 	localKey := chatIDStr
 	if isForum && messageThreadID > 0 {
 		localKey = fmt.Sprintf("%s:topic:%d", chatIDStr, messageThreadID)
+	} else if dmThreadID > 0 {
+		localKey = fmt.Sprintf("%s:thread:%d", chatIDStr, dmThreadID)
 	}
 
 	// Store thread ID for streaming/send use (looked up by localKey later).
 	if messageThreadID > 0 {
 		c.threadIDs.Store(localKey, messageThreadID)
+	} else if dmThreadID > 0 {
+		c.threadIDs.Store(localKey, dmThreadID)
 	}
 
 	// Extract text content
@@ -245,7 +277,7 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 
 	// --- Group mention gating (matching TS mentionGate logic) ---
 	// Also check implicit mention via reply-to-bot
-	if isGroup && c.requireMention {
+	if isGroup && topicCfg.effectiveRequireMention(c.requireMention) {
 		botUsername := c.bot.Username()
 		wasMentioned := c.detectMention(message, botUsername)
 
@@ -278,13 +310,13 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 	}
 
 	// --- Group pairing gate (only reached when bot is mentioned) ---
-	if isGroup && c.config.GroupPolicy == "pairing" && c.pairingService != nil {
+	if isGroup && topicCfg.groupPolicy == "pairing" && c.pairingService != nil {
 		if _, cached := c.approvedGroups.Load(chatIDStr); !cached {
 			groupSenderID := fmt.Sprintf("group:%d", chatID)
 			if c.pairingService.IsPaired(groupSenderID, c.Name()) {
 				c.approvedGroups.Store(chatIDStr, true)
 			} else {
-				c.sendGroupPairingReply(ctx, chatID, chatIDStr, groupSenderID)
+				c.sendGroupPairingReply(ctx, chatID, chatIDStr, groupSenderID, localKey, messageThreadID)
 				return
 			}
 		}
@@ -346,9 +378,8 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 	// instead the response will be sent as a reply to the sender's message.
 	if !isGroup {
 		thinkMsg := tu.Message(chatIDObj, "Thinking...")
-		sendThreadID := resolveThreadIDForSend(messageThreadID)
-		if sendThreadID > 0 {
-			thinkMsg.MessageThreadID = sendThreadID
+		if dmThreadID > 0 {
+			thinkMsg.MessageThreadID = dmThreadID
 		}
 		pMsg, err := c.bot.SendMessage(ctx, thinkMsg)
 		if err == nil {
@@ -367,6 +398,16 @@ func (c *Channel) handleMessage(ctx context.Context, update telego.Update) {
 	if isForum {
 		metadata["is_forum"] = "true"
 		metadata["message_thread_id"] = fmt.Sprintf("%d", messageThreadID)
+	}
+	if dmThreadID > 0 {
+		metadata["dm_thread_id"] = fmt.Sprintf("%d", dmThreadID)
+		metadata["message_thread_id"] = fmt.Sprintf("%d", dmThreadID)
+	}
+	if topicCfg.systemPrompt != "" {
+		metadata["topic_system_prompt"] = topicCfg.systemPrompt
+	}
+	if topicCfg.skills != nil {
+		metadata["topic_skills"] = strings.Join(topicCfg.skills, ",")
 	}
 
 	peerKind := "direct"

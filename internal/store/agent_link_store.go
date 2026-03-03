@@ -38,7 +38,9 @@ type AgentLinkData struct {
 	TargetAgentKey    string `json:"target_agent_key,omitempty"`
 	TargetDisplayName string `json:"target_display_name,omitempty"`
 	TargetDescription string `json:"target_description,omitempty"`
-	TeamName          string `json:"team_name,omitempty"` // from LEFT JOIN agent_teams
+	TeamName          string `json:"team_name,omitempty"`           // from LEFT JOIN agent_teams (link's own team)
+	TargetIsTeamLead  bool   `json:"target_is_team_lead,omitempty"` // true if target is lead of any active team
+	TargetTeamName    string `json:"target_team_name,omitempty"`    // name of team the target leads
 }
 
 // AgentLinkStore manages inter-agent delegation links.

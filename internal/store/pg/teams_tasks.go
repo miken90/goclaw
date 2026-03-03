@@ -110,12 +110,12 @@ func (s *PGTeamStore) SearchTasks(ctx context.Context, teamID uuid.UUID, query s
 	return scanTaskRowsJoined(rows)
 }
 
-func (s *PGTeamStore) ClaimTask(ctx context.Context, taskID, agentID uuid.UUID) error {
+func (s *PGTeamStore) ClaimTask(ctx context.Context, taskID, agentID, teamID uuid.UUID) error {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE team_tasks SET status = $1, owner_agent_id = $2, updated_at = $3
-		 WHERE id = $4 AND status = $5 AND owner_agent_id IS NULL`,
+		 WHERE id = $4 AND status = $5 AND owner_agent_id IS NULL AND team_id = $6`,
 		store.TeamTaskStatusInProgress, agentID, time.Now(),
-		taskID, store.TeamTaskStatusPending,
+		taskID, store.TeamTaskStatusPending, teamID,
 	)
 	if err != nil {
 		return err
@@ -130,7 +130,7 @@ func (s *PGTeamStore) ClaimTask(ctx context.Context, taskID, agentID uuid.UUID) 
 	return nil
 }
 
-func (s *PGTeamStore) CompleteTask(ctx context.Context, taskID uuid.UUID, result string) error {
+func (s *PGTeamStore) CompleteTask(ctx context.Context, taskID, teamID uuid.UUID, result string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -140,9 +140,9 @@ func (s *PGTeamStore) CompleteTask(ctx context.Context, taskID uuid.UUID, result
 	// Mark task as completed (must be in_progress — use ClaimTask first)
 	res, err := tx.ExecContext(ctx,
 		`UPDATE team_tasks SET status = $1, result = $2, updated_at = $3
-		 WHERE id = $4 AND status = $5`,
+		 WHERE id = $4 AND status = $5 AND team_id = $6`,
 		store.TeamTaskStatusCompleted, result, time.Now(),
-		taskID, store.TeamTaskStatusInProgress,
+		taskID, store.TeamTaskStatusInProgress, teamID,
 	)
 	if err != nil {
 		return err

@@ -3,7 +3,7 @@
 // --- Per-agent config types (matching Go config structs) ---
 
 export interface ToolPolicyConfig {
-  profile?: string; // "default", "strict", "permissive"
+  profile?: string; // "full", "coding", "messaging", "minimal"
   allow?: string[];
   deny?: string[];
   alsoAllow?: string[];

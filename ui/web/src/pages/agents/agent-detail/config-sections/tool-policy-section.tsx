@@ -25,16 +25,17 @@ export function ToolPolicySection({ enabled, value, onToggle, onChange }: ToolPo
       onToggle={onToggle}
     >
       <div className="space-y-2">
-        <InfoLabel tip="Base tool profile. 'default' includes common tools, 'strict' limits to safe tools only, 'permissive' allows all tools.">Profile</InfoLabel>
+        <InfoLabel tip="Base tool profile. 'full' allows all tools, 'coding' includes filesystem/runtime/sessions/memory, 'messaging' includes messaging/sessions, 'minimal' allows only session_status.">Profile</InfoLabel>
         <Select
           value={value.profile ?? ""}
           onValueChange={(v) => onChange({ ...value, profile: v || undefined })}
         >
-          <SelectTrigger><SelectValue placeholder="default" /></SelectTrigger>
+          <SelectTrigger><SelectValue placeholder="full" /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="default">default</SelectItem>
-            <SelectItem value="strict">strict</SelectItem>
-            <SelectItem value="permissive">permissive</SelectItem>
+            <SelectItem value="full">full</SelectItem>
+            <SelectItem value="coding">coding</SelectItem>
+            <SelectItem value="messaging">messaging</SelectItem>
+            <SelectItem value="minimal">minimal</SelectItem>
           </SelectContent>
         </Select>
       </div>

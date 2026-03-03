@@ -21,7 +21,7 @@ const dmPolicyOptions = [
   { value: "disabled", label: "Disabled" },
 ];
 
-const groupPolicyOptions = [
+export const groupPolicyOptions = [
   { value: "open", label: "Open (accept all)" },
   { value: "pairing", label: "Pairing (require approval)" },
   { value: "allowlist", label: "Allowlist only" },

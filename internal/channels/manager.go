@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"regexp"
+	"strings"
 	"sync"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
@@ -132,6 +134,21 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 					"channel", msg.Channel,
 					"error", err,
 				)
+				// Try to send a text-only error notification back to the chat.
+				// Only for media failures — text-only failures likely mean the chat
+				// is inaccessible (kicked, blocked, etc.) so retrying won't help.
+				if len(msg.Media) > 0 {
+					notifyMsg := bus.OutboundMessage{
+						Channel:  msg.Channel,
+						ChatID:   msg.ChatID,
+						Content:  formatChannelSendError(err),
+						Metadata: sendErrorMeta(msg.Metadata),
+					}
+					if err2 := channel.Send(ctx, notifyMsg); err2 != nil {
+						slog.Warn("failed to send error notification",
+							"channel", msg.Channel, "error", err2)
+					}
+				}
 			}
 
 			// Clean up temporary media files after successful (or failed) send.
@@ -375,4 +392,62 @@ func extractPayloadString(payload interface{}, key string) string {
 		}
 	}
 	return ""
+}
+
+// --- Send error notification helpers ---
+
+// telegramAPIDescRe extracts the human-readable description from Telegram Bot API errors.
+// Example: `telego: sendPhoto: api: 400 "Bad Request: not enough rights to send photos to the chat"`
+//
+//	→ "not enough rights to send photos to the chat"
+var telegramAPIDescRe = regexp.MustCompile(`"Bad Request:\s*(.+?)"`)
+
+// formatChannelSendError converts a channel.Send error into a user-friendly message.
+// Never exposes raw library/HTTP details.
+func formatChannelSendError(err error) string {
+	raw := err.Error()
+	lower := strings.ToLower(raw)
+
+	// Telegram "Bad Request: <description>" — extract description
+	if m := telegramAPIDescRe.FindStringSubmatch(raw); len(m) == 2 {
+		return fmt.Sprintf("⚠️ Send failed: %s", m[1])
+	}
+
+	// Common Telegram API errors (non-Bad Request)
+	switch {
+	case strings.Contains(lower, "not enough rights"):
+		return "⚠️ Send failed: bot doesn't have permission to send this type of message."
+	case strings.Contains(lower, "chat not found"):
+		return "⚠️ Send failed: chat not found."
+	case strings.Contains(lower, "bot was blocked"):
+		return "⚠️ Send failed: bot was blocked by the user."
+	case strings.Contains(lower, "user is deactivated"):
+		return "⚠️ Send failed: user account is deactivated."
+	case strings.Contains(lower, "too many requests") || strings.Contains(lower, "flood"):
+		return "⚠️ Send failed: rate limited by Telegram. Please try again later."
+	case strings.Contains(lower, "file is too big") || strings.Contains(lower, "wrong file"):
+		return "⚠️ Send failed: file is too large or invalid for Telegram."
+	}
+
+	// Generic fallback — don't expose internals
+	return "⚠️ Failed to deliver message. Check bot logs for details."
+}
+
+// sendErrorMeta copies only the routing fields from outbound metadata.
+// Strips reply_to_message_id, placeholder_key, audio_as_voice, etc.
+// that could cause unintended side effects on the error notification.
+func sendErrorMeta(orig map[string]string) map[string]string {
+	if orig == nil {
+		return nil
+	}
+	meta := make(map[string]string)
+	for _, k := range []string{"local_key", "message_thread_id"} {
+		if v := orig[k]; v != "" {
+			meta[k] = v
+		}
+	}
+	if len(meta) == 0 {
+		return nil
+	}
+	return meta
 }

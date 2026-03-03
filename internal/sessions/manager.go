@@ -326,6 +326,8 @@ func (m *Manager) List(agentID string) []SessionInfo {
 			MessageCount: len(s.Messages),
 			Created:      s.Created,
 			Updated:      s.Updated,
+			Label:        s.Label,
+			Channel:      s.Channel,
 		})
 	}
 	return result
@@ -375,6 +377,8 @@ type SessionInfo struct {
 	MessageCount int       `json:"messageCount"`
 	Created      time.Time `json:"created"`
 	Updated      time.Time `json:"updated"`
+	Label        string    `json:"label,omitempty"`
+	Channel      string    `json:"channel,omitempty"`
 }
 
 // Save persists a session to disk atomically.

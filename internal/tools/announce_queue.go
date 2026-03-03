@@ -22,6 +22,7 @@ type AnnounceMetadata struct {
 	OriginChannel    string
 	OriginChatID     string
 	OriginPeerKind   string
+	OriginLocalKey   string // composite key with topic/thread suffix for routing
 	OriginUserID     string
 	ParentAgent      string
 	OriginTraceID    string // parent trace UUID for announce linking

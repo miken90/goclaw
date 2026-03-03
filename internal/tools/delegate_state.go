@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -127,12 +128,23 @@ func (dm *DelegateManager) flushCompletedSessions() {
 // Called after a delegation finishes successfully. Errors are logged but not fatal.
 // On success, flushes all tracked delegate sessions (task done = context no longer needed).
 // Also persists a team message record for audit trail / visualization.
-func (dm *DelegateManager) autoCompleteTeamTask(task *DelegationTask, resultContent string) {
+func (dm *DelegateManager) autoCompleteTeamTask(task *DelegationTask, resultContent string, deliverables []string) {
 	if dm.teamStore == nil || task.TeamTaskID == uuid.Nil {
 		return
 	}
-	_ = dm.teamStore.ClaimTask(context.Background(), task.TeamTaskID, task.TargetAgentID)
-	if err := dm.teamStore.CompleteTask(context.Background(), task.TeamTaskID, resultContent); err != nil {
+
+	// Use actual deliverables (tool outputs) as task result when available,
+	// falling back to the LLM's summary response.
+	taskResult := resultContent
+	if len(deliverables) > 0 {
+		taskResult = strings.Join(deliverables, "\n\n---\n\n")
+		if len(taskResult) > 100_000 {
+			taskResult = taskResult[:100_000] + "\n\n[truncated]"
+		}
+	}
+
+	_ = dm.teamStore.ClaimTask(context.Background(), task.TeamTaskID, task.TargetAgentID, task.TeamID)
+	if err := dm.teamStore.CompleteTask(context.Background(), task.TeamTaskID, task.TeamID, taskResult); err != nil {
 		slog.Warn("delegate: failed to auto-complete team task",
 			"task_id", task.TeamTaskID, "delegation_id", task.ID, "error", err)
 	} else {

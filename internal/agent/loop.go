@@ -32,7 +32,8 @@ import (
 const bootstrapAutoCleanupTurns = 3
 
 // EnsureUserFilesFunc seeds per-user context files on first chat (managed mode).
-type EnsureUserFilesFunc func(ctx context.Context, agentID uuid.UUID, userID, agentType, workspace string) error
+// Returns the effective workspace path (from user_agent_profiles) for caching.
+type EnsureUserFilesFunc func(ctx context.Context, agentID uuid.UUID, userID, agentType, workspace, channel string) (effectiveWorkspace string, err error)
 
 // ContextFileLoaderFunc loads context files dynamically per-request (managed mode).
 type ContextFileLoaderFunc func(ctx context.Context, agentID uuid.UUID, userID, agentType string) []bootstrap.ContextFile
@@ -74,7 +75,7 @@ type Loop struct {
 	ensureUserFiles    EnsureUserFilesFunc
 	contextFileLoader  ContextFileLoaderFunc
 	bootstrapCleanup   BootstrapCleanupFunc
-	seededUsers        sync.Map // userID → true, avoid re-check per request
+	userWorkspaces     sync.Map // userID → string (expanded workspace path from user_agent_profiles)
 
 	// Compaction config (memory flush settings)
 	compactionCfg *config.CompactionConfig
@@ -103,6 +104,9 @@ type Loop struct {
 
 	// Thinking level for extended thinking support
 	thinkingLevel string
+
+	// Group writer cache for system prompt injection (managed mode)
+	groupWriterCache *store.GroupWriterCache
 }
 
 // AgentEvent is emitted during agent execution for WS broadcasting.
@@ -168,6 +172,9 @@ type LoopConfig struct {
 
 	// Thinking level: "off", "low", "medium", "high" (from agent other_config)
 	ThinkingLevel string
+
+	// Group writer cache for system prompt injection (managed mode)
+	GroupWriterCache *store.GroupWriterCache
 }
 
 func NewLoop(cfg LoopConfig) *Loop {
@@ -227,6 +234,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		maxMessageChars:       cfg.MaxMessageChars,
 		builtinToolSettings:   cfg.BuiltinToolSettings,
 		thinkingLevel:         cfg.ThinkingLevel,
+		groupWriterCache:      cfg.GroupWriterCache,
 	}
 }
 
@@ -243,8 +251,10 @@ type RunRequest struct {
 	UserID           string // external user ID (TEXT, free-form) for multi-tenant scoping
 	SenderID         string // original individual sender ID (preserved in group chats for permission checks)
 	Stream           bool   // whether to stream response chunks
-	ExtraSystemPrompt string // optional: injected into system prompt (skills, subagent context, etc.)
-	HistoryLimit     int    // max user turns to keep in context (0=unlimited, from channel config)
+	ExtraSystemPrompt string   // optional: injected into system prompt (skills, subagent context, etc.)
+	SkillFilter       []string // per-request skill override: nil=use agent default, []=no skills, ["x","y"]=whitelist
+	HistoryLimit      int      // max user turns to keep in context (0=unlimited, from channel config)
+	LocalKey         string    // composite key with topic/thread suffix for routing (e.g. "-100123:topic:42")
 	ParentTraceID    uuid.UUID // if set, reuse parent trace instead of creating new (announce runs)
 	ParentRootSpanID uuid.UUID // if set, nest announce agent span under this parent span
 	TraceName        string    // override trace name (default: "chat <agentID>")
@@ -253,11 +263,12 @@ type RunRequest struct {
 
 // RunResult is the output of a completed agent run.
 type RunResult struct {
-	Content    string           `json:"content"`
-	RunID      string           `json:"runId"`
-	Iterations int              `json:"iterations"`
-	Usage      *providers.Usage `json:"usage,omitempty"`
-	Media      []MediaResult    `json:"media,omitempty"` // media files from tool results (MEDIA: prefix)
+	Content      string           `json:"content"`
+	RunID        string           `json:"runId"`
+	Iterations   int              `json:"iterations"`
+	Usage        *providers.Usage `json:"usage,omitempty"`
+	Media        []MediaResult    `json:"media,omitempty"`         // media files from tool results (MEDIA: prefix)
+	Deliverables []string         `json:"deliverables,omitempty"`  // actual content from tool outputs (for team task results)
 }
 
 // MediaResult represents a media file produced by a tool during the agent run.
@@ -326,6 +337,12 @@ func (l *Loop) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 			// The span itself is emitted after runLoop completes (with full timing data).
 			ctx = tracing.WithParentSpanID(ctx, store.GenNewID())
 		}
+	}
+
+	// Inject local key into tool context so delegation/subagent tools can
+	// propagate topic/thread routing info back through announce messages.
+	if req.LocalKey != "" {
+		ctx = tools.WithToolLocalKey(ctx, req.LocalKey)
 	}
 
 	runStart := time.Now().UTC()
@@ -397,25 +414,37 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 	}
 
 	// Per-user workspace isolation.
-	// Each user gets a subdirectory within the agent's workspace.
-	if l.workspace != "" {
-		effectiveWorkspace := l.workspace
-		if req.UserID != "" {
-			effectiveWorkspace = filepath.Join(l.workspace, sanitizePathSegment(req.UserID))
-			if err := os.MkdirAll(effectiveWorkspace, 0755); err != nil {
-				slog.Warn("failed to create user workspace directory", "workspace", effectiveWorkspace, "user", req.UserID, "error", err)
+	// Workspace path comes from user_agent_profiles (includes channel segment
+	// for cross-channel isolation). Cached in userWorkspaces to avoid repeated DB queries.
+	if l.workspace != "" && req.UserID != "" {
+		cachedWs, loaded := l.userWorkspaces.Load(req.UserID)
+		if !loaded {
+			// First request for this user: get/create profile → returns stored workspace.
+			// Also seeds per-user context files on first chat (managed mode).
+			ws := l.workspace
+			if l.ensureUserFiles != nil {
+				var err error
+				ws, err = l.ensureUserFiles(ctx, l.agentUUID, req.UserID, l.agentType, l.workspace, req.Channel)
+				if err != nil {
+					slog.Warn("failed to ensure user context files", "error", err)
+					ws = l.workspace
+				}
 			}
+			// Expand ~ and convert to absolute for filesystem operations.
+			ws = config.ExpandHome(ws)
+			if !filepath.IsAbs(ws) {
+				ws, _ = filepath.Abs(ws)
+			}
+			l.userWorkspaces.Store(req.UserID, ws)
+			cachedWs = ws
+		}
+		effectiveWorkspace := filepath.Join(cachedWs.(string), sanitizePathSegment(req.UserID))
+		if err := os.MkdirAll(effectiveWorkspace, 0755); err != nil {
+			slog.Warn("failed to create user workspace directory", "workspace", effectiveWorkspace, "user", req.UserID, "error", err)
 		}
 		ctx = tools.WithToolWorkspace(ctx, effectiveWorkspace)
-	}
-
-	// Ensure per-user context files exist (first-chat seeding, managed mode)
-	if l.ensureUserFiles != nil && req.UserID != "" {
-		if _, loaded := l.seededUsers.LoadOrStore(req.UserID, true); !loaded {
-			if err := l.ensureUserFiles(ctx, l.agentUUID, req.UserID, l.agentType, l.workspace); err != nil {
-				slog.Warn("failed to ensure user context files", "error", err)
-			}
-		}
+	} else if l.workspace != "" {
+		ctx = tools.WithToolWorkspace(ctx, l.workspace)
 	}
 
 	// Persist agent UUID + user ID on the session (for querying/tracing)
@@ -481,7 +510,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 
 	// buildMessages resolves context files once and also detects BOOTSTRAP.md presence
 	// (hadBootstrap) — no extra DB roundtrip needed for bootstrap detection.
-	messages, hadBootstrap := l.buildMessages(ctx, history, summary, req.Message, req.ExtraSystemPrompt, req.SessionKey, req.Channel, req.UserID, req.HistoryLimit)
+	messages, hadBootstrap := l.buildMessages(ctx, history, summary, req.Message, req.ExtraSystemPrompt, req.SessionKey, req.Channel, req.UserID, req.HistoryLimit, req.SkillFilter)
 
 	// 2. Attach vision images to the current user message (last in messages slice).
 	// Images are only attached to the live request, NOT persisted in session history.
@@ -513,8 +542,15 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 	var totalUsage providers.Usage
 	iteration := 0
 	var finalContent string
-	var asyncToolCalls []string  // track async spawn tool names for fallback
+	var asyncToolCalls []string   // track async spawn tool names for fallback
 	var mediaResults []MediaResult // media files from tool MEDIA: results
+	var deliverables []string      // actual content from tool outputs (for team task results)
+
+	// Team task orphan detection: track team_tasks create vs spawn calls.
+	// If the LLM creates tasks but forgets to spawn, inject a reminder.
+	var teamTaskCreates int  // count of team_tasks action=create calls
+	var teamTaskSpawns  int  // count of spawn calls with team_task_id
+	var teamTaskRetried bool // only retry once to prevent infinite loops
 
 	// Inject retry hook so channels can update placeholder on LLM retries.
 	ctx = providers.WithRetryHook(ctx, func(attempt, maxAttempts int, err error) {
@@ -606,6 +642,23 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 
 		// No tool calls → done
 		if len(resp.ToolCalls) == 0 {
+			// Guard: detect orphaned team_tasks create (created but not spawned).
+			// The LLM sometimes "forgets" step 2 (spawn) after creating a task.
+			// Inject a reminder and retry once so the task actually executes.
+			if teamTaskCreates > teamTaskSpawns && !teamTaskRetried {
+				teamTaskRetried = true
+				orphaned := teamTaskCreates - teamTaskSpawns
+				slog.Warn("team task orphan detected: created without spawn",
+					"agent", l.id, "orphaned", orphaned, "creates", teamTaskCreates, "spawns", teamTaskSpawns)
+				messages = append(messages,
+					providers.Message{Role: "assistant", Content: resp.Content},
+					providers.Message{
+						Role:    "user",
+						Content: fmt.Sprintf("[System] You created %d team task(s) but only spawned %d. Tasks without `spawn` will stay pending forever and never execute. Call `spawn` now for each pending task.", teamTaskCreates, teamTaskSpawns),
+					},
+				)
+				continue
+			}
 			finalContent = resp.Content
 			break
 		}
@@ -619,6 +672,19 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 		}
 		messages = append(messages, assistantMsg)
 		pendingMsgs = append(pendingMsgs, assistantMsg)
+
+		// Track team_tasks create vs spawn for orphan detection
+		for _, tc := range resp.ToolCalls {
+			if tc.Name == "team_tasks" {
+				if action, _ := tc.Arguments["action"].(string); action == "create" {
+					teamTaskCreates++
+				}
+			} else if tc.Name == "spawn" {
+				if tid, _ := tc.Arguments["team_task_id"].(string); tid != "" {
+					teamTaskSpawns++
+				}
+			}
+		}
 
 		// Execute tool calls (parallel when multiple, sequential when single)
 		if len(resp.ToolCalls) == 1 {
@@ -673,6 +739,9 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 			}
 			for _, p := range result.Media {
 				mediaResults = append(mediaResults, MediaResult{Path: p, ContentType: mimeFromExt(filepath.Ext(p))})
+			}
+			if result.Deliverable != "" {
+				deliverables = append(deliverables, result.Deliverable)
 			}
 
 			toolMsg := providers.Message{
@@ -785,6 +854,9 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 				for _, p := range r.result.Media {
 					mediaResults = append(mediaResults, MediaResult{Path: p, ContentType: mimeFromExt(filepath.Ext(p))})
 				}
+				if r.result.Deliverable != "" {
+					deliverables = append(deliverables, r.result.Deliverable)
+				}
 
 				toolMsg := providers.Message{
 					Role:       "tool",
@@ -890,11 +962,12 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 	}
 
 	return &RunResult{
-		Content:    finalContent,
-		RunID:      req.RunID,
-		Iterations: iteration,
-		Usage:      &totalUsage,
-		Media:      mediaResults,
+		Content:      finalContent,
+		RunID:        req.RunID,
+		Iterations:   iteration,
+		Usage:        &totalUsage,
+		Media:        mediaResults,
+		Deliverables: deliverables,
 	}, nil
 }
 
@@ -987,4 +1060,10 @@ func sanitizePathSegment(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// InvalidateUserWorkspace clears the cached workspace for a user,
+// forcing the next request to re-read from user_agent_profiles.
+func (l *Loop) InvalidateUserWorkspace(userID string) {
+	l.userWorkspaces.Delete(userID)
 }

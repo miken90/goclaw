@@ -3,10 +3,12 @@ package pg
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
@@ -81,15 +83,30 @@ func (s *PGAgentStore) DeleteUserContextFile(ctx context.Context, agentID uuid.U
 
 // --- User-Agent Profiles ---
 
-func (s *PGAgentStore) GetOrCreateUserProfile(ctx context.Context, agentID uuid.UUID, userID, workspace string) (bool, error) {
+func (s *PGAgentStore) GetOrCreateUserProfile(ctx context.Context, agentID uuid.UUID, userID, workspace, channel string) (bool, string, error) {
+	// Build workspace with channel segment for isolation.
+	// Store in portable ~ form (e.g. "~/.goclaw/agent-ws/telegram").
+	effectiveWs := config.ContractHome(workspace)
+	if channel != "" {
+		effectiveWs = filepath.Join(effectiveWs, channel)
+	}
+
 	var isInserted bool
+	var storedWorkspace sql.NullString
 	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO user_agent_profiles (agent_id, user_id, workspace, first_seen_at, last_seen_at)
 		VALUES ($1, $2, NULLIF($3, ''), NOW(), NOW())
-		ON CONFLICT (agent_id, user_id) DO UPDATE SET last_seen_at = NOW(), workspace = EXCLUDED.workspace
-		RETURNING (xmax = 0)
-	`, agentID, userID, workspace).Scan(&isInserted)
-	return isInserted, err
+		ON CONFLICT (agent_id, user_id) DO UPDATE SET last_seen_at = NOW()
+		RETURNING (xmax = 0), workspace
+	`, agentID, userID, effectiveWs).Scan(&isInserted, &storedWorkspace)
+	if err != nil {
+		return false, effectiveWs, err
+	}
+	ws := effectiveWs
+	if storedWorkspace.Valid && storedWorkspace.String != "" {
+		ws = storedWorkspace.String
+	}
+	return isInserted, ws, nil
 }
 
 // --- User Overrides ---

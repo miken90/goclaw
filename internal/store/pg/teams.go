@@ -60,6 +60,10 @@ func (s *PGTeamStore) GetTeam(ctx context.Context, teamID uuid.UUID) (*store.Tea
 	return scanTeamRow(row)
 }
 
+func (s *PGTeamStore) UpdateTeam(ctx context.Context, teamID uuid.UUID, updates map[string]any) error {
+	return execMapUpdate(ctx, s.db, "agent_teams", teamID, updates)
+}
+
 func (s *PGTeamStore) DeleteTeam(ctx context.Context, teamID uuid.UUID) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM agent_teams WHERE id = $1`, teamID)
 	return err
@@ -160,6 +164,33 @@ func (s *PGTeamStore) GetTeamForAgent(ctx context.Context, agentID uuid.UUID) (*
 		return nil, nil
 	}
 	return d, err
+}
+
+func (s *PGTeamStore) KnownUserIDs(ctx context.Context, teamID uuid.UUID, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT DISTINCT s.user_id
+		 FROM sessions s
+		 JOIN agent_team_members m ON m.agent_id = s.agent_id
+		 WHERE m.team_id = $1 AND s.user_id != ''
+		 ORDER BY s.user_id
+		 LIMIT $2`, teamID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []string
+	for rows.Next() {
+		var uid string
+		if err := rows.Scan(&uid); err != nil {
+			return nil, err
+		}
+		users = append(users, uid)
+	}
+	return users, rows.Err()
 }
 
 // ============================================================

@@ -77,8 +77,8 @@ func (s *createCaptureStore) GetUserOverride(_ context.Context, _ uuid.UUID, _ s
 func (s *createCaptureStore) SetUserOverride(_ context.Context, _ *store.UserAgentOverrideData) error {
 	return nil
 }
-func (s *createCaptureStore) GetOrCreateUserProfile(_ context.Context, _ uuid.UUID, _, _ string) (bool, error) {
-	return false, nil
+func (s *createCaptureStore) GetOrCreateUserProfile(_ context.Context, _ uuid.UUID, _, _, _ string) (bool, string, error) {
+	return false, "", nil
 }
 func (s *createCaptureStore) IsGroupFileWriter(_ context.Context, _ uuid.UUID, _, _ string) (bool, error) {
 	return false, nil

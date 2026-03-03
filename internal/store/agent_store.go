@@ -197,7 +197,7 @@ type AgentStore interface {
 	SetUserOverride(ctx context.Context, override *UserAgentOverrideData) error
 
 	// User-agent profiles
-	GetOrCreateUserProfile(ctx context.Context, agentID uuid.UUID, userID, workspace string) (isNew bool, err error)
+	GetOrCreateUserProfile(ctx context.Context, agentID uuid.UUID, userID, workspace, channel string) (isNew bool, effectiveWorkspace string, err error)
 
 	// Group file writers (allowlist for protected file edits in group chats)
 	IsGroupFileWriter(ctx context.Context, agentID uuid.UUID, groupID, userID string) (bool, error)

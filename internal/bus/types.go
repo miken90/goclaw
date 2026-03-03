@@ -48,6 +48,24 @@ const (
 	CacheKindCustomTools      = "custom_tools"
 	CacheKindChannelInstances = "channel_instances"
 	CacheKindBuiltinTools     = "builtin_tools"
+	CacheKindTeam             = "team"
+	CacheKindUserWorkspace       = "user_workspace"
+	CacheKindGroupFileWriters    = "group_file_writers"
+)
+
+// Topic constants for msgBus.Subscribe() / Broadcast().
+const (
+	TopicCacheBootstrap        = "cache:bootstrap"
+	TopicCacheAgent            = "cache:agent"
+	TopicCacheSkills           = "cache:skills"
+	TopicCacheCron             = "cache:cron"
+	TopicCacheCustomTools      = "cache:custom_tools"
+	TopicCacheBuiltinTools     = "cache:builtin_tools"
+	TopicCacheTeam             = "cache:team"
+	TopicCacheUserWorkspace    = "cache:user_workspace"
+	TopicCacheChannelInstances    = "cache:channel_instances"
+	TopicCacheGroupFileWriters    = "cache:group_file_writers"
+	TopicChannelStreaming          = "channel-streaming"
 )
 
 // CacheInvalidatePayload signals cache layers to evict stale entries.

@@ -115,13 +115,22 @@ func (t *CreateImageTool) Execute(ctx context.Context, args map[string]interface
 		return ErrorResult(fmt.Sprintf("image generation failed: %v", err))
 	}
 
-	// Save to temp file
-	imagePath := filepath.Join(os.TempDir(), fmt.Sprintf("goclaw_gen_%d.png", time.Now().UnixNano()))
+	// Save to workspace under date-based folder (e.g. generated/2026-03-02/)
+	workspace := ToolWorkspaceFromCtx(ctx)
+	if workspace == "" {
+		workspace = os.TempDir()
+	}
+	dateDir := filepath.Join(workspace, "generated", time.Now().Format("2006-01-02"))
+	if err := os.MkdirAll(dateDir, 0755); err != nil {
+		return ErrorResult(fmt.Sprintf("failed to create output directory: %v", err))
+	}
+	imagePath := filepath.Join(dateDir, fmt.Sprintf("goclaw_gen_%d.png", time.Now().UnixNano()))
 	if err := os.WriteFile(imagePath, imageBytes, 0644); err != nil {
 		return ErrorResult(fmt.Sprintf("failed to save generated image: %v", err))
 	}
 
 	result := &Result{ForLLM: fmt.Sprintf("MEDIA:%s", imagePath)}
+	result.Deliverable = fmt.Sprintf("[Generated image: %s]\nPrompt: %s", filepath.Base(imagePath), prompt)
 	result.Provider = providerName
 	result.Model = model
 	if usage != nil {

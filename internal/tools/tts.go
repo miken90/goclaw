@@ -100,6 +100,8 @@ func (t *TtsTool) Execute(ctx context.Context, args map[string]interface{}) *Res
 		voiceTag = "[[audio_as_voice]]\n"
 	}
 
-	content := fmt.Sprintf("%sMEDIA:%s", voiceTag, audioPath)
-	return &Result{ForLLM: content}
+	forLLM := fmt.Sprintf("%sMEDIA:%s", voiceTag, audioPath)
+	r := &Result{ForLLM: forLLM}
+	r.Deliverable = fmt.Sprintf("[Generated audio: %s]\nText: %s", filepath.Base(audioPath), text)
+	return r
 }

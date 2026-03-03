@@ -106,6 +106,8 @@ const (
 	MethodTeamsTaskList      = "teams.tasks.list"
 	MethodTeamsMembersAdd    = "teams.members.add"
 	MethodTeamsMembersRemove = "teams.members.remove"
+	MethodTeamsUpdate        = "teams.update"
+	MethodTeamsKnownUsers    = "teams.known_users"
 )
 
 // Delegation history (managed mode)

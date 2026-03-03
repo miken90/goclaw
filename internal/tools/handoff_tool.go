@@ -183,6 +183,15 @@ func (t *HandoffTool) executeTransfer(ctx context.Context, args map[string]inter
 		}
 		content += "\n\nPlease greet the user and continue the conversation."
 
+		handoffMeta := map[string]string{
+			"origin_channel":   channel,
+			"origin_peer_kind": peerKind,
+			"handoff_id":       handoffID,
+			"from_agent":       sourceAgent.AgentKey,
+		}
+		if localKey := ToolLocalKeyFromCtx(ctx); localKey != "" {
+			handoffMeta["origin_local_key"] = localKey
+		}
 		t.msgBus.PublishInbound(bus.InboundMessage{
 			Channel:  "system",
 			SenderID: fmt.Sprintf("handoff:%s", handoffID),
@@ -190,12 +199,7 @@ func (t *HandoffTool) executeTransfer(ctx context.Context, args map[string]inter
 			Content:  content,
 			AgentID:  targetAgentKey,
 			UserID:   userID,
-			Metadata: map[string]string{
-				"origin_channel":   channel,
-				"origin_peer_kind": peerKind,
-				"handoff_id":       handoffID,
-				"from_agent":       sourceAgent.AgentKey,
-			},
+			Metadata: handoffMeta,
 		})
 	}
 

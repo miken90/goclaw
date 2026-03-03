@@ -14,6 +14,11 @@ type Result struct {
 	// Media holds file paths to forward as output (e.g. images from delegation).
 	Media []string `json:"-"`
 
+	// Deliverable holds the primary work output from this tool execution.
+	// Used to capture actual content (e.g. written file text, image prompt) for team
+	// task results instead of relying on the LLM's summary response.
+	Deliverable string `json:"-"`
+
 	// Usage holds token usage from tools that make internal LLM calls (e.g. read_image).
 	// When set, the agent loop records these on the tool span for tracing.
 	Usage    *providers.Usage `json:"-"`
