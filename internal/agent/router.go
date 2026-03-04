@@ -130,6 +130,16 @@ func (r *Router) ListInfo() []AgentInfo {
 	return infos
 }
 
+// IsRunning checks if a specific agent is currently running (cached in router).
+func (r *Router) IsRunning(agentID string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if entry, ok := r.agents[agentID]; ok {
+		return entry.agent.IsRunning()
+	}
+	return false
+}
+
 // --- Active Run Tracking (matching TS chat-abort.ts) ---
 
 // ActiveRun tracks a running agent invocation so it can be aborted via chat.abort.

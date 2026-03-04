@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
 import { Bot, ChevronDown } from "lucide-react";
-import { useWs } from "@/hooks/use-ws";
-import { Methods } from "@/api/protocol";
-import type { AgentInfo } from "@/types/agent";
+import { useHttp } from "@/hooks/use-ws";
+import { useAuthStore } from "@/stores/use-auth-store";
+import type { AgentData } from "@/types/agent";
 
 interface AgentSelectorProps {
   value: string;
@@ -10,18 +10,23 @@ interface AgentSelectorProps {
 }
 
 export function AgentSelector({ value, onChange }: AgentSelectorProps) {
-  const ws = useWs();
-  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const http = useHttp();
+  const connected = useAuthStore((s) => s.connected);
+  const [agents, setAgents] = useState<AgentData[]>([]);
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
-    if (!ws.isConnected) return;
-    ws.call<{ agents: AgentInfo[] }>(Methods.AGENTS_LIST)
-      .then((res) => setAgents(res.agents ?? []))
+    if (!connected) return;
+    http
+      .get<{ agents: AgentData[] }>("/v1/agents")
+      .then((res) => {
+        const active = (res.agents ?? []).filter((a) => a.status === "active");
+        setAgents(active);
+      })
       .catch(() => {});
-  }, [ws]);
+  }, [http, connected]);
 
-  const selected = agents.find((a) => a.id === value);
+  const selected = agents.find((a) => a.agent_key === value);
 
   return (
     <div className="relative">
@@ -32,7 +37,7 @@ export function AgentSelector({ value, onChange }: AgentSelectorProps) {
       >
         <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
         <span className="flex-1 truncate text-left">
-          {selected?.name ?? (value || "Select agent")}
+          {selected?.display_name ?? selected?.agent_key ?? (value || "Select agent")}
         </span>
         <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
       </button>
@@ -48,20 +53,22 @@ export function AgentSelector({ value, onChange }: AgentSelectorProps) {
             )}
             {agents.map((agent) => (
               <button
-                key={agent.id}
+                key={agent.agent_key}
                 type="button"
                 onClick={() => {
-                  onChange(agent.id);
+                  onChange(agent.agent_key);
                   setOpen(false);
                 }}
                 className={`flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-accent ${
-                  agent.id === value ? "bg-accent" : ""
+                  agent.agent_key === value ? "bg-accent" : ""
                 }`}
               >
                 <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
-                <span className="flex-1 truncate text-left">{agent.name || agent.id}</span>
-                {agent.isRunning && (
-                  <span className="h-2 w-2 rounded-full bg-green-500" />
+                <span className="flex-1 truncate text-left">
+                  {agent.display_name || agent.agent_key}
+                </span>
+                {agent.is_default && (
+                  <span className="text-xs text-muted-foreground">default</span>
                 )}
               </button>
             ))}
