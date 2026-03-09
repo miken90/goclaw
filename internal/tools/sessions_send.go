@@ -28,19 +28,19 @@ func (t *SessionsSendTool) Description() string {
 	return "Send a message into another session. Use session_key or label to identify the target."
 }
 
-func (t *SessionsSendTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *SessionsSendTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"session_key": map[string]interface{}{
+		"properties": map[string]any{
+			"session_key": map[string]any{
 				"type":        "string",
 				"description": "Target session key",
 			},
-			"label": map[string]interface{}{
+			"label": map[string]any{
 				"type":        "string",
 				"description": "Target session label (alternative to session_key)",
 			},
-			"message": map[string]interface{}{
+			"message": map[string]any{
 				"type":        "string",
 				"description": "Message to send",
 			},
@@ -49,7 +49,7 @@ func (t *SessionsSendTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *SessionsSendTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *SessionsSendTool) Execute(ctx context.Context, args map[string]any) *Result {
 	if t.sessions == nil {
 		return ErrorResult("session store not available")
 	}

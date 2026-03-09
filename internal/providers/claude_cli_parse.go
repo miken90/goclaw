@@ -15,7 +15,7 @@ func parseJSONResponse(data []byte) (*ChatResponse, error) {
 	}
 
 	// Fallback: CLI may output one JSON object per line.
-	for _, line := range bytes.Split(data, []byte("\n")) {
+	for line := range bytes.SplitSeq(data, []byte("\n")) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue

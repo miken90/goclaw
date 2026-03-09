@@ -142,12 +142,12 @@ func (r *MethodRouter) handleConnect(ctx context.Context, client *Client, req *p
 			client.pairingCode = code
 			client.pairingPending = true
 			// Not authenticated — can only call browser.pairing.status
-			client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+			client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 				"protocol":     protocol.ProtocolVersion,
 				"status":       "pending_pairing",
 				"pairing_code": code,
 				"sender_id":    client.id,
-				"server": map[string]interface{}{
+				"server": map[string]any{
 					"name":    "goclaw",
 					"version": "0.2.0",
 				},
@@ -164,11 +164,11 @@ func (r *MethodRouter) handleConnect(ctx context.Context, client *Client, req *p
 }
 
 func (r *MethodRouter) sendConnectResponse(client *Client, reqID string) {
-	client.SendResponse(protocol.NewOKResponse(reqID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(reqID, map[string]any{
 		"protocol": protocol.ProtocolVersion,
 		"role":     string(client.role),
 		"user_id":  client.userID,
-		"server": map[string]interface{}{
+		"server": map[string]any{
 			"name":    "goclaw",
 			"version": "0.2.0",
 		},
@@ -219,14 +219,14 @@ func (r *MethodRouter) handleHealth(ctx context.Context, client *Client, req *pr
 		toolCount = s.tools.Count()
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
-		"status":   "ok",
-		"version":  s.version,
-		"uptime":   uptimeMs,
-		"mode":     mode,
-		"database": dbStatus,
-		"tools":    toolCount,
-		"clients":  clientList,
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
+		"status":    "ok",
+		"version":   s.version,
+		"uptime":    uptimeMs,
+		"mode":      mode,
+		"database":  dbStatus,
+		"tools":     toolCount,
+		"clients":   clientList,
 		"currentId": client.ID(),
 	}))
 }
@@ -248,11 +248,10 @@ func (r *MethodRouter) handleStatus(ctx context.Context, client *Client, req *pr
 		}
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"agents":     agents,
 		"agentTotal": agentTotal,
 		"clients":    len(r.server.clients),
 		"sessions":   sessionCount,
 	}))
 }
-

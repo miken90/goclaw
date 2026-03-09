@@ -44,8 +44,8 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req ChatRequest, onC
 		line := scanner.Text()
 
 		// Track event type
-		if strings.HasPrefix(line, "event: ") {
-			currentEvent = strings.TrimPrefix(line, "event: ")
+		if after, ok := strings.CutPrefix(line, "event: "); ok {
+			currentEvent = after
 			continue
 		}
 
@@ -77,7 +77,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req ChatRequest, onC
 					result.ToolCalls = append(result.ToolCalls, ToolCall{
 						ID:        ev.ContentBlock.ID,
 						Name:      strings.TrimSpace(ev.ContentBlock.Name),
-						Arguments: make(map[string]interface{}),
+						Arguments: make(map[string]any),
 					})
 				}
 				// Store raw content_block for later reconstruction
@@ -155,7 +155,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req ChatRequest, onC
 	// Parse accumulated tool call JSON arguments
 	for i, rawJSON := range toolCallJSON {
 		if rawJSON != "" {
-			args := make(map[string]interface{})
+			args := make(map[string]any)
 			_ = json.Unmarshal([]byte(rawJSON), &args)
 			result.ToolCalls[i].Arguments = args
 		}

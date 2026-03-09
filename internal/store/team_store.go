@@ -72,17 +72,17 @@ type TeamMemberData struct {
 // TeamTaskData represents a task in the team's shared task list.
 type TeamTaskData struct {
 	BaseModel
-	TeamID       uuid.UUID              `json:"team_id"`
-	Subject      string                 `json:"subject"`
-	Description  string                 `json:"description,omitempty"`
-	Status       string                 `json:"status"`
-	OwnerAgentID *uuid.UUID             `json:"owner_agent_id,omitempty"`
-	BlockedBy    []uuid.UUID            `json:"blocked_by,omitempty"`
-	Priority     int                    `json:"priority"`
-	Result       *string                `json:"result,omitempty"`
-	Metadata     map[string]interface{} `json:"metadata,omitempty"`
-	UserID       string                 `json:"user_id,omitempty"`
-	Channel      string                 `json:"channel,omitempty"`
+	TeamID       uuid.UUID      `json:"team_id"`
+	Subject      string         `json:"subject"`
+	Description  string         `json:"description,omitempty"`
+	Status       string         `json:"status"`
+	OwnerAgentID *uuid.UUID     `json:"owner_agent_id,omitempty"`
+	BlockedBy    []uuid.UUID    `json:"blocked_by,omitempty"`
+	Priority     int            `json:"priority"`
+	Result       *string        `json:"result,omitempty"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
+	UserID       string         `json:"user_id,omitempty"`
+	Channel      string         `json:"channel,omitempty"`
 
 	// Joined fields
 	OwnerAgentKey string `json:"owner_agent_key,omitempty"`
@@ -91,21 +91,21 @@ type TeamTaskData struct {
 // DelegationHistoryData represents a persisted delegation record.
 type DelegationHistoryData struct {
 	BaseModel
-	SourceAgentID uuid.UUID              `json:"source_agent_id"`
-	TargetAgentID uuid.UUID              `json:"target_agent_id"`
-	TeamID        *uuid.UUID             `json:"team_id,omitempty"`
-	TeamTaskID    *uuid.UUID             `json:"team_task_id,omitempty"`
-	UserID        string                 `json:"user_id,omitempty"`
-	Task          string                 `json:"task"`
-	Mode          string                 `json:"mode"`
-	Status        string                 `json:"status"`
-	Result        *string                `json:"result,omitempty"`
-	Error         *string                `json:"error,omitempty"`
-	Iterations    int                    `json:"iterations"`
-	TraceID       *uuid.UUID             `json:"trace_id,omitempty"`
-	DurationMS    int                    `json:"duration_ms"`
-	CompletedAt   *time.Time             `json:"completed_at,omitempty"`
-	Metadata      map[string]interface{} `json:"metadata,omitempty"`
+	SourceAgentID uuid.UUID      `json:"source_agent_id"`
+	TargetAgentID uuid.UUID      `json:"target_agent_id"`
+	TeamID        *uuid.UUID     `json:"team_id,omitempty"`
+	TeamTaskID    *uuid.UUID     `json:"team_task_id,omitempty"`
+	UserID        string         `json:"user_id,omitempty"`
+	Task          string         `json:"task"`
+	Mode          string         `json:"mode"`
+	Status        string         `json:"status"`
+	Result        *string        `json:"result,omitempty"`
+	Error         *string        `json:"error,omitempty"`
+	Iterations    int            `json:"iterations"`
+	TraceID       *uuid.UUID     `json:"trace_id,omitempty"`
+	DurationMS    int            `json:"duration_ms"`
+	CompletedAt   *time.Time     `json:"completed_at,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
 
 	// Joined fields
 	SourceAgentKey string `json:"source_agent_key,omitempty"`
@@ -125,29 +125,29 @@ type DelegationHistoryListOpts struct {
 
 // HandoffRouteData represents an active routing override for agent handoff.
 type HandoffRouteData struct {
-	ID           uuid.UUID              `json:"id"`
-	Channel      string                 `json:"channel"`
-	ChatID       string                 `json:"chat_id"`
-	FromAgentKey string                 `json:"from_agent_key"`
-	ToAgentKey   string                 `json:"to_agent_key"`
-	Reason       string                 `json:"reason,omitempty"`
-	CreatedBy    string                 `json:"created_by"`
-	CreatedAt    time.Time              `json:"created_at"`
-	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+	ID           uuid.UUID      `json:"id"`
+	Channel      string         `json:"channel"`
+	ChatID       string         `json:"chat_id"`
+	FromAgentKey string         `json:"from_agent_key"`
+	ToAgentKey   string         `json:"to_agent_key"`
+	Reason       string         `json:"reason,omitempty"`
+	CreatedBy    string         `json:"created_by"`
+	CreatedAt    time.Time      `json:"created_at"`
+	Metadata     map[string]any `json:"metadata,omitempty"`
 }
 
 // TeamMessageData represents a message in the team mailbox.
 type TeamMessageData struct {
-	ID          uuid.UUID              `json:"id"`
-	TeamID      uuid.UUID              `json:"team_id"`
-	FromAgentID uuid.UUID              `json:"from_agent_id"`
-	ToAgentID   *uuid.UUID             `json:"to_agent_id,omitempty"`
-	Content     string                 `json:"content"`
-	MessageType string                 `json:"message_type"`
-	Read        bool                   `json:"read"`
-	TaskID      *uuid.UUID             `json:"task_id,omitempty"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
-	CreatedAt   time.Time              `json:"created_at"`
+	ID          uuid.UUID      `json:"id"`
+	TeamID      uuid.UUID      `json:"team_id"`
+	FromAgentID uuid.UUID      `json:"from_agent_id"`
+	ToAgentID   *uuid.UUID     `json:"to_agent_id,omitempty"`
+	Content     string         `json:"content"`
+	MessageType string         `json:"message_type"`
+	Read        bool           `json:"read"`
+	TaskID      *uuid.UUID     `json:"task_id,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+	CreatedAt   time.Time      `json:"created_at"`
 
 	// Joined fields
 	FromAgentKey string `json:"from_agent_key,omitempty"`

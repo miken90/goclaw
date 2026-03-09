@@ -64,7 +64,7 @@ func (m *TeamsMethods) handleList(ctx context.Context, client *gateway.Client, r
 		return
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"teams": teams,
 		"count": len(teams),
 	}))
@@ -164,7 +164,7 @@ func (m *TeamsMethods) handleCreate(ctx context.Context, client *gateway.Client,
 		}
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"team": team,
 	}))
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
@@ -55,23 +56,23 @@ func (m *AgentsMethods) handleFilesList(ctx context.Context, client *gateway.Cli
 			dbMap[f.FileName] = f
 		}
 
-		files := make([]map[string]interface{}, 0, len(allowedAgentFiles))
+		files := make([]map[string]any, 0, len(allowedAgentFiles))
 		for _, name := range allowedAgentFiles {
 			if f, ok := dbMap[name]; ok {
-				files = append(files, map[string]interface{}{
+				files = append(files, map[string]any{
 					"name":    name,
 					"missing": false,
 					"size":    len(f.Content),
 				})
 			} else {
-				files = append(files, map[string]interface{}{
+				files = append(files, map[string]any{
 					"name":    name,
 					"missing": true,
 				})
 			}
 		}
 
-		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 			"agentId": params.AgentID,
 			"files":   files,
 		}))
@@ -80,19 +81,19 @@ func (m *AgentsMethods) handleFilesList(ctx context.Context, client *gateway.Cli
 
 	// --- Fallback: filesystem ---
 	ws := m.resolveWorkspace(params.AgentID)
-	files := make([]map[string]interface{}, 0, len(allowedAgentFiles))
+	files := make([]map[string]any, 0, len(allowedAgentFiles))
 
 	for _, name := range allowedAgentFiles {
 		p := filepath.Join(ws, name)
 		info, err := os.Stat(p)
 		if err != nil {
-			files = append(files, map[string]interface{}{
+			files = append(files, map[string]any{
 				"name":    name,
 				"path":    p,
 				"missing": true,
 			})
 		} else {
-			files = append(files, map[string]interface{}{
+			files = append(files, map[string]any{
 				"name":        name,
 				"path":        p,
 				"missing":     false,
@@ -102,7 +103,7 @@ func (m *AgentsMethods) handleFilesList(ctx context.Context, client *gateway.Cli
 		}
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"agentId":   params.AgentID,
 		"workspace": ws,
 		"files":     files,
@@ -150,9 +151,9 @@ func (m *AgentsMethods) handleFilesGet(ctx context.Context, client *gateway.Clie
 
 		for _, f := range dbFiles {
 			if f.FileName == params.Name {
-				client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+				client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 					"agentId": params.AgentID,
-					"file": map[string]interface{}{
+					"file": map[string]any{
 						"name":    params.Name,
 						"missing": false,
 						"size":    len(f.Content),
@@ -164,9 +165,9 @@ func (m *AgentsMethods) handleFilesGet(ctx context.Context, client *gateway.Clie
 		}
 
 		// File not found in DB
-		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 			"agentId": params.AgentID,
-			"file": map[string]interface{}{
+			"file": map[string]any{
 				"name":    params.Name,
 				"missing": true,
 			},
@@ -180,10 +181,10 @@ func (m *AgentsMethods) handleFilesGet(ctx context.Context, client *gateway.Clie
 
 	info, err := os.Stat(p)
 	if err != nil {
-		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 			"agentId":   params.AgentID,
 			"workspace": ws,
-			"file": map[string]interface{}{
+			"file": map[string]any{
 				"name":    params.Name,
 				"path":    p,
 				"missing": true,
@@ -193,10 +194,10 @@ func (m *AgentsMethods) handleFilesGet(ctx context.Context, client *gateway.Clie
 	}
 
 	content, _ := os.ReadFile(p)
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"agentId":   params.AgentID,
 		"workspace": ws,
-		"file": map[string]interface{}{
+		"file": map[string]any{
 			"name":        params.Name,
 			"path":        p,
 			"missing":     false,
@@ -253,9 +254,9 @@ func (m *AgentsMethods) handleFilesSet(ctx context.Context, client *gateway.Clie
 			m.interceptor.InvalidateAgent(ag.ID)
 		}
 
-		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 			"agentId": params.AgentID,
-			"file": map[string]interface{}{
+			"file": map[string]any{
 				"name":    params.Name,
 				"missing": false,
 				"size":    len(params.Content),
@@ -276,10 +277,10 @@ func (m *AgentsMethods) handleFilesSet(ctx context.Context, client *gateway.Clie
 	}
 
 	info, _ := os.Stat(p)
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"agentId":   params.AgentID,
 		"workspace": ws,
-		"file": map[string]interface{}{
+		"file": map[string]any{
 			"name":        params.Name,
 			"path":        p,
 			"missing":     false,
@@ -300,10 +301,5 @@ func (m *AgentsMethods) resolveWorkspace(agentID string) string {
 }
 
 func isAllowedFile(name string) bool {
-	for _, f := range allowedAgentFiles {
-		if f == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowedAgentFiles, name)
 }

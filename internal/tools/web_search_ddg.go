@@ -70,8 +70,8 @@ func extractDDGResults(html string, count int) ([]searchResult, error) {
 		// DDG wraps URLs with redirect — extract real URL from uddg= param
 		if strings.Contains(rawURL, "uddg=") {
 			if u, err := url.QueryUnescape(rawURL); err == nil {
-				if idx := strings.Index(u, "uddg="); idx != -1 {
-					extracted := u[idx+5:]
+				if _, after, ok := strings.Cut(u, "uddg="); ok {
+					extracted := after
 					// uddg value may have trailing &params
 					if ampIdx := strings.Index(extracted, "&"); ampIdx != -1 {
 						extracted = extracted[:ampIdx]

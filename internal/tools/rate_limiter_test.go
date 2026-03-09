@@ -21,7 +21,7 @@ func TestNewToolRateLimiter_Negative(t *testing.T) {
 
 func TestToolRateLimiter_AllowUnderLimit(t *testing.T) {
 	rl := NewToolRateLimiter(5)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if err := rl.Allow("user1"); err != nil {
 			t.Errorf("action %d should be allowed: %v", i, err)
 		}
@@ -31,7 +31,7 @@ func TestToolRateLimiter_AllowUnderLimit(t *testing.T) {
 func TestToolRateLimiter_BlockOverLimit(t *testing.T) {
 	rl := NewToolRateLimiter(3)
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := rl.Allow("user1"); err != nil {
 			t.Fatalf("action %d should be allowed: %v", i, err)
 		}

@@ -7,12 +7,12 @@ import (
 
 // Options keys used in ChatRequest.Options across providers.
 const (
-	OptMaxTokens      = "max_tokens"
-	OptTemperature    = "temperature"
-	OptThinkingLevel  = "thinking_level"
+	OptMaxTokens       = "max_tokens"
+	OptTemperature     = "temperature"
+	OptThinkingLevel   = "thinking_level"
 	OptReasoningEffort = "reasoning_effort"
-	OptEnableThinking = "enable_thinking"
-	OptThinkingBudget = "thinking_budget"
+	OptEnableThinking  = "enable_thinking"
+	OptThinkingBudget  = "thinking_budget"
 )
 
 // TokenSource provides an OAuth access token (with auto-refresh).
@@ -45,10 +45,10 @@ type ThinkingCapable interface {
 
 // ChatRequest contains the input for a Chat/ChatStream call.
 type ChatRequest struct {
-	Messages []Message              `json:"messages"`
-	Tools    []ToolDefinition       `json:"tools,omitempty"`
-	Model    string                 `json:"model,omitempty"`
-	Options  map[string]interface{} `json:"options,omitempty"`
+	Messages []Message        `json:"messages"`
+	Tools    []ToolDefinition `json:"tools,omitempty"`
+	Model    string           `json:"model,omitempty"`
+	Options  map[string]any   `json:"options,omitempty"`
 }
 
 // ChatResponse is the result from an LLM call.
@@ -70,9 +70,9 @@ type ChatResponse struct {
 
 // StreamChunk is a piece of a streaming response.
 type StreamChunk struct {
-	Content   string `json:"content,omitempty"`
-	Thinking  string `json:"thinking,omitempty"`
-	Done      bool   `json:"done,omitempty"`
+	Content  string `json:"content,omitempty"`
+	Thinking string `json:"thinking,omitempty"`
+	Done     bool   `json:"done,omitempty"`
 }
 
 // ImageContent represents a base64-encoded image for vision-capable models.
@@ -92,11 +92,11 @@ type MediaRef struct {
 
 // Message represents a conversation message.
 type Message struct {
-	Role       string         `json:"role"`                  // "system", "user", "assistant", "tool"
+	Role       string         `json:"role"` // "system", "user", "assistant", "tool"
 	Content    string         `json:"content"`
-	Thinking   string         `json:"thinking,omitempty"`    // reasoning_content for thinking models (Kimi, DeepSeek, etc.)
-	Images     []ImageContent `json:"images,omitempty"`      // vision: base64 images (runtime only, not persisted)
-	MediaRefs  []MediaRef     `json:"media_refs,omitempty"`  // persistent media file references
+	Thinking   string         `json:"thinking,omitempty"`   // reasoning_content for thinking models (Kimi, DeepSeek, etc.)
+	Images     []ImageContent `json:"images,omitempty"`     // vision: base64 images (runtime only, not persisted)
+	MediaRefs  []MediaRef     `json:"media_refs,omitempty"` // persistent media file references
 	ToolCalls  []ToolCall     `json:"tool_calls,omitempty"`
 	ToolCallID string         `json:"tool_call_id,omitempty"` // for role="tool" responses
 
@@ -113,10 +113,10 @@ type Message struct {
 
 // ToolCall represents a tool invocation requested by the LLM.
 type ToolCall struct {
-	ID        string                 `json:"id"`
-	Name      string                 `json:"name"`
-	Arguments map[string]interface{} `json:"arguments"`
-	Metadata  map[string]string      `json:"metadata,omitempty"` // provider-specific (e.g. Gemini thought_signature)
+	ID        string            `json:"id"`
+	Name      string            `json:"name"`
+	Arguments map[string]any    `json:"arguments"`
+	Metadata  map[string]string `json:"metadata,omitempty"` // provider-specific (e.g. Gemini thought_signature)
 }
 
 // ToolDefinition describes a tool available to the LLM.
@@ -127,9 +127,9 @@ type ToolDefinition struct {
 
 // ToolFunctionSchema is the schema for a function tool.
 type ToolFunctionSchema struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Parameters  map[string]interface{} `json:"parameters"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
 }
 
 // Usage tracks token consumption.

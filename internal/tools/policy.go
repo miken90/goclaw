@@ -218,8 +218,8 @@ func (pe *PolicyEngine) applyProfile(allTools []string, profile string) []string
 func expandSpec(available []string, spec []string) []string {
 	expanded := make(map[string]bool)
 	for _, s := range spec {
-		if strings.HasPrefix(s, "group:") {
-			groupName := strings.TrimPrefix(s, "group:")
+		if after, ok := strings.CutPrefix(s, "group:"); ok {
+			groupName := after
 			if members, ok := toolGroups[groupName]; ok {
 				for _, m := range members {
 					expanded[m] = true
@@ -243,8 +243,8 @@ func expandSpec(available []string, spec []string) []string {
 func intersectWithSpec(current []string, spec []string) []string {
 	expanded := make(map[string]bool)
 	for _, s := range spec {
-		if strings.HasPrefix(s, "group:") {
-			groupName := strings.TrimPrefix(s, "group:")
+		if after, ok := strings.CutPrefix(s, "group:"); ok {
+			groupName := after
 			if members, ok := toolGroups[groupName]; ok {
 				for _, m := range members {
 					expanded[m] = true
@@ -268,8 +268,8 @@ func intersectWithSpec(current []string, spec []string) []string {
 func subtractSpec(current []string, spec []string) []string {
 	denied := make(map[string]bool)
 	for _, s := range spec {
-		if strings.HasPrefix(s, "group:") {
-			groupName := strings.TrimPrefix(s, "group:")
+		if after, ok := strings.CutPrefix(s, "group:"); ok {
+			groupName := after
 			if members, ok := toolGroups[groupName]; ok {
 				for _, m := range members {
 					denied[m] = true

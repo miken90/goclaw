@@ -30,13 +30,13 @@ func callMinimaxMusicGen(ctx context.Context, apiKey, apiBase, model, prompt str
 	// NOTE: MiniMax music API does NOT support a duration parameter.
 	// Audio length is determined by lyrics length (vocal) or the model's default (~3-4 min for instrumental).
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"model":            model,
 		"prompt":           prompt,
 		"is_instrumental":  instrumental,
 		"lyrics_optimizer": lyricsOptimizer,
 		"output_format":    "url",
-		"audio_setting": map[string]interface{}{
+		"audio_setting": map[string]any{
 			"sample_rate": sampleRate,
 			"bitrate":     bitrate,
 			"format":      "mp3",

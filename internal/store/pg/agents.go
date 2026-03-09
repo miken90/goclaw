@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -318,7 +319,7 @@ func (s *PGAgentStore) ListAccessible(ctx context.Context, userID string) ([]sto
 // --- Scan helpers ---
 
 type agentRowScanner interface {
-	Scan(dest ...interface{}) error
+	Scan(dest ...any) error
 }
 
 func scanAgentRow(row agentRowScanner) (*store.AgentData, error) {
@@ -380,7 +381,7 @@ func execMapUpdateWhere(ctx context.Context, db *sql.DB, table string, updates m
 		return nil
 	}
 	var setClauses []string
-	var args []interface{}
+	var args []any
 	i := 1
 	for col, val := range updates {
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", col, i))
@@ -405,25 +406,25 @@ func execMapUpdateWhere(ctx context.Context, db *sql.DB, table string, updates m
 }
 
 func joinStrings(s []string, sep string) string {
-	result := ""
+	var result strings.Builder
 	for i, v := range s {
 		if i > 0 {
-			result += sep
+			result.WriteString(sep)
 		}
-		result += v
+		result.WriteString(v)
 	}
-	return result
+	return result.String()
 }
 
 func replaceIDX(s, replacement string) string {
-	result := ""
+	var result strings.Builder
 	for i := 0; i < len(s); i++ {
 		if i+4 <= len(s) && s[i:i+4] == "$IDX" {
-			result += replacement
+			result.WriteString(replacement)
 			i += 3
 		} else {
-			result += string(s[i])
+			result.WriteString(string(s[i]))
 		}
 	}
-	return result
+	return result.String()
 }

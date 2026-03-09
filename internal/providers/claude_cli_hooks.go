@@ -46,30 +46,30 @@ func BuildCLIHooksConfig(workspace string, restrictToWorkspace bool) (string, fu
 
 // generateSettingsJSON creates Claude CLI settings with PreToolUse hooks.
 func generateSettingsJSON(hookPath string) []byte {
-	settings := map[string]interface{}{
-		"hooks": map[string]interface{}{
-			"PreToolUse": []map[string]interface{}{
+	settings := map[string]any{
+		"hooks": map[string]any{
+			"PreToolUse": []map[string]any{
 				{
 					"matcher": "Bash",
-					"hooks": []map[string]interface{}{
+					"hooks": []map[string]any{
 						{"type": "command", "command": hookPath},
 					},
 				},
 				{
 					"matcher": "Write",
-					"hooks": []map[string]interface{}{
+					"hooks": []map[string]any{
 						{"type": "command", "command": hookPath},
 					},
 				},
 				{
 					"matcher": "Edit",
-					"hooks": []map[string]interface{}{
+					"hooks": []map[string]any{
 						{"type": "command", "command": hookPath},
 					},
 				},
 				{
 					"matcher": "Read",
-					"hooks": []map[string]interface{}{
+					"hooks": []map[string]any{
 						{"type": "command", "command": hookPath},
 					},
 				},

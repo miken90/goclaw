@@ -11,14 +11,14 @@ import (
 )
 
 // buildRequestBody converts internal ChatRequest to Responses API format.
-func (p *CodexProvider) buildRequestBody(req ChatRequest, stream bool) map[string]interface{} {
+func (p *CodexProvider) buildRequestBody(req ChatRequest, stream bool) map[string]any {
 	model := req.Model
 	if model == "" {
 		model = p.defaultModel
 	}
 
 	var instructions string
-	var input []interface{}
+	var input []any
 
 	for _, m := range req.Messages {
 		switch m.Role {
@@ -31,25 +31,25 @@ func (p *CodexProvider) buildRequestBody(req ChatRequest, stream bool) map[strin
 
 		case "user":
 			if len(m.Images) > 0 {
-				var parts []map[string]interface{}
+				var parts []map[string]any
 				for _, img := range m.Images {
-					parts = append(parts, map[string]interface{}{
+					parts = append(parts, map[string]any{
 						"type":      "input_image",
 						"image_url": fmt.Sprintf("data:%s;base64,%s", img.MimeType, img.Data),
 					})
 				}
 				if m.Content != "" {
-					parts = append(parts, map[string]interface{}{
+					parts = append(parts, map[string]any{
 						"type": "input_text",
 						"text": m.Content,
 					})
 				}
-				input = append(input, map[string]interface{}{
+				input = append(input, map[string]any{
 					"role":    "user",
 					"content": parts,
 				})
 			} else {
-				input = append(input, map[string]interface{}{
+				input = append(input, map[string]any{
 					"role":    "user",
 					"content": m.Content,
 				})
@@ -60,7 +60,7 @@ func (p *CodexProvider) buildRequestBody(req ChatRequest, stream bool) map[strin
 				for _, tc := range m.ToolCalls {
 					argsJSON, _ := json.Marshal(tc.Arguments)
 					callID := toFcID(tc.ID)
-					input = append(input, map[string]interface{}{
+					input = append(input, map[string]any{
 						"type":      "function_call",
 						"id":        callID,
 						"call_id":   callID,
@@ -70,10 +70,10 @@ func (p *CodexProvider) buildRequestBody(req ChatRequest, stream bool) map[strin
 				}
 			}
 			if m.Content != "" {
-				item := map[string]interface{}{
+				item := map[string]any{
 					"type": "message",
 					"role": "assistant",
-					"content": []map[string]interface{}{
+					"content": []map[string]any{
 						{"type": "output_text", "text": m.Content},
 					},
 				}
@@ -84,7 +84,7 @@ func (p *CodexProvider) buildRequestBody(req ChatRequest, stream bool) map[strin
 			}
 
 		case "tool":
-			input = append(input, map[string]interface{}{
+			input = append(input, map[string]any{
 				"type":    "function_call_output",
 				"call_id": toFcID(m.ToolCallID),
 				"output":  m.Content,
@@ -92,7 +92,7 @@ func (p *CodexProvider) buildRequestBody(req ChatRequest, stream bool) map[strin
 		}
 	}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"model":  model,
 		"input":  input,
 		"stream": stream,
@@ -105,9 +105,9 @@ func (p *CodexProvider) buildRequestBody(req ChatRequest, stream bool) map[strin
 	body["instructions"] = instructions
 
 	if len(req.Tools) > 0 {
-		var tools []map[string]interface{}
+		var tools []map[string]any
 		for _, t := range req.Tools {
-			tools = append(tools, map[string]interface{}{
+			tools = append(tools, map[string]any{
 				"type":        "function",
 				"name":        t.Function.Name,
 				"description": t.Function.Description,
@@ -118,13 +118,13 @@ func (p *CodexProvider) buildRequestBody(req ChatRequest, stream bool) map[strin
 	}
 
 	if level, ok := req.Options[OptThinkingLevel].(string); ok && level != "" && level != "off" {
-		body["reasoning"] = map[string]interface{}{"effort": level}
+		body["reasoning"] = map[string]any{"effort": level}
 	}
 
 	return body
 }
 
-func (p *CodexProvider) doRequest(ctx context.Context, body interface{}) (io.ReadCloser, error) {
+func (p *CodexProvider) doRequest(ctx context.Context, body any) (io.ReadCloser, error) {
 	data, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("%s: marshal request: %w", p.name, err)

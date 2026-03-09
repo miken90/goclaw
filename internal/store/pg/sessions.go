@@ -3,6 +3,7 @@ package pg
 import (
 	"database/sql"
 	"encoding/json"
+	"maps"
 	"sync"
 	"time"
 
@@ -138,9 +139,7 @@ func (s *PGSessionStore) SetSessionMetadata(key string, metadata map[string]stri
 	if data.Metadata == nil {
 		data.Metadata = make(map[string]string)
 	}
-	for k, v := range metadata {
-		data.Metadata[k] = v
-	}
+	maps.Copy(data.Metadata, metadata)
 	data.Updated = time.Now()
 }
 

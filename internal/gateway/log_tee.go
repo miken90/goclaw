@@ -31,7 +31,7 @@ type LogTee struct {
 
 	// Ring buffer of recent entries for replay on subscribe.
 	ringMu  sync.RWMutex
-	ring    []map[string]interface{}
+	ring    []map[string]any
 	ringPos int
 	ringFul bool
 }
@@ -48,7 +48,7 @@ func NewLogTee(inner slog.Handler) *LogTee {
 	return &LogTee{
 		inner:   inner,
 		clients: make(map[string]*logSubscriber),
-		ring:    make([]map[string]interface{}, ringBufferSize),
+		ring:    make([]map[string]any, ringBufferSize),
 	}
 }
 
@@ -109,14 +109,14 @@ func (t *LogTee) Handle(ctx context.Context, r slog.Record) error {
 }
 
 // buildEntry creates the WS payload from a log record, redacting sensitive attrs.
-func (t *LogTee) buildEntry(r slog.Record) map[string]interface{} {
-	entry := map[string]interface{}{
+func (t *LogTee) buildEntry(r slog.Record) map[string]any {
+	entry := map[string]any{
 		"timestamp": r.Time.UnixMilli(),
 		"level":     levelName(r.Level),
 		"message":   r.Message,
 	}
 
-	attrs := map[string]interface{}{}
+	attrs := map[string]any{}
 	r.Attrs(func(a slog.Attr) bool {
 		key := a.Key
 		val := a.Value.String()
@@ -168,10 +168,10 @@ func (t *LogTee) Subscribe(client *Client, level slog.Level) {
 
 	// Replay ring buffer entries at the requested level.
 	t.ringMu.RLock()
-	var entries []map[string]interface{}
+	var entries []map[string]any
 	if t.ringFul {
 		// Buffer is full — read from ringPos (oldest) to ringPos-1 (newest).
-		for i := 0; i < ringBufferSize; i++ {
+		for i := range ringBufferSize {
 			idx := (t.ringPos + i) % ringBufferSize
 			e := t.ring[idx]
 			if e != nil && logLevelValue(e["level"]) >= level {
@@ -194,7 +194,7 @@ func (t *LogTee) Subscribe(client *Client, level slog.Level) {
 	}
 
 	// Send sentinel so the client knows tailing started.
-	client.SendEvent(*protocol.NewEvent("log", map[string]interface{}{
+	client.SendEvent(*protocol.NewEvent("log", map[string]any{
 		"timestamp": time.Now().UnixMilli(),
 		"level":     "info",
 		"message":   "Log tailing started",
@@ -223,7 +223,7 @@ func levelName(l slog.Level) string {
 }
 
 // logLevelValue converts a level name string back to slog.Level for filtering.
-func logLevelValue(v interface{}) slog.Level {
+func logLevelValue(v any) slog.Level {
 	s, _ := v.(string)
 	switch s {
 	case "error":

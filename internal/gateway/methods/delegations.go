@@ -87,7 +87,7 @@ func (m *DelegationsMethods) handleList(ctx context.Context, client *gateway.Cli
 		}
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"records": records,
 		"total":   total,
 	}))

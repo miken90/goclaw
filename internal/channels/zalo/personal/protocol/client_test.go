@@ -145,7 +145,7 @@ func TestReverseCopy(t *testing.T) {
 }
 
 func TestRandomHexString(t *testing.T) {
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		s := randomHexString(6, 12)
 		if len(s) < 6 || len(s) > 12 {
 			t.Errorf("randomHexString(6,12) = len %d, want 6-12", len(s))

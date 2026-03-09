@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -172,10 +173,8 @@ func agentToolPolicyForTeam(policy *config.ToolPolicySpec, isLead bool) *config.
 	if policy == nil {
 		policy = &config.ToolPolicySpec{}
 	}
-	for _, d := range policy.Deny {
-		if d == "team_message" {
-			return policy
-		}
+	if slices.Contains(policy.Deny, "team_message") {
+		return policy
 	}
 	policy.Deny = append(policy.Deny, "team_message")
 	return policy
@@ -191,10 +190,8 @@ func agentToolPolicyWithMCP(policy *config.ToolPolicySpec, hasMCP bool) *config.
 		policy = &config.ToolPolicySpec{}
 	}
 	// Check if group:mcp is already present
-	for _, a := range policy.AlsoAllow {
-		if a == "group:mcp" {
-			return policy
-		}
+	if slices.Contains(policy.AlsoAllow, "group:mcp") {
+		return policy
 	}
 	policy.AlsoAllow = append(policy.AlsoAllow, "group:mcp")
 	return policy

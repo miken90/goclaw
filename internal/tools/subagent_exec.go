@@ -184,7 +184,7 @@ func (sm *SubagentManager) executeTask(ctx context.Context, task *SubagentTask) 
 			Messages: messages,
 			Tools:    toolsReg.ProviderDefs(),
 			Model:    model,
-			Options: map[string]interface{}{
+			Options: map[string]any{
 				"max_tokens":  4096,
 				"temperature": 0.5,
 			},

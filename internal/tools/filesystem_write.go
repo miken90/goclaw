@@ -19,7 +19,7 @@ type WriteFileTool struct {
 	sandboxMgr       sandbox.Manager
 	contextFileIntc  *ContextFileInterceptor // nil = no virtual FS routing
 	memIntc          *MemoryInterceptor      // nil = no memory routing
-	groupWriterCache *store.GroupWriterCache  // nil = no group write restriction
+	groupWriterCache *store.GroupWriterCache // nil = no group write restriction
 }
 
 // DenyPaths adds path prefixes that write_file must reject.
@@ -53,21 +53,23 @@ func NewSandboxedWriteFileTool(workspace string, restrict bool, mgr sandbox.Mana
 // SetSandboxKey is a no-op; sandbox key is now read from ctx (thread-safe).
 func (t *WriteFileTool) SetSandboxKey(key string) {}
 
-func (t *WriteFileTool) Name() string        { return "write_file" }
-func (t *WriteFileTool) Description() string { return "Write content to a file, creating directories as needed" }
-func (t *WriteFileTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *WriteFileTool) Name() string { return "write_file" }
+func (t *WriteFileTool) Description() string {
+	return "Write content to a file, creating directories as needed"
+}
+func (t *WriteFileTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"path": map[string]interface{}{
+		"properties": map[string]any{
+			"path": map[string]any{
 				"type":        "string",
 				"description": "Path to the file to write",
 			},
-			"content": map[string]interface{}{
+			"content": map[string]any{
 				"type":        "string",
 				"description": "Content to write",
 			},
-			"deliver": map[string]interface{}{
+			"deliver": map[string]any{
 				"type":        "boolean",
 				"description": "If true, deliver this file to the user as an attachment (image, document, etc.)",
 			},
@@ -76,7 +78,7 @@ func (t *WriteFileTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *WriteFileTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *WriteFileTool) Execute(ctx context.Context, args map[string]any) *Result {
 	path, _ := args["path"].(string)
 	content, _ := args["content"].(string)
 	deliver, _ := args["deliver"].(bool)

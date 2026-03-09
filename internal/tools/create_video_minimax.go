@@ -26,7 +26,7 @@ func callMinimaxVideoGen(ctx context.Context, apiKey, apiBase, model string, par
 	base := strings.TrimRight(apiBase, "/")
 
 	// 1. Submit video generation task.
-	submitBody := map[string]interface{}{
+	submitBody := map[string]any{
 		"model":            model,
 		"prompt":           prompt,
 		"duration":         duration,
@@ -91,7 +91,7 @@ func callMinimaxVideoGen(ctx context.Context, apiKey, apiBase, model string, par
 	const pollInterval = 10 * time.Second
 
 	var fileID string
-	for i := 0; i < maxPolls; i++ {
+	for i := range maxPolls {
 		select {
 		case <-ctx.Done():
 			return nil, nil, ctx.Err()

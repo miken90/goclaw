@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/google/uuid"
 
@@ -21,16 +22,12 @@ func checkUserPermission(settings json.RawMessage, userID string) error {
 	if json.Unmarshal(settings, &s) != nil {
 		return nil // malformed = fail open
 	}
-	for _, denied := range s.UserDeny {
-		if denied == userID {
-			return fmt.Errorf("you are not authorized to use this delegation link")
-		}
+	if slices.Contains(s.UserDeny, userID) {
+		return fmt.Errorf("you are not authorized to use this delegation link")
 	}
 	if len(s.UserAllow) > 0 {
-		for _, allowed := range s.UserAllow {
-			if allowed == userID {
-				return nil
-			}
+		if slices.Contains(s.UserAllow, userID) {
+			return nil
 		}
 		return fmt.Errorf("you are not authorized to use this delegation link")
 	}
@@ -67,19 +64,11 @@ func checkTeamAccess(settings json.RawMessage, userID, channel string) error {
 
 	// User check: deny > allow
 	if userID != "" {
-		for _, denied := range s.DenyUserIDs {
-			if denied == userID {
-				return fmt.Errorf("user not authorized for this team")
-			}
+		if slices.Contains(s.DenyUserIDs, userID) {
+			return fmt.Errorf("user not authorized for this team")
 		}
 		if len(s.AllowUserIDs) > 0 {
-			found := false
-			for _, allowed := range s.AllowUserIDs {
-				if allowed == userID {
-					found = true
-					break
-				}
-			}
+			found := slices.Contains(s.AllowUserIDs, userID)
 			if !found {
 				return fmt.Errorf("user not authorized for this team")
 			}
@@ -88,19 +77,11 @@ func checkTeamAccess(settings json.RawMessage, userID, channel string) error {
 
 	// Channel check: deny > allow
 	if channel != "" {
-		for _, denied := range s.DenyChannels {
-			if denied == channel {
-				return fmt.Errorf("channel %q not authorized for this team", channel)
-			}
+		if slices.Contains(s.DenyChannels, channel) {
+			return fmt.Errorf("channel %q not authorized for this team", channel)
 		}
 		if len(s.AllowChannels) > 0 {
-			found := false
-			for _, allowed := range s.AllowChannels {
-				if allowed == channel {
-					found = true
-					break
-				}
-			}
+			found := slices.Contains(s.AllowChannels, channel)
 			if !found {
 				return fmt.Errorf("channel %q not authorized for this team", channel)
 			}
@@ -233,12 +214,22 @@ func (dm *DelegateManager) applyQualityGates(
 						UserID:         task.UserID,
 						Channel:        task.OriginChannel,
 						ChatID:         task.OriginChatID,
-						TeamID:         func() string { if task.TeamID != uuid.Nil { return task.TeamID.String() }; return "" }(),
-						TeamTaskID:     func() string { if task.TeamTaskID != uuid.Nil { return task.TeamTaskID.String() }; return "" }(),
-						GateType:       string(gate.Type),
-						Attempt:        attempt + 1,
-						MaxRetries:     retries,
-						Feedback:       hookResult.Feedback,
+						TeamID: func() string {
+							if task.TeamID != uuid.Nil {
+								return task.TeamID.String()
+							}
+							return ""
+						}(),
+						TeamTaskID: func() string {
+							if task.TeamTaskID != uuid.Nil {
+								return task.TeamTaskID.String()
+							}
+							return ""
+						}(),
+						GateType:   string(gate.Type),
+						Attempt:    attempt + 1,
+						MaxRetries: retries,
+						Feedback:   hookResult.Feedback,
 					},
 				})
 			}

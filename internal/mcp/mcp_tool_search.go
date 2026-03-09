@@ -47,15 +47,15 @@ func (t *MCPToolSearchTool) Description() string {
 		"Discovered tools become immediately available for use."
 }
 
-func (t *MCPToolSearchTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *MCPToolSearchTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"query": map[string]interface{}{
+		"properties": map[string]any{
+			"query": map[string]any{
 				"type":        "string",
 				"description": "English keywords describing the operation you need (e.g. 'create github issue', 'query postgres', 'send slack message')",
 			},
-			"max_results": map[string]interface{}{
+			"max_results": map[string]any{
 				"type":        "integer",
 				"description": "Maximum number of tools to return (default: 5)",
 			},
@@ -64,7 +64,7 @@ func (t *MCPToolSearchTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *MCPToolSearchTool) Execute(ctx context.Context, args map[string]interface{}) *tools.Result {
+func (t *MCPToolSearchTool) Execute(ctx context.Context, args map[string]any) *tools.Result {
 	query, _ := args["query"].(string)
 	if query == "" {
 		return tools.ErrorResult("query parameter is required")
@@ -91,7 +91,7 @@ func (t *MCPToolSearchTool) Execute(ctx context.Context, args map[string]interfa
 	}
 	t.manager.ActivateTools(names)
 
-	data, _ := json.MarshalIndent(map[string]interface{}{
+	data, _ := json.MarshalIndent(map[string]any{
 		"tools": results,
 		"count": len(results),
 	}, "", "  ")

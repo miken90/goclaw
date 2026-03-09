@@ -36,7 +36,7 @@ func (l *Loop) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 		Type:    protocol.AgentEventRunStarted,
 		AgentID: l.id,
 		RunID:   req.RunID,
-		Payload: map[string]interface{}{"message": req.Message},
+		Payload: map[string]any{"message": req.Message},
 	})
 
 	// Create trace
@@ -132,7 +132,7 @@ func (l *Loop) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 		Type:    protocol.AgentEventRunCompleted,
 		AgentID: l.id,
 		RunID:   req.RunID,
-		Payload: map[string]interface{}{"content": result.Content},
+		Payload: map[string]any{"content": result.Content},
 	})
 	if !isChildTrace && l.traceCollector != nil && traceID != uuid.Nil {
 		l.traceCollector.FinishTrace(ctx, traceID, store.TraceStatusCompleted, "", truncateStr(result.Content, 500))

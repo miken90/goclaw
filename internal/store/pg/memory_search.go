@@ -70,9 +70,9 @@ type scoredChunk struct {
 	UserID    *string
 }
 
-func (s *PGMemoryStore) ftsSearch(ctx context.Context, query string, agentID interface{}, userID string, limit int) ([]scoredChunk, error) {
+func (s *PGMemoryStore) ftsSearch(ctx context.Context, query string, agentID any, userID string, limit int) ([]scoredChunk, error) {
 	var q string
-	var args []interface{}
+	var args []any
 
 	if userID != "" {
 		q = `SELECT path, start_line, end_line, text, user_id,
@@ -81,7 +81,7 @@ func (s *PGMemoryStore) ftsSearch(ctx context.Context, query string, agentID int
 			WHERE agent_id = $2 AND tsv @@ plainto_tsquery('simple', $3)
 			AND (user_id IS NULL OR user_id = $4)
 			ORDER BY score DESC LIMIT $5`
-		args = []interface{}{query, agentID, query, userID, limit}
+		args = []any{query, agentID, query, userID, limit}
 	} else {
 		q = `SELECT path, start_line, end_line, text, user_id,
 				ts_rank(tsv, plainto_tsquery('simple', $1)) AS score
@@ -89,7 +89,7 @@ func (s *PGMemoryStore) ftsSearch(ctx context.Context, query string, agentID int
 			WHERE agent_id = $2 AND tsv @@ plainto_tsquery('simple', $3)
 			AND user_id IS NULL
 			ORDER BY score DESC LIMIT $4`
-		args = []interface{}{query, agentID, query, limit}
+		args = []any{query, agentID, query, limit}
 	}
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
@@ -107,11 +107,11 @@ func (s *PGMemoryStore) ftsSearch(ctx context.Context, query string, agentID int
 	return results, nil
 }
 
-func (s *PGMemoryStore) vectorSearch(ctx context.Context, embedding []float32, agentID interface{}, userID string, limit int) ([]scoredChunk, error) {
+func (s *PGMemoryStore) vectorSearch(ctx context.Context, embedding []float32, agentID any, userID string, limit int) ([]scoredChunk, error) {
 	vecStr := vectorToString(embedding)
 
 	var q string
-	var args []interface{}
+	var args []any
 
 	if userID != "" {
 		q = `SELECT path, start_line, end_line, text, user_id,
@@ -120,7 +120,7 @@ func (s *PGMemoryStore) vectorSearch(ctx context.Context, embedding []float32, a
 			WHERE agent_id = $2 AND embedding IS NOT NULL
 			AND (user_id IS NULL OR user_id = $3)
 			ORDER BY embedding <=> $4::vector LIMIT $5`
-		args = []interface{}{vecStr, agentID, userID, vecStr, limit}
+		args = []any{vecStr, agentID, userID, vecStr, limit}
 	} else {
 		q = `SELECT path, start_line, end_line, text, user_id,
 				1 - (embedding <=> $1::vector) AS score
@@ -128,7 +128,7 @@ func (s *PGMemoryStore) vectorSearch(ctx context.Context, embedding []float32, a
 			WHERE agent_id = $2 AND embedding IS NOT NULL
 			AND user_id IS NULL
 			ORDER BY embedding <=> $3::vector LIMIT $4`
-		args = []interface{}{vecStr, agentID, vecStr, limit}
+		args = []any{vecStr, agentID, vecStr, limit}
 	}
 
 	rows, err := s.db.QueryContext(ctx, q, args...)
@@ -145,6 +145,7 @@ func (s *PGMemoryStore) vectorSearch(ctx context.Context, embedding []float32, a
 	}
 	return results, nil
 }
+
 // hybridMerge combines FTS and vector results with weighted scoring.
 // Per-user results get a 1.2x boost. Deduplication: user copy wins over global.
 func hybridMerge(fts, vec []scoredChunk, textWeight, vectorWeight float64, currentUserID string) []store.MemorySearchResult {

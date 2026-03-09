@@ -22,7 +22,7 @@ func (s *PGCronStore) scanJob(id uuid.UUID) (*store.CronJob, error) {
 // --- Scan helpers ---
 
 type cronRowScanner interface {
-	Scan(dest ...interface{}) error
+	Scan(dest ...any) error
 }
 
 func scanCronRow(row cronRowScanner) (*store.CronJob, error) {

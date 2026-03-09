@@ -44,7 +44,7 @@ func (m *CronMethods) handleList(_ context.Context, client *gateway.Client, req 
 
 	jobs := m.service.ListJobs(params.IncludeDisabled, "", "")
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"jobs":   jobs,
 		"status": m.service.Status(),
 	}))
@@ -84,7 +84,7 @@ func (m *CronMethods) handleCreate(ctx context.Context, client *gateway.Client, 
 		return
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"job": job,
 	}))
 }
@@ -108,7 +108,7 @@ func (m *CronMethods) handleDelete(ctx context.Context, client *gateway.Client, 
 		return
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"deleted": true,
 	}))
 }
@@ -133,7 +133,7 @@ func (m *CronMethods) handleToggle(ctx context.Context, client *gateway.Client, 
 		return
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"jobId":   params.JobID,
 		"enabled": params.Enabled,
 	}))
@@ -146,8 +146,8 @@ func (m *CronMethods) handleStatus(_ context.Context, client *gateway.Client, re
 func (m *CronMethods) handleUpdate(ctx context.Context, client *gateway.Client, req *protocol.RequestFrame) {
 	locale := store.LocaleFromContext(ctx)
 	var params struct {
-		JobID string            `json:"jobId"`
-		ID    string            `json:"id"` // alias (matching TS)
+		JobID string             `json:"jobId"`
+		ID    string             `json:"id"` // alias (matching TS)
 		Patch store.CronJobPatch `json:"patch"`
 	}
 	if req.Params != nil {
@@ -169,7 +169,7 @@ func (m *CronMethods) handleUpdate(ctx context.Context, client *gateway.Client, 
 		return
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"job": job,
 	}))
 }
@@ -204,7 +204,7 @@ func (m *CronMethods) handleRun(ctx context.Context, client *gateway.Client, req
 	}
 
 	// Respond immediately — job execution happens in background
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"ok":  true,
 		"ran": true,
 	}))
@@ -233,7 +233,7 @@ func (m *CronMethods) handleRuns(_ context.Context, client *gateway.Client, req 
 	}
 
 	entries, total := m.service.GetRunLog(jobID, params.Limit, params.Offset)
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"entries": entries,
 		"total":   total,
 	}))

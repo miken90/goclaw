@@ -30,9 +30,9 @@ func (m *SkillsMethods) Register(router *gateway.MethodRouter) {
 func (m *SkillsMethods) handleList(_ context.Context, client *gateway.Client, req *protocol.RequestFrame) {
 	allSkills := m.store.ListSkills()
 
-	result := make([]map[string]interface{}, 0, len(allSkills))
+	result := make([]map[string]any, 0, len(allSkills))
 	for _, s := range allSkills {
-		entry := map[string]interface{}{
+		entry := map[string]any{
 			"name":        s.Name,
 			"slug":        s.Slug,
 			"description": s.Description,
@@ -51,7 +51,7 @@ func (m *SkillsMethods) handleList(_ context.Context, client *gateway.Client, re
 		result = append(result, entry)
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"skills": result,
 	}))
 }
@@ -77,7 +77,7 @@ func (m *SkillsMethods) handleGet(ctx context.Context, client *gateway.Client, r
 
 	content, _ := m.store.LoadSkill(params.Name)
 
-	resp := map[string]interface{}{
+	resp := map[string]any{
 		"name":        info.Name,
 		"slug":        info.Slug,
 		"description": info.Description,
@@ -99,15 +99,15 @@ func (m *SkillsMethods) handleGet(ctx context.Context, client *gateway.Client, r
 
 // skillUpdater is an optional interface for stores that support skill updates (e.g. PGSkillStore).
 type skillUpdater interface {
-	UpdateSkill(id uuid.UUID, updates map[string]interface{}) error
+	UpdateSkill(id uuid.UUID, updates map[string]any) error
 }
 
 func (m *SkillsMethods) handleUpdate(ctx context.Context, client *gateway.Client, req *protocol.RequestFrame) {
 	locale := store.LocaleFromContext(ctx)
 	var params struct {
-		Name    string                 `json:"name"`
-		ID      string                 `json:"id"`
-		Updates map[string]interface{} `json:"updates"`
+		Name    string         `json:"name"`
+		ID      string         `json:"id"`
+		Updates map[string]any `json:"updates"`
 	}
 	if req.Params != nil {
 		json.Unmarshal(req.Params, &params)

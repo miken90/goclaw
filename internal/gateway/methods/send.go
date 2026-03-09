@@ -55,7 +55,7 @@ func (m *SendMethods) handleSend(ctx context.Context, client *gateway.Client, re
 		Content: params.Message,
 	})
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"ok":      true,
 		"channel": params.Channel,
 		"to":      params.To,

@@ -70,15 +70,15 @@ func (t *SkillSearchTool) Description() string {
 	return "Search for available skills by keyword. Returns matching skills with name, description, and SKILL.md location for reading with read_file."
 }
 
-func (t *SkillSearchTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *SkillSearchTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"query": map[string]interface{}{
+		"properties": map[string]any{
+			"query": map[string]any{
 				"type":        "string",
 				"description": "Search keywords to find relevant skills (use English keywords)",
 			},
-			"max_results": map[string]interface{}{
+			"max_results": map[string]any{
 				"type":        "integer",
 				"description": "Maximum number of results to return (default: 5)",
 			},
@@ -87,7 +87,7 @@ func (t *SkillSearchTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *SkillSearchTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *SkillSearchTool) Execute(ctx context.Context, args map[string]any) *Result {
 	query, _ := args["query"].(string)
 	if query == "" {
 		return ErrorResult("query parameter is required")
@@ -127,7 +127,7 @@ func (t *SkillSearchTool) Execute(ctx context.Context, args map[string]interface
 		return NewResult(fmt.Sprintf("No skills found matching: %s", query))
 	}
 
-	data, _ := json.MarshalIndent(map[string]interface{}{
+	data, _ := json.MarshalIndent(map[string]any{
 		"results": results,
 		"count":   len(results),
 	}, "", "  ")

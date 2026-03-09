@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 	"log/slog"
+	"maps"
 )
 
 const (
@@ -29,7 +30,7 @@ func NewDashScopeProvider(apiKey, apiBase, defaultModel string) *DashScopeProvid
 	}
 }
 
-func (p *DashScopeProvider) Name() string          { return "dashscope" }
+func (p *DashScopeProvider) Name() string           { return "dashscope" }
 func (p *DashScopeProvider) SupportsThinking() bool { return true }
 
 // ChatStream handles DashScope's limitation: tools + streaming cannot coexist.
@@ -39,10 +40,8 @@ func (p *DashScopeProvider) ChatStream(ctx context.Context, req ChatRequest, onC
 	// Map thinking_level to DashScope-specific params before passing to OpenAI base
 	if level, ok := req.Options[OptThinkingLevel].(string); ok && level != "" && level != "off" {
 		// Clone Options to avoid mutating caller's map
-		opts := make(map[string]interface{}, len(req.Options)+2)
-		for k, v := range req.Options {
-			opts[k] = v
-		}
+		opts := make(map[string]any, len(req.Options)+2)
+		maps.Copy(opts, req.Options)
 		opts[OptEnableThinking] = true
 		opts[OptThinkingBudget] = dashscopeThinkingBudget(level)
 		delete(opts, OptThinkingLevel) // don't pass generic key to OpenAI buildRequestBody

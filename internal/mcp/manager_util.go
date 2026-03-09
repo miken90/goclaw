@@ -1,5 +1,7 @@
 package mcp
 
+import "strings"
+
 func mapToEnvSlice(env map[string]string) []string {
 	if len(env) == 0 {
 		return nil
@@ -23,14 +25,14 @@ func toSet(items []string) map[string]struct{} {
 }
 
 func joinErrors(errs []string) string {
-	result := ""
+	var result strings.Builder
 	for i, e := range errs {
 		if i > 0 {
-			result += "; "
+			result.WriteString("; ")
 		}
-		result += e
+		result.WriteString(e)
 	}
-	return result
+	return result.String()
 }
 
 // jsonBytesToStringSlice converts JSONB []byte to []string. Returns nil on error.

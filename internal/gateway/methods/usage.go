@@ -83,17 +83,11 @@ func (m *UsageMethods) handleGet(_ context.Context, client *gateway.Client, req 
 	total := len(records)
 
 	// Apply offset + limit
-	offset := params.Offset
-	if offset > total {
-		offset = total
-	}
-	end := offset + params.Limit
-	if end > total {
-		end = total
-	}
+	offset := min(params.Offset, total)
+	end := min(offset+params.Limit, total)
 	records = records[offset:end]
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"records": records,
 		"total":   total,
 		"limit":   params.Limit,
@@ -132,7 +126,7 @@ func (m *UsageMethods) handleSummary(_ context.Context, client *gateway.Client, 
 		totalRecords++
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"byAgent":      byAgent,
 		"totalRecords": totalRecords,
 	}))

@@ -117,20 +117,20 @@ func (t *WebFetchTool) Description() string {
 	return "Fetch a URL and extract its content. Supports HTML (converted to markdown/text), JSON, and plain text. Includes SSRF protection."
 }
 
-func (t *WebFetchTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *WebFetchTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"url": map[string]interface{}{
+		"properties": map[string]any{
+			"url": map[string]any{
 				"type":        "string",
 				"description": "HTTP or HTTPS URL to fetch.",
 			},
-			"extractMode": map[string]interface{}{
+			"extractMode": map[string]any{
 				"type":        "string",
 				"description": `Extraction mode ("markdown" or "text"). Default: "markdown".`,
 				"enum":        []string{"markdown", "text"},
 			},
-			"maxChars": map[string]interface{}{
+			"maxChars": map[string]any{
 				"type":        "number",
 				"description": "Maximum characters to return (truncates when exceeded).",
 				"minimum":     100.0,
@@ -140,7 +140,7 @@ func (t *WebFetchTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *WebFetchTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *Result {
 	rawURL, _ := args["url"].(string)
 	if rawURL == "" {
 		return ErrorResult("url is required")

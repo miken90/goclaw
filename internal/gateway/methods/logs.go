@@ -38,13 +38,13 @@ func (m *LogsMethods) handleTail(ctx context.Context, client *gateway.Client, re
 	case "start":
 		level := parseLogLevel(params.Level)
 		m.logTee.Subscribe(client, level)
-		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 			"status": "tailing",
 			"level":  params.Level,
 		}))
 	case "stop":
 		m.logTee.Unsubscribe(client.ID())
-		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 			"status": "stopped",
 		}))
 	default:

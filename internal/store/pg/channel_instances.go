@@ -192,9 +192,9 @@ func (s *PGChannelInstanceStore) ListAll(ctx context.Context) ([]store.ChannelIn
 	return s.scanInstances(rows)
 }
 
-func buildChannelInstanceWhere(opts store.ChannelInstanceListOpts) (string, []interface{}) {
+func buildChannelInstanceWhere(opts store.ChannelInstanceListOpts) (string, []any) {
 	var conditions []string
-	var args []interface{}
+	var args []any
 	argIdx := 1
 
 	if opts.Search != "" {

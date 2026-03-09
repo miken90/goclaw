@@ -8,15 +8,15 @@ import (
 // mockTool is a minimal tool for testing the registry.
 type mockTool struct {
 	name   string
-	execFn func(ctx context.Context, args map[string]interface{}) *Result
+	execFn func(ctx context.Context, args map[string]any) *Result
 }
 
 func (m *mockTool) Name() string        { return m.name }
 func (m *mockTool) Description() string { return "mock tool" }
-func (m *mockTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
+func (m *mockTool) Parameters() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
-func (m *mockTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (m *mockTool) Execute(ctx context.Context, args map[string]any) *Result {
 	if m.execFn != nil {
 		return m.execFn(ctx, args)
 	}
@@ -79,7 +79,7 @@ func TestRegistry_ExecuteWithContext_InjectsContextValues(t *testing.T) {
 
 	reg.Register(&mockTool{
 		name: "ctx_tool",
-		execFn: func(ctx context.Context, args map[string]interface{}) *Result {
+		execFn: func(ctx context.Context, args map[string]any) *Result {
 			gotChannel = ToolChannelFromCtx(ctx)
 			gotChatID = ToolChatIDFromCtx(ctx)
 			gotPeerKind = ToolPeerKindFromCtx(ctx)
@@ -120,7 +120,7 @@ func TestRegistry_ExecuteWithContext_ScrubsCredentials(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(&mockTool{
 		name: "leaky_tool",
-		execFn: func(ctx context.Context, args map[string]interface{}) *Result {
+		execFn: func(ctx context.Context, args map[string]any) *Result {
 			return &Result{
 				ForLLM:  "key is sk-abcdefghijklmnopqrstuvwxyz1234567890",
 				ForUser: "token: ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij",
@@ -144,7 +144,7 @@ func TestRegistry_ExecuteWithContext_RateLimiting(t *testing.T) {
 	reg.Register(&mockTool{name: "rl_tool"})
 
 	// First 2 calls allowed
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		result := reg.ExecuteWithContext(context.Background(), "rl_tool", nil,
 			"", "", "", "session-1", nil)
 		if result.IsError {
@@ -173,7 +173,7 @@ func TestRegistry_ExecuteWithContext_NoRateLimitWithoutSessionKey(t *testing.T) 
 	reg.Register(&mockTool{name: "tool"})
 
 	// Without sessionKey, rate limiting is skipped
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		result := reg.ExecuteWithContext(context.Background(), "tool", nil,
 			"", "", "", "", nil)
 		if result.IsError {
@@ -188,7 +188,7 @@ func TestRegistry_ExecuteWithContext_EmptyContextValues(t *testing.T) {
 	var gotChannel, gotSandboxKey string
 	reg.Register(&mockTool{
 		name: "empty_ctx",
-		execFn: func(ctx context.Context, args map[string]interface{}) *Result {
+		execFn: func(ctx context.Context, args map[string]any) *Result {
 			gotChannel = ToolChannelFromCtx(ctx)
 			gotSandboxKey = ToolSandboxKeyFromCtx(ctx)
 			return NewResult("ok")

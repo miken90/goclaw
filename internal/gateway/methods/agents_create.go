@@ -157,7 +157,7 @@ func (m *AgentsMethods) handleCreate(ctx context.Context, client *gateway.Client
 	os.MkdirAll(ws, 0755)
 	bootstrap.EnsureWorkspaceFiles(ws)
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"ok":        true,
 		"agentId":   agentID,
 		"name":      params.Name,

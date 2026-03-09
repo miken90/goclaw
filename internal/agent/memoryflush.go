@@ -173,12 +173,12 @@ func (l *Loop) runMemoryFlush(ctx context.Context, sessionKey string, settings *
 
 	// Run LLM iteration loop (max 5 iterations for flush)
 	maxFlushIter := 5
-	for i := 0; i < maxFlushIter; i++ {
+	for range maxFlushIter {
 		resp, err := l.provider.Chat(flushCtx, providers.ChatRequest{
 			Messages: messages,
 			Tools:    toolDefs,
 			Model:    l.model,
-			Options: map[string]interface{}{
+			Options: map[string]any{
 				"max_tokens":  4096,
 				"temperature": 0.3,
 			},

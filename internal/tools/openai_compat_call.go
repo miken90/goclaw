@@ -16,7 +16,7 @@ import (
 // callOpenAICompatJSON sends a raw JSON body to an OpenAI-compatible chat/completions endpoint
 // and parses the response into a ChatResponse. Used by audio/video tools that need custom
 // message formats not supported by the generic providers.ChatRequest interface.
-func callOpenAICompatJSON(ctx context.Context, apiKey, baseURL string, body map[string]interface{}, timeout time.Duration) (*providers.ChatResponse, error) {
+func callOpenAICompatJSON(ctx context.Context, apiKey, baseURL string, body map[string]any, timeout time.Duration) (*providers.ChatResponse, error) {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)

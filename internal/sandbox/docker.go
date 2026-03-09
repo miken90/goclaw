@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os/exec"
 	"strings"
 	"sync"
@@ -282,9 +283,7 @@ func (m *DockerManager) Release(ctx context.Context, key string) error {
 func (m *DockerManager) ReleaseAll(ctx context.Context) error {
 	m.mu.Lock()
 	sbs := make(map[string]*DockerSandbox, len(m.sandboxes))
-	for k, v := range m.sandboxes {
-		sbs[k] = v
-	}
+	maps.Copy(sbs, m.sandboxes)
 	m.sandboxes = make(map[string]*DockerSandbox)
 	m.mu.Unlock()
 
@@ -297,7 +296,7 @@ func (m *DockerManager) ReleaseAll(ctx context.Context) error {
 }
 
 // Stats returns information about active sandboxes.
-func (m *DockerManager) Stats() map[string]interface{} {
+func (m *DockerManager) Stats() map[string]any {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -306,7 +305,7 @@ func (m *DockerManager) Stats() map[string]interface{} {
 		containers[key] = sb.containerID
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"mode":       m.config.Mode,
 		"image":      m.config.Image,
 		"active":     len(m.sandboxes),

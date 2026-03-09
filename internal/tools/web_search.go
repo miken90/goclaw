@@ -74,12 +74,12 @@ type WebSearchTool struct {
 
 // WebSearchConfig holds configuration for the web search tool.
 type WebSearchConfig struct {
-	BraveAPIKey    string
-	BraveEnabled   bool
+	BraveAPIKey     string
+	BraveEnabled    bool
 	BraveMaxResults int
-	DDGEnabled     bool
-	DDGMaxResults  int
-	CacheTTL       time.Duration
+	DDGEnabled      bool
+	DDGMaxResults   int
+	CacheTTL        time.Duration
 }
 
 func NewWebSearchTool(cfg WebSearchConfig) *WebSearchTool {
@@ -114,33 +114,33 @@ func (t *WebSearchTool) Description() string {
 	return "Search the web for current information. Returns titles, URLs, and snippets from search results."
 }
 
-func (t *WebSearchTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *WebSearchTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"query": map[string]interface{}{
+		"properties": map[string]any{
+			"query": map[string]any{
 				"type":        "string",
 				"description": "Search query string.",
 			},
-			"count": map[string]interface{}{
+			"count": map[string]any{
 				"type":        "number",
 				"description": "Number of results to return (1-10).",
 				"minimum":     1.0,
 				"maximum":     float64(maxSearchCount),
 			},
-			"country": map[string]interface{}{
+			"country": map[string]any{
 				"type":        "string",
 				"description": "2-letter country code for region-specific results (e.g., 'DE', 'US', 'ALL'). Default: 'US'.",
 			},
-			"search_lang": map[string]interface{}{
+			"search_lang": map[string]any{
 				"type":        "string",
 				"description": "ISO language code for search results (e.g., 'de', 'en', 'fr').",
 			},
-			"ui_lang": map[string]interface{}{
+			"ui_lang": map[string]any{
 				"type":        "string",
 				"description": "ISO language code for UI elements.",
 			},
-			"freshness": map[string]interface{}{
+			"freshness": map[string]any{
 				"type":        "string",
 				"description": "Filter results by discovery time. Supports 'pd' (past day), 'pw' (past week), 'pm' (past month), 'py' (past year), and date range 'YYYY-MM-DDtoYYYY-MM-DD'.",
 			},
@@ -149,7 +149,7 @@ func (t *WebSearchTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *WebSearchTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *WebSearchTool) Execute(ctx context.Context, args map[string]any) *Result {
 	query, _ := args["query"].(string)
 	if query == "" {
 		return ErrorResult("query is required")

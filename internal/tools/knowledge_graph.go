@@ -31,23 +31,23 @@ func (t *KnowledgeGraphSearchTool) Description() string {
 	return "Search the knowledge graph for entities and their relationships. Use specific names or keywords (e.g. a person's name, project name) — not generic words like 'entities' or 'all'. Use query='*' to list all entities. Supports graph traversal via entity_id to discover multi-hop relationships."
 }
 
-func (t *KnowledgeGraphSearchTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *KnowledgeGraphSearchTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"query": map[string]interface{}{
+		"properties": map[string]any{
+			"query": map[string]any{
 				"type":        "string",
 				"description": "Search query for entity names or descriptions",
 			},
-			"entity_type": map[string]interface{}{
+			"entity_type": map[string]any{
 				"type":        "string",
 				"description": "Filter by entity type (person, project, task, event, concept, location, organization)",
 			},
-			"entity_id": map[string]interface{}{
+			"entity_id": map[string]any{
 				"type":        "string",
 				"description": "Entity ID to traverse from (for relationship discovery)",
 			},
-			"max_depth": map[string]interface{}{
+			"max_depth": map[string]any{
 				"type":        "number",
 				"description": "Maximum traversal depth (default 2, max 3)",
 			},
@@ -56,7 +56,7 @@ func (t *KnowledgeGraphSearchTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *KnowledgeGraphSearchTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *KnowledgeGraphSearchTool) Execute(ctx context.Context, args map[string]any) *Result {
 	if t.kgStore == nil {
 		return NewResult("Knowledge graph is not enabled for this agent.")
 	}
@@ -75,10 +75,7 @@ func (t *KnowledgeGraphSearchTool) Execute(ctx context.Context, args map[string]
 	entityID, _ := args["entity_id"].(string)
 	maxDepth := 2
 	if md, ok := args["max_depth"].(float64); ok && md > 0 {
-		maxDepth = int(md)
-		if maxDepth > 3 {
-			maxDepth = 3
-		}
+		maxDepth = min(int(md), 3)
 	}
 
 	// Traversal mode: entity_id provided
@@ -142,7 +139,7 @@ func (t *KnowledgeGraphSearchTool) executeListAll(ctx context.Context, agentID, 
 	return NewResult(sb.String())
 }
 
-func (t *KnowledgeGraphSearchTool) executeSearch(ctx context.Context, agentID, userID, query string, args map[string]interface{}) *Result {
+func (t *KnowledgeGraphSearchTool) executeSearch(ctx context.Context, agentID, userID, query string, args map[string]any) *Result {
 	entities, err := t.kgStore.SearchEntities(ctx, agentID, userID, query, 10)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("entity search failed: %v", err))

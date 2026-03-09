@@ -46,7 +46,7 @@ func (e *Extractor) Extract(ctx context.Context, text string) (*ExtractionResult
 			{Role: "user", Content: text},
 		},
 		Model: e.model,
-		Options: map[string]interface{}{
+		Options: map[string]any{
 			"max_tokens":  8192,
 			"temperature": 0.0,
 		},

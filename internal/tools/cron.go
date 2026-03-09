@@ -68,38 +68,38 @@ CRITICAL CONSTRAINTS:
 Use jobId as the canonical identifier; id is accepted for compatibility.`
 }
 
-func (t *CronTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *CronTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"action": map[string]interface{}{
+		"properties": map[string]any{
+			"action": map[string]any{
 				"type":        "string",
 				"description": "The cron action to perform",
 				"enum":        []string{"status", "list", "add", "update", "remove", "run", "runs"},
 			},
-			"includeDisabled": map[string]interface{}{
+			"includeDisabled": map[string]any{
 				"type":        "boolean",
 				"description": "Include disabled jobs in list (default false)",
 			},
-			"job": map[string]interface{}{
-				"type":        "object",
-				"description": "Job definition for add action (name, schedule, message, deliver, channel, to, agentId, deleteAfterRun)",
+			"job": map[string]any{
+				"type":                 "object",
+				"description":          "Job definition for add action (name, schedule, message, deliver, channel, to, agentId, deleteAfterRun)",
 				"additionalProperties": true,
 			},
-			"jobId": map[string]interface{}{
+			"jobId": map[string]any{
 				"type":        "string",
 				"description": "Job ID for update/remove/run/runs actions",
 			},
-			"id": map[string]interface{}{
+			"id": map[string]any{
 				"type":        "string",
 				"description": "Backward compatibility alias for jobId",
 			},
-			"patch": map[string]interface{}{
-				"type":        "object",
-				"description": "Patch object for update action",
+			"patch": map[string]any{
+				"type":                 "object",
+				"description":          "Patch object for update action",
 				"additionalProperties": true,
 			},
-			"runMode": map[string]interface{}{
+			"runMode": map[string]any{
 				"type":        "string",
 				"description": "Run mode: 'due' (only if due) or 'force' (immediate)",
 				"enum":        []string{"due", "force"},
@@ -109,7 +109,7 @@ func (t *CronTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *CronTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *CronTool) Execute(ctx context.Context, args map[string]any) *Result {
 	action, _ := args["action"].(string)
 	if action == "" {
 		return ErrorResult("action parameter is required")
@@ -151,11 +151,11 @@ func (t *CronTool) handleStatus() *Result {
 	return NewResult(string(data))
 }
 
-func (t *CronTool) handleList(args map[string]interface{}, agentID, userID string) *Result {
+func (t *CronTool) handleList(args map[string]any, agentID, userID string) *Result {
 	includeDisabled, _ := args["includeDisabled"].(bool)
 	jobs := t.cronStore.ListJobs(includeDisabled, agentID, userID)
 
-	result := map[string]interface{}{
+	result := map[string]any{
 		"jobs":  jobs,
 		"count": len(jobs),
 	}
@@ -163,8 +163,8 @@ func (t *CronTool) handleList(args map[string]interface{}, agentID, userID strin
 	return NewResult(string(data))
 }
 
-func (t *CronTool) handleAdd(ctx context.Context, args map[string]interface{}, agentID, userID string) *Result {
-	jobObj, ok := args["job"].(map[string]interface{})
+func (t *CronTool) handleAdd(ctx context.Context, args map[string]any, agentID, userID string) *Result {
+	jobObj, ok := args["job"].(map[string]any)
 	if !ok {
 		return ErrorResult("job object is required for add action")
 	}
@@ -174,7 +174,7 @@ func (t *CronTool) handleAdd(ctx context.Context, args map[string]interface{}, a
 		return ErrorResult("job.name is required")
 	}
 
-	scheduleObj, ok := jobObj["schedule"].(map[string]interface{})
+	scheduleObj, ok := jobObj["schedule"].(map[string]any)
 	if !ok {
 		return ErrorResult("job.schedule is required")
 	}
@@ -252,7 +252,7 @@ func (t *CronTool) handleAdd(ctx context.Context, args map[string]interface{}, a
 		return ErrorResult(fmt.Sprintf("failed to create cron job: %v", err))
 	}
 
-	data, _ := json.MarshalIndent(map[string]interface{}{"job": job}, "", "  ")
+	data, _ := json.MarshalIndent(map[string]any{"job": job}, "", "  ")
 	return NewResult(string(data))
 }
 
@@ -275,7 +275,7 @@ func (t *CronTool) checkJobOwnership(jobID, agentID, userID string) (*store.Cron
 	return job, nil
 }
 
-func (t *CronTool) handleUpdate(args map[string]interface{}, agentID, userID string) *Result {
+func (t *CronTool) handleUpdate(args map[string]any, agentID, userID string) *Result {
 	jobID := resolveJobID(args)
 	if jobID == "" {
 		return ErrorResult("jobId is required for update action")
@@ -285,7 +285,7 @@ func (t *CronTool) handleUpdate(args map[string]interface{}, agentID, userID str
 		return errResult
 	}
 
-	patchObj, ok := args["patch"].(map[string]interface{})
+	patchObj, ok := args["patch"].(map[string]any)
 	if !ok {
 		return ErrorResult("patch object is required for update action")
 	}
@@ -300,11 +300,11 @@ func (t *CronTool) handleUpdate(args map[string]interface{}, agentID, userID str
 		return ErrorResult(fmt.Sprintf("failed to update cron job: %v", err))
 	}
 
-	data, _ := json.MarshalIndent(map[string]interface{}{"job": job}, "", "  ")
+	data, _ := json.MarshalIndent(map[string]any{"job": job}, "", "  ")
 	return NewResult(string(data))
 }
 
-func (t *CronTool) handleRemove(args map[string]interface{}, agentID, userID string) *Result {
+func (t *CronTool) handleRemove(args map[string]any, agentID, userID string) *Result {
 	jobID := resolveJobID(args)
 	if jobID == "" {
 		return ErrorResult("jobId is required for remove action")
@@ -318,11 +318,11 @@ func (t *CronTool) handleRemove(args map[string]interface{}, agentID, userID str
 		return ErrorResult(fmt.Sprintf("failed to remove cron job: %v", err))
 	}
 
-	data, _ := json.MarshalIndent(map[string]interface{}{"deleted": true, "jobId": jobID}, "", "  ")
+	data, _ := json.MarshalIndent(map[string]any{"deleted": true, "jobId": jobID}, "", "  ")
 	return NewResult(string(data))
 }
 
-func (t *CronTool) handleRun(args map[string]interface{}, agentID, userID string) *Result {
+func (t *CronTool) handleRun(args map[string]any, agentID, userID string) *Result {
 	jobID := resolveJobID(args)
 	if jobID == "" {
 		return ErrorResult("jobId is required for run action")
@@ -340,7 +340,7 @@ func (t *CronTool) handleRun(args map[string]interface{}, agentID, userID string
 		return ErrorResult(fmt.Sprintf("failed to run cron job: %v", err))
 	}
 
-	result := map[string]interface{}{
+	result := map[string]any{
 		"ran":   ran,
 		"jobId": jobID,
 	}
@@ -351,7 +351,7 @@ func (t *CronTool) handleRun(args map[string]interface{}, agentID, userID string
 	return NewResult(string(data))
 }
 
-func (t *CronTool) handleRuns(args map[string]interface{}, agentID, userID string) *Result {
+func (t *CronTool) handleRuns(args map[string]any, agentID, userID string) *Result {
 	jobID := resolveJobID(args)
 
 	// Validate ownership if a specific job is requested
@@ -368,7 +368,7 @@ func (t *CronTool) handleRuns(args map[string]interface{}, agentID, userID strin
 
 	entries, total := t.cronStore.GetRunLog(jobID, limit, 0)
 
-	result := map[string]interface{}{
+	result := map[string]any{
 		"entries": entries,
 		"count":   len(entries),
 		"total":   total,
@@ -379,7 +379,7 @@ func (t *CronTool) handleRuns(args map[string]interface{}, agentID, userID strin
 
 // --- helpers ---
 
-func resolveJobID(args map[string]interface{}) string {
+func resolveJobID(args map[string]any) string {
 	if id, ok := args["jobId"].(string); ok && id != "" {
 		return id
 	}
@@ -389,12 +389,12 @@ func resolveJobID(args map[string]interface{}) string {
 	return ""
 }
 
-func stringFromMap(m map[string]interface{}, key string) string {
+func stringFromMap(m map[string]any, key string) string {
 	v, _ := m[key].(string)
 	return v
 }
 
-func numberFromMap(m map[string]interface{}, key string) (float64, bool) {
+func numberFromMap(m map[string]any, key string) (float64, bool) {
 	v, ok := m[key].(float64)
 	return v, ok
 }

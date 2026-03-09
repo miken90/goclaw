@@ -18,7 +18,7 @@ func (s *PGCronStore) UpdateJob(jobID string, patch store.CronJobPatch) (*store.
 		return nil, fmt.Errorf("invalid job ID: %s", jobID)
 	}
 
-	updates := make(map[string]interface{})
+	updates := make(map[string]any)
 	if patch.Name != "" {
 		updates["name"] = patch.Name
 	}

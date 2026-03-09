@@ -20,15 +20,15 @@ func (t *UseSkillTool) Description() string {
 	return "Activate a skill. Call this before read_file to signal skill usage for tracing and observability."
 }
 
-func (t *UseSkillTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *UseSkillTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"name": map[string]interface{}{
+		"properties": map[string]any{
+			"name": map[string]any{
 				"type":        "string",
 				"description": "Skill name or slug to activate",
 			},
-			"params": map[string]interface{}{
+			"params": map[string]any{
 				"type":        "object",
 				"description": "Optional skill-specific parameters",
 			},
@@ -37,7 +37,7 @@ func (t *UseSkillTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *UseSkillTool) Execute(_ context.Context, args map[string]interface{}) *Result {
+func (t *UseSkillTool) Execute(_ context.Context, args map[string]any) *Result {
 	name, _ := args["name"].(string)
 	if name == "" {
 		return ErrorResult("name parameter is required")

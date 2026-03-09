@@ -36,7 +36,7 @@ func (m *AgentsMethods) handleIdentityGet(_ context.Context, client *gateway.Cli
 		}
 	}
 
-	result := map[string]interface{}{
+	result := map[string]any{
 		"agentId": params.AgentID,
 	}
 
@@ -106,7 +106,7 @@ func (m *AgentsMethods) handleIdentityGet(_ context.Context, client *gateway.Cli
 // parseIdentityContent parses IDENTITY.md content string and extracts Key: Value fields.
 func parseIdentityContent(content string) map[string]string {
 	result := make(map[string]string)
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "#") || line == "" {
 			continue

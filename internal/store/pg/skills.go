@@ -127,14 +127,15 @@ func (s *PGSkillStore) LoadForContext(allowList []string) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	result := "## Available Skills\n\n"
+	var result strings.Builder
+	result.WriteString("## Available Skills\n\n")
 	for i, p := range parts {
 		if i > 0 {
-			result += "\n\n---\n\n"
+			result.WriteString("\n\n---\n\n")
 		}
-		result += p
+		result.WriteString(p)
 	}
-	return result
+	return result.String()
 }
 
 func (s *PGSkillStore) BuildSummary(allowList []string) string {
@@ -142,16 +143,17 @@ func (s *PGSkillStore) BuildSummary(allowList []string) string {
 	if len(skills) == 0 {
 		return ""
 	}
-	result := "<available_skills>\n"
+	var result strings.Builder
+	result.WriteString("<available_skills>\n")
 	for _, sk := range skills {
-		result += "  <skill>\n"
-		result += fmt.Sprintf("    <name>%s</name>\n", sk.Name)
-		result += fmt.Sprintf("    <description>%s</description>\n", sk.Description)
-		result += fmt.Sprintf("    <location>%s</location>\n", sk.Path)
-		result += "  </skill>\n"
+		result.WriteString("  <skill>\n")
+		result.WriteString(fmt.Sprintf("    <name>%s</name>\n", sk.Name))
+		result.WriteString(fmt.Sprintf("    <description>%s</description>\n", sk.Description))
+		result.WriteString(fmt.Sprintf("    <location>%s</location>\n", sk.Path))
+		result.WriteString("  </skill>\n")
 	}
-	result += "</available_skills>"
-	return result
+	result.WriteString("</available_skills>")
+	return result.String()
 }
 
 func (s *PGSkillStore) GetSkill(name string) (*store.SkillInfo, bool) {
@@ -212,7 +214,7 @@ func (s *PGSkillStore) CreateSkill(name, slug string, description *string, owner
 	return err
 }
 
-func (s *PGSkillStore) UpdateSkill(id uuid.UUID, updates map[string]interface{}) error {
+func (s *PGSkillStore) UpdateSkill(id uuid.UUID, updates map[string]any) error {
 	if err := execMapUpdate(context.Background(), s.db, "skills", id, updates); err != nil {
 		return err
 	}

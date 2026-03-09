@@ -2,6 +2,8 @@
 // user-facing error messages. Messages use fmt.Sprintf-style templates.
 package i18n
 
+import "maps"
+
 import "fmt"
 
 // Supported locales.
@@ -21,9 +23,7 @@ func register(locale string, msgs map[string]string) {
 	if catalogs[locale] == nil {
 		catalogs[locale] = make(map[string]string, len(msgs))
 	}
-	for k, v := range msgs {
-		catalogs[locale][k] = v
-	}
+	maps.Copy(catalogs[locale], msgs)
 }
 
 // T returns a localized message for the given key.

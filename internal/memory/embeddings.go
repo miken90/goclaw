@@ -128,7 +128,7 @@ func (p *OpenAIEmbeddingProvider) Name() string  { return p.name }
 func (p *OpenAIEmbeddingProvider) Model() string { return p.model }
 
 func (p *OpenAIEmbeddingProvider) Embed(ctx context.Context, texts []string) ([][]float32, error) {
-	reqBody := map[string]interface{}{
+	reqBody := map[string]any{
 		"input": texts,
 		"model": p.model,
 	}

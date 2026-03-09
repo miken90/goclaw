@@ -59,15 +59,15 @@ func (t *ReadVideoTool) Description() string {
 		"Specify what you want to extract or analyze."
 }
 
-func (t *ReadVideoTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *ReadVideoTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"prompt": map[string]interface{}{
+		"properties": map[string]any{
+			"prompt": map[string]any{
 				"type":        "string",
 				"description": "What to analyze. E.g. 'Describe what happens in this video', 'Summarize the key scenes', 'What text appears on screen?'",
 			},
-			"media_id": map[string]interface{}{
+			"media_id": map[string]any{
 				"type":        "string",
 				"description": "Optional: specific media_id from <media:video> tag. If omitted, uses most recent video.",
 			},
@@ -76,7 +76,7 @@ func (t *ReadVideoTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *ReadVideoTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *ReadVideoTool) Execute(ctx context.Context, args map[string]any) *Result {
 	prompt, _ := args["prompt"].(string)
 	if prompt == "" {
 		prompt = "Analyze this video and describe its contents."

@@ -104,13 +104,14 @@ func generateSignKey(typeStr string, params map[string]any) string {
 	}
 	sort.Strings(keys)
 
-	signStr := "zsecure" + typeStr
+	var signStr strings.Builder
+	signStr.WriteString("zsecure" + typeStr)
 	for _, k := range keys {
 		if v := params[k]; v != nil {
-			signStr += convertToString(v)
+			signStr.WriteString(convertToString(v))
 		}
 	}
-	hash := md5.Sum([]byte(signStr))
+	hash := md5.Sum([]byte(signStr.String()))
 	return hex.EncodeToString(hash[:])
 }
 
@@ -131,11 +132,11 @@ func getEncryptParam(sess *Session, typeStr string) (params map[string]any, enk 
 	}
 
 	params = map[string]any{
-		"zcid":     zcid,
-		"enc_ver":  DefaultEncryptVer,
-		"zcid_ext": zcidExt,
-		"params":   encKey.encData,
-		"type":     DefaultAPIType,
+		"zcid":           zcid,
+		"enc_ver":        DefaultEncryptVer,
+		"zcid_ext":       zcidExt,
+		"params":         encKey.encData,
+		"type":           DefaultAPIType,
 		"client_version": DefaultAPIVersion,
 	}
 

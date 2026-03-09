@@ -22,8 +22,8 @@ type agentEntry struct {
 // AgentActivityStatus tracks the current phase of a running agent for status queries.
 type AgentActivityStatus struct {
 	RunID     string
-	Phase     string    // "thinking", "tool_exec", "compacting"
-	Tool      string    // current tool name (when Phase == "tool_exec")
+	Phase     string // "thinking", "tool_exec", "compacting"
+	Tool      string // current tool name (when Phase == "tool_exec")
 	Iteration int
 	StartedAt time.Time
 }
@@ -34,9 +34,9 @@ type AgentActivityStatus struct {
 type Router struct {
 	agents        map[string]*agentEntry
 	mu            sync.RWMutex
-	activeRuns    sync.Map // runID → *ActiveRun
-	sessionRuns   sync.Map // sessionKey → runID (secondary index for O(1) IsSessionBusy)
-	agentActivity sync.Map // sessionKey → *AgentActivityStatus
+	activeRuns    sync.Map     // runID → *ActiveRun
+	sessionRuns   sync.Map     // sessionKey → runID (secondary index for O(1) IsSessionBusy)
+	agentActivity sync.Map     // sessionKey → *AgentActivityStatus
 	resolver      ResolverFunc // optional: lazy creation from DB
 	ttl           time.Duration
 }
@@ -262,7 +262,7 @@ func (r *Router) IsSessionBusy(sessionKey string) bool {
 // Returns the list of aborted run IDs.
 func (r *Router) AbortRunsForSession(sessionKey string) []string {
 	var aborted []string
-	r.activeRuns.Range(func(key, val interface{}) bool {
+	r.activeRuns.Range(func(key, val any) bool {
 		run := val.(*ActiveRun)
 		if run.SessionKey == sessionKey {
 			run.Cancel()

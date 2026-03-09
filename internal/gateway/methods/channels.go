@@ -28,7 +28,7 @@ func (m *ChannelsMethods) Register(router *gateway.MethodRouter) {
 func (m *ChannelsMethods) handleList(_ context.Context, client *gateway.Client, req *protocol.RequestFrame) {
 	enabled := m.manager.GetEnabledChannels()
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"channels": enabled,
 	}))
 }
@@ -36,7 +36,7 @@ func (m *ChannelsMethods) handleList(_ context.Context, client *gateway.Client, 
 func (m *ChannelsMethods) handleStatus(_ context.Context, client *gateway.Client, req *protocol.RequestFrame) {
 	status := m.manager.GetStatus()
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"channels": status,
 	}))
 }

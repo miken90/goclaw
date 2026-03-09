@@ -67,7 +67,7 @@ func cronToggleCmd() *cobra.Command {
 func cronListRPC(showDisabled, jsonOutput bool) {
 	requireGateway()
 
-	params, _ := json.Marshal(map[string]interface{}{"includeDisabled": showDisabled})
+	params, _ := json.Marshal(map[string]any{"includeDisabled": showDisabled})
 	resp, err := gatewayRPC(protocol.MethodCronList, params)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -109,7 +109,7 @@ func cronDeleteRPC(jobID string) {
 func cronToggleRPC(jobID string, enabled bool) {
 	requireGateway()
 
-	params, _ := json.Marshal(map[string]interface{}{"jobId": jobID, "enabled": enabled})
+	params, _ := json.Marshal(map[string]any{"jobId": jobID, "enabled": enabled})
 	resp, err := gatewayRPC(protocol.MethodCronToggle, params)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

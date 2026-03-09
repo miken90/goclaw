@@ -100,12 +100,12 @@ func parseMessageContent(rawContent, messageType string) string {
 }
 
 func parsePostContent(rawContent string) string {
-	var post map[string]interface{}
+	var post map[string]any
 	if err := json.Unmarshal([]byte(rawContent), &post); err != nil {
 		return rawContent
 	}
 
-	var langContent interface{}
+	var langContent any
 	for _, lang := range []string{"zh_cn", "en_us"} {
 		if lc, ok := post[lang]; ok {
 			langContent = lc
@@ -122,25 +122,25 @@ func parsePostContent(rawContent string) string {
 		return rawContent
 	}
 
-	langMap, ok := langContent.(map[string]interface{})
+	langMap, ok := langContent.(map[string]any)
 	if !ok {
 		return rawContent
 	}
 
-	contentArr, ok := langMap["content"].([]interface{})
+	contentArr, ok := langMap["content"].([]any)
 	if !ok {
 		return rawContent
 	}
 
 	var textParts []string
 	for _, para := range contentArr {
-		paraArr, ok := para.([]interface{})
+		paraArr, ok := para.([]any)
 		if !ok {
 			continue
 		}
 		var lineParts []string
 		for _, elem := range paraArr {
-			elemMap, ok := elem.(map[string]interface{})
+			elemMap, ok := elem.(map[string]any)
 			if !ok {
 				continue
 			}

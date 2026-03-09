@@ -96,7 +96,7 @@ func (t *ReadAudioTool) callProvider(ctx context.Context, cp credentialProvider,
 			},
 		},
 		Model: model,
-		Options: map[string]interface{}{
+		Options: map[string]any{
 			"max_tokens":  16384,
 			"temperature": 0.2,
 		},
@@ -120,12 +120,12 @@ func openaiAudioCall(ctx context.Context, apiKey, baseURL, model, prompt string,
 
 	b64 := base64.StdEncoding.EncodeToString(data)
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"model": model,
-		"messages": []map[string]interface{}{
+		"messages": []map[string]any{
 			{
 				"role": "user",
-				"content": []map[string]interface{}{
+				"content": []map[string]any{
 					{"type": "text", "text": prompt},
 					{"type": "input_audio", "input_audio": map[string]string{
 						"data":   b64,

@@ -21,31 +21,31 @@ type MessageTool struct {
 func NewMessageTool() *MessageTool { return &MessageTool{} }
 
 func (t *MessageTool) SetChannelSender(s ChannelSender) { t.sender = s }
-func (t *MessageTool) SetMessageBus(b *bus.MessageBus)   { t.msgBus = b }
+func (t *MessageTool) SetMessageBus(b *bus.MessageBus)  { t.msgBus = b }
 
 func (t *MessageTool) Name() string { return "message" }
 func (t *MessageTool) Description() string {
 	return "Send a message to a channel (Telegram, Discord, Slack, Zalo, Feishu/Lark, WhatsApp, etc.) or the current chat. Channel and target are auto-filled from context."
 }
 
-func (t *MessageTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *MessageTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"action": map[string]interface{}{
+		"properties": map[string]any{
+			"action": map[string]any{
 				"type":        "string",
 				"description": "Action to perform: 'send'",
 				"enum":        []string{"send"},
 			},
-			"channel": map[string]interface{}{
+			"channel": map[string]any{
 				"type":        "string",
 				"description": "Channel name (default: current channel from context)",
 			},
-			"target": map[string]interface{}{
+			"target": map[string]any{
 				"type":        "string",
 				"description": "Chat ID to send to (default: current chat from context)",
 			},
-			"message": map[string]interface{}{
+			"message": map[string]any{
 				"type":        "string",
 				"description": "Message content to send",
 			},
@@ -54,7 +54,7 @@ func (t *MessageTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *MessageTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *Result {
 	action, _ := args["action"].(string)
 	if action != "send" {
 		return ErrorResult(fmt.Sprintf("unsupported action: %s (only 'send' is supported)", action))

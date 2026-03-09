@@ -112,7 +112,7 @@ func (c *LarkClient) CreateCard(ctx context.Context, cardType, data string) (str
 
 func (c *LarkClient) UpdateCardSettings(ctx context.Context, cardID, settings string, seq int, uuid string) error {
 	path := "/open-apis/cardkit/v1/cards/" + cardID
-	resp, err := c.doJSON(ctx, "PATCH", path, map[string]interface{}{
+	resp, err := c.doJSON(ctx, "PATCH", path, map[string]any{
 		"settings": settings,
 		"sequence": seq,
 		"uuid":     uuid,
@@ -128,7 +128,7 @@ func (c *LarkClient) UpdateCardSettings(ctx context.Context, cardID, settings st
 
 func (c *LarkClient) UpdateCardElement(ctx context.Context, cardID, elementID, content string, seq int, uuid string) error {
 	path := fmt.Sprintf("/open-apis/cardkit/v1/cards/%s/elements/%s", cardID, elementID)
-	resp, err := c.doJSON(ctx, "PATCH", path, map[string]interface{}{
+	resp, err := c.doJSON(ctx, "PATCH", path, map[string]any{
 		"content":  content,
 		"sequence": seq,
 		"uuid":     uuid,
@@ -150,7 +150,7 @@ func (c *LarkClient) UpdateCardElement(ctx context.Context, cardID, elementID, c
 // Lark API: POST /open-apis/im/v1/messages/{message_id}/reactions
 func (c *LarkClient) AddMessageReaction(ctx context.Context, messageID, emojiType string) (string, error) {
 	path := fmt.Sprintf("/open-apis/im/v1/messages/%s/reactions", messageID)
-	body := map[string]interface{}{
+	body := map[string]any{
 		"reaction_type": map[string]string{
 			"emoji_type": emojiType,
 		},

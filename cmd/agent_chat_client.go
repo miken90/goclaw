@@ -115,7 +115,7 @@ func wsConnect(conn *websocket.Conn, token string) error {
 // displaying events (tool calls, chunks) in real-time.
 func wsChatSend(conn *websocket.Conn, agentID, sessionKey, message string) (string, error) {
 	reqID := uuid.NewString()[:8]
-	params, _ := json.Marshal(map[string]interface{}{
+	params, _ := json.Marshal(map[string]any{
 		"message":    message,
 		"agentId":    agentID,
 		"sessionKey": sessionKey,
@@ -159,7 +159,7 @@ func wsChatSend(conn *websocket.Conn, agentID, sessionKey, message string) (stri
 				return "", fmt.Errorf("agent error (unknown)")
 			}
 			// Extract content from payload
-			if payload, ok := resp.Payload.(map[string]interface{}); ok {
+			if payload, ok := resp.Payload.(map[string]any); ok {
 				if content, ok := payload["content"].(string); ok && content != "" {
 					finalContent = content
 				}
@@ -178,7 +178,7 @@ func wsChatSend(conn *websocket.Conn, agentID, sessionKey, message string) (stri
 
 // handleCLIEvent displays agent events in the terminal.
 func handleCLIEvent(evt protocol.EventFrame) {
-	payload, ok := evt.Payload.(map[string]interface{})
+	payload, ok := evt.Payload.(map[string]any)
 	if !ok {
 		return
 	}
@@ -189,7 +189,7 @@ func handleCLIEvent(evt protocol.EventFrame) {
 	case protocol.EventAgent:
 		switch evtType {
 		case protocol.AgentEventToolCall:
-			if p, ok := payload["payload"].(map[string]interface{}); ok {
+			if p, ok := payload["payload"].(map[string]any); ok {
 				name, _ := p["toolName"].(string)
 				if name == "" {
 					name, _ = p["name"].(string)
@@ -197,7 +197,7 @@ func handleCLIEvent(evt protocol.EventFrame) {
 				fmt.Fprintf(os.Stderr, "  [tool] %s\n", name)
 			}
 		case protocol.AgentEventToolResult:
-			if p, ok := payload["payload"].(map[string]interface{}); ok {
+			if p, ok := payload["payload"].(map[string]any); ok {
 				isErr, _ := p["is_error"].(bool)
 				name, _ := p["toolName"].(string)
 				if name == "" {

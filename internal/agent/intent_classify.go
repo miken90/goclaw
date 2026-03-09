@@ -81,7 +81,7 @@ func ClassifyIntent(ctx context.Context, provider providers.Provider, model, use
 			{Role: "user", Content: userMessage},
 		},
 		Model: model,
-		Options: map[string]interface{}{
+		Options: map[string]any{
 			providers.OptMaxTokens:   20,
 			providers.OptTemperature: 0.0,
 		},

@@ -35,14 +35,14 @@ const (
 // Channel connects to the Zalo OA Bot API.
 type Channel struct {
 	*channels.BaseChannel
-	token          string
-	dmPolicy       string
-	mediaMaxMB     int
-	blockReply     *bool
-	pairingService store.PairingStore
+	token           string
+	dmPolicy        string
+	mediaMaxMB      int
+	blockReply      *bool
+	pairingService  store.PairingStore
 	pairingDebounce sync.Map // senderID → time.Time
-	stopCh         chan struct{}
-	client         *http.Client
+	stopCh          chan struct{}
+	client          *http.Client
 }
 
 // New creates a new Zalo channel.
@@ -379,7 +379,7 @@ type zaloUpdate struct {
 	Message   *zaloMessage `json:"message,omitempty"`
 }
 
-func (c *Channel) callAPI(method string, body interface{}) (json.RawMessage, error) {
+func (c *Channel) callAPI(method string, body any) (json.RawMessage, error) {
 	url := fmt.Sprintf("%s/bot%s/%s", apiBase, c.token, method)
 
 	var reqBody io.Reader
@@ -436,7 +436,7 @@ func (c *Channel) getMe() (*zaloBotInfo, error) {
 }
 
 func (c *Channel) getUpdates(timeout int) ([]zaloUpdate, error) {
-	params := map[string]interface{}{
+	params := map[string]any{
 		"timeout": timeout,
 	}
 
@@ -453,7 +453,7 @@ func (c *Channel) getUpdates(timeout int) ([]zaloUpdate, error) {
 }
 
 func (c *Channel) sendMessage(chatID, text string) error {
-	params := map[string]interface{}{
+	params := map[string]any{
 		"chat_id": chatID,
 		"text":    text,
 	}
@@ -463,7 +463,7 @@ func (c *Channel) sendMessage(chatID, text string) error {
 }
 
 func (c *Channel) sendPhoto(chatID, photoURL, caption string) error {
-	params := map[string]interface{}{
+	params := map[string]any{
 		"chat_id": chatID,
 		"photo":   photoURL,
 	}

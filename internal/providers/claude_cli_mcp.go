@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,9 +34,9 @@ type MCPServerLookup func(ctx context.Context, agentID string) []MCPServerEntry
 // MCPConfigData holds the base MCP server entries built at startup.
 // Per-session configs are written via WriteMCPConfig with agent context injected.
 type MCPConfigData struct {
-	Servers      map[string]interface{} // external MCP server entries (stdio/sse/http)
-	GatewayAddr  string
-	GatewayToken string
+	Servers        map[string]any // external MCP server entries (stdio/sse/http)
+	GatewayAddr    string
+	GatewayToken   string
 	AgentMCPLookup MCPServerLookup // optional: resolves per-agent MCP servers from DB
 }
 
@@ -43,7 +44,7 @@ type MCPConfigData struct {
 // Does NOT include the goclaw-bridge entry — that's added per-session
 // with agent context headers in WriteMCPConfig.
 func BuildCLIMCPConfigData(servers map[string]*config.MCPServerConfig, gatewayAddr string, gatewayToken ...string) *MCPConfigData {
-	mcpServers := make(map[string]interface{}, len(servers))
+	mcpServers := make(map[string]any, len(servers))
 
 	for name, srv := range servers {
 		if !srv.IsEnabled() {
@@ -109,10 +110,8 @@ func (d *MCPConfigData) writeMCPConfigInternal(ctx context.Context, sessionKey, 
 
 	// Shallow-copy the outer map so we can add the bridge entry without mutating the shared base.
 	// Inner server entries are not modified, so shallow copy is sufficient.
-	servers := make(map[string]interface{}, len(d.Servers)+1)
-	for k, v := range d.Servers {
-		servers[k] = v
-	}
+	servers := make(map[string]any, len(d.Servers)+1)
+	maps.Copy(servers, d.Servers)
 
 	// Inject per-agent MCP servers from DB (if lookup is configured and agentID is set)
 	if d.AgentMCPLookup != nil && agentID != "" {
@@ -153,7 +152,7 @@ func (d *MCPConfigData) writeMCPConfigInternal(ctx context.Context, sessionKey, 
 			headers["X-Bridge-Sig"] = SignBridgeContext(d.GatewayToken, agentID, userID, channel, chatID, peerKind)
 		}
 
-		bridgeEntry := map[string]interface{}{
+		bridgeEntry := map[string]any{
 			"url":  fmt.Sprintf("http://%s/mcp/bridge", d.GatewayAddr),
 			"type": "http",
 		}
@@ -167,7 +166,7 @@ func (d *MCPConfigData) writeMCPConfigInternal(ctx context.Context, sessionKey, 
 		return ""
 	}
 
-	data, err := json.MarshalIndent(map[string]interface{}{"mcpServers": servers}, "", "  ")
+	data, err := json.MarshalIndent(map[string]any{"mcpServers": servers}, "", "  ")
 	if err != nil {
 		slog.Warn("claude-cli: failed to marshal mcp config", "error", err)
 		return ""
@@ -202,10 +201,9 @@ func (d *MCPConfigData) writeMCPConfigInternal(ctx context.Context, sessionKey, 
 	return path
 }
 
-
 // mcpServerEntryToConfig converts an MCPServerEntry to the CLI MCP config format.
-func mcpServerEntryToConfig(srv MCPServerEntry) map[string]interface{} {
-	entry := make(map[string]interface{})
+func mcpServerEntryToConfig(srv MCPServerEntry) map[string]any {
+	entry := make(map[string]any)
 	switch srv.Transport {
 	case "stdio":
 		if srv.Command != "" {

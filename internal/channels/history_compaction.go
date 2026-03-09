@@ -103,7 +103,7 @@ func (ph *PendingHistory) runCompaction(historyKey string, cfg *CompactionConfig
 			Content: "Summarize these group chat messages concisely, preserving key topics, decisions, names, and important context:\n\n" + sb.String(),
 		}},
 		Model:   cfg.Model,
-		Options: map[string]interface{}{"max_tokens": 512, "temperature": 0.3},
+		Options: map[string]any{"max_tokens": 512, "temperature": 0.3},
 	})
 	if err != nil {
 		slog.Warn("compaction.llm_failed", "channel", ph.channelName, "key", historyKey, "error", err)

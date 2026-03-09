@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"maps"
 	"testing"
 
 	"github.com/google/uuid"
@@ -253,9 +254,7 @@ func TestSeedUserFiles_IdempotentOnSecondCall(t *testing.T) {
 	SeedUserFiles(context.Background(), as, agentID, "user-frank", store.AgentTypePredefined)
 
 	// Simulate what the first call wrote (move seededUserFiles → userFiles)
-	for k, v := range as.seededUserFiles {
-		as.userFiles[k] = v
-	}
+	maps.Copy(as.userFiles, as.seededUserFiles)
 	as.seededUserFiles = make(map[string]string)
 
 	// Second call — must seed nothing (all files already exist)

@@ -81,7 +81,7 @@ func (m *TeamsMethods) handleAddMember(ctx context.Context, client *gateway.Clie
 	// Invalidate caches for all team members
 	m.invalidateTeamCaches(ctx, teamID)
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{"ok": true}))
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{"ok": true}))
 
 	// Emit team.member.added event
 	if m.msgBus != nil {
@@ -170,7 +170,7 @@ func (m *TeamsMethods) handleRemoveMember(ctx context.Context, client *gateway.C
 		}
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{"ok": true}))
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{"ok": true}))
 
 	// Emit team.member.removed event
 	if m.msgBus != nil && removedAgent != nil {

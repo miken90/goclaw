@@ -50,77 +50,77 @@ Act kinds: click, type, press, hover, wait, evaluate
 Workflow: start → open URL → snapshot (get refs) → act (use refs) → snapshot again`
 }
 
-func (t *BrowserTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *BrowserTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"action": map[string]interface{}{
+		"properties": map[string]any{
+			"action": map[string]any{
 				"type":        "string",
 				"enum":        []string{"status", "start", "stop", "tabs", "open", "close", "snapshot", "screenshot", "navigate", "console", "act"},
 				"description": "The browser action to perform",
 			},
-			"targetUrl": map[string]interface{}{
+			"targetUrl": map[string]any{
 				"type":        "string",
 				"description": "URL for open/navigate actions",
 			},
-			"targetId": map[string]interface{}{
+			"targetId": map[string]any{
 				"type":        "string",
 				"description": "Tab target ID (omit for current tab)",
 			},
-			"maxChars": map[string]interface{}{
+			"maxChars": map[string]any{
 				"type":        "number",
 				"description": "Max characters for snapshot (default 8000)",
 			},
-			"interactive": map[string]interface{}{
+			"interactive": map[string]any{
 				"type":        "boolean",
 				"description": "Only show interactive elements in snapshot",
 			},
-			"compact": map[string]interface{}{
+			"compact": map[string]any{
 				"type":        "boolean",
 				"description": "Remove empty structural elements from snapshot",
 			},
-			"depth": map[string]interface{}{
+			"depth": map[string]any{
 				"type":        "number",
 				"description": "Max depth for snapshot tree",
 			},
-			"fullPage": map[string]interface{}{
+			"fullPage": map[string]any{
 				"type":        "boolean",
 				"description": "Capture full page screenshot",
 			},
-			"timeoutMs": map[string]interface{}{
+			"timeoutMs": map[string]any{
 				"type":        "number",
 				"description": "Timeout in milliseconds for actions",
 			},
-			"request": map[string]interface{}{
+			"request": map[string]any{
 				"type":        "object",
 				"description": "Action request for 'act' command",
-				"properties": map[string]interface{}{
-					"kind": map[string]interface{}{
+				"properties": map[string]any{
+					"kind": map[string]any{
 						"type":        "string",
 						"enum":        []string{"click", "type", "press", "hover", "wait", "evaluate"},
 						"description": "The interaction kind",
 					},
-					"ref": map[string]interface{}{
+					"ref": map[string]any{
 						"type":        "string",
 						"description": "Element ref from snapshot (e.g. e1, e2)",
 					},
-					"text": map[string]interface{}{
+					"text": map[string]any{
 						"type":        "string",
 						"description": "Text to type",
 					},
-					"key": map[string]interface{}{
+					"key": map[string]any{
 						"type":        "string",
 						"description": "Key to press (e.g. Enter, Tab, Escape)",
 					},
-					"submit": map[string]interface{}{
+					"submit": map[string]any{
 						"type":        "boolean",
 						"description": "Press Enter after typing",
 					},
-					"fn": map[string]interface{}{
+					"fn": map[string]any{
 						"type":        "string",
 						"description": "JavaScript to evaluate",
 					},
-					"timeMs": map[string]interface{}{
+					"timeMs": map[string]any{
 						"type":        "number",
 						"description": "Wait time in milliseconds",
 					},
@@ -131,7 +131,7 @@ func (t *BrowserTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *BrowserTool) Execute(ctx context.Context, args map[string]interface{}) *tools.Result {
+func (t *BrowserTool) Execute(ctx context.Context, args map[string]any) *tools.Result {
 	action, _ := args["action"].(string)
 	if action == "" {
 		return tools.ErrorResult("action is required")
@@ -200,7 +200,7 @@ func (t *BrowserTool) handleTabs(ctx context.Context) *tools.Result {
 	return jsonResult(tabs)
 }
 
-func (t *BrowserTool) handleOpen(ctx context.Context, args map[string]interface{}) *tools.Result {
+func (t *BrowserTool) handleOpen(ctx context.Context, args map[string]any) *tools.Result {
 	url, _ := args["targetUrl"].(string)
 	if url == "" {
 		return tools.ErrorResult("targetUrl is required for open action")
@@ -212,7 +212,7 @@ func (t *BrowserTool) handleOpen(ctx context.Context, args map[string]interface{
 	return jsonResult(tab)
 }
 
-func (t *BrowserTool) handleClose(ctx context.Context, args map[string]interface{}) *tools.Result {
+func (t *BrowserTool) handleClose(ctx context.Context, args map[string]any) *tools.Result {
 	targetID, _ := args["targetId"].(string)
 	if err := t.manager.CloseTab(ctx, targetID); err != nil {
 		return tools.ErrorResult(err.Error())
@@ -220,7 +220,7 @@ func (t *BrowserTool) handleClose(ctx context.Context, args map[string]interface
 	return tools.NewResult("Tab closed.")
 }
 
-func (t *BrowserTool) handleSnapshot(ctx context.Context, args map[string]interface{}) *tools.Result {
+func (t *BrowserTool) handleSnapshot(ctx context.Context, args map[string]any) *tools.Result {
 	targetID, _ := args["targetId"].(string)
 	opts := DefaultSnapshotOptions()
 
@@ -248,7 +248,7 @@ func (t *BrowserTool) handleSnapshot(ctx context.Context, args map[string]interf
 	return tools.NewResult(header + snap.Snapshot)
 }
 
-func (t *BrowserTool) handleScreenshot(ctx context.Context, args map[string]interface{}) *tools.Result {
+func (t *BrowserTool) handleScreenshot(ctx context.Context, args map[string]any) *tools.Result {
 	targetID, _ := args["targetId"].(string)
 	fullPage, _ := args["fullPage"].(bool)
 
@@ -266,7 +266,7 @@ func (t *BrowserTool) handleScreenshot(ctx context.Context, args map[string]inte
 	return &tools.Result{ForLLM: fmt.Sprintf("MEDIA:%s", imagePath)}
 }
 
-func (t *BrowserTool) handleNavigate(ctx context.Context, args map[string]interface{}) *tools.Result {
+func (t *BrowserTool) handleNavigate(ctx context.Context, args map[string]any) *tools.Result {
 	targetID, _ := args["targetId"].(string)
 	url, _ := args["targetUrl"].(string)
 	if url == "" {
@@ -279,14 +279,14 @@ func (t *BrowserTool) handleNavigate(ctx context.Context, args map[string]interf
 	return tools.NewResult(fmt.Sprintf("Navigated to %s", url))
 }
 
-func (t *BrowserTool) handleConsole(args map[string]interface{}) *tools.Result {
+func (t *BrowserTool) handleConsole(args map[string]any) *tools.Result {
 	targetID, _ := args["targetId"].(string)
 	msgs := t.manager.ConsoleMessages(targetID)
 	return jsonResult(msgs)
 }
 
-func (t *BrowserTool) handleAct(ctx context.Context, args map[string]interface{}) *tools.Result {
-	req, ok := args["request"].(map[string]interface{})
+func (t *BrowserTool) handleAct(ctx context.Context, args map[string]any) *tools.Result {
+	req, ok := args["request"].(map[string]any)
 	if !ok {
 		return tools.ErrorResult("request object is required for act action")
 	}
@@ -392,7 +392,7 @@ func (t *BrowserTool) handleAct(ctx context.Context, args map[string]interface{}
 	}
 }
 
-func jsonResult(v interface{}) *tools.Result {
+func jsonResult(v any) *tools.Result {
 	data, _ := json.MarshalIndent(v, "", "  ")
 	return tools.NewResult(string(data))
 }

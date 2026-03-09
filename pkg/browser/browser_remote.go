@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/go-rod/rod"
@@ -89,11 +90,11 @@ func (m *Manager) getPage(targetID string) (*rod.Page, error) {
 // setupConsoleListener attaches a console message listener to a page via Rod's EachEvent.
 func (m *Manager) setupConsoleListener(page *rod.Page, targetID string) {
 	go page.EachEvent(func(e *proto.RuntimeConsoleAPICalled) {
-		var text string
+		var text strings.Builder
 		for _, arg := range e.Args {
 			s := arg.Value.String()
 			if s != "" && s != "null" {
-				text += s + " "
+				text.WriteString(s + " ")
 			}
 		}
 
@@ -114,7 +115,7 @@ func (m *Manager) setupConsoleListener(page *rod.Page, targetID string) {
 		}
 		m.console[targetID] = append(msgs, ConsoleMessage{
 			Level: level,
-			Text:  text,
+			Text:  text.String(),
 		})
 		m.mu.Unlock()
 	})()

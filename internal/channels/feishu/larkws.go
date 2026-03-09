@@ -16,12 +16,12 @@ import (
 )
 
 const (
-	defaultPingInterval     = 120 * time.Second
-	defaultReconnectNonce   = 30 // seconds max jitter
-	defaultReconnectWait    = 120 * time.Second
-	frameTypeControl        = 0
-	frameTypeData           = 1
-	fragmentBufferTTL       = 5 * time.Second
+	defaultPingInterval   = 120 * time.Second
+	defaultReconnectNonce = 30 // seconds max jitter
+	defaultReconnectWait  = 120 * time.Second
+	frameTypeControl      = 0
+	frameTypeData         = 1
+	fragmentBufferTTL     = 5 * time.Second
 )
 
 // WSEventHandler processes incoming WebSocket events.
@@ -315,7 +315,7 @@ func (c *WSClient) sendResponse(original *wsFrame, headers map[string]string) {
 	}
 	respHeaders = append(respHeaders, wsHeader{Key: "biz_rt", Value: "0"})
 
-	respPayload, _ := json.Marshal(map[string]interface{}{
+	respPayload, _ := json.Marshal(map[string]any{
 		"code": 0,
 		"msg":  "success",
 	})
@@ -415,4 +415,3 @@ func (c *WSClient) reassemble(msgID string, total, seq int, data []byte) []byte 
 	delete(c.fragments, msgID)
 	return result
 }
-

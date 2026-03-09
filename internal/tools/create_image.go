@@ -51,15 +51,15 @@ func (t *CreateImageTool) Description() string {
 	return "Generate an image from a text description using an image generation model. Returns a MEDIA: path to the generated image file."
 }
 
-func (t *CreateImageTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *CreateImageTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"prompt": map[string]interface{}{
+		"properties": map[string]any{
+			"prompt": map[string]any{
 				"type":        "string",
 				"description": "Text description of the image to generate.",
 			},
-			"aspect_ratio": map[string]interface{}{
+			"aspect_ratio": map[string]any{
 				"type":        "string",
 				"description": "Aspect ratio: '1:1' (default), '3:4', '4:3', '9:16', '16:9'.",
 			},
@@ -68,7 +68,7 @@ func (t *CreateImageTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *CreateImageTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *CreateImageTool) Execute(ctx context.Context, args map[string]any) *Result {
 	prompt, _ := args["prompt"].(string)
 	if prompt == "" {
 		return ErrorResult("prompt is required")
@@ -152,15 +152,15 @@ func (t *CreateImageTool) callProvider(ctx context.Context, cp credentialProvide
 // callImageGenAPI calls the OpenAI-compatible chat completions endpoint with image modalities.
 // Works with OpenRouter (modalities: ["image","text"]).
 func (t *CreateImageTool) callImageGenAPI(ctx context.Context, apiKey, apiBase, model, prompt, aspectRatio string, params map[string]any) ([]byte, *providers.Usage, error) {
-	body := map[string]interface{}{
+	body := map[string]any{
 		"model": model,
-		"messages": []map[string]interface{}{
+		"messages": []map[string]any{
 			{"role": "user", "content": prompt},
 		},
 		"modalities": []string{"image", "text"},
 	}
 	if aspectRatio != "" && aspectRatio != "1:1" {
-		body["image_config"] = map[string]interface{}{
+		body["image_config"] = map[string]any{
 			"aspect_ratio": aspectRatio,
 		}
 	}
@@ -198,7 +198,7 @@ func (t *CreateImageTool) callImageGenAPI(ctx context.Context, apiKey, apiBase, 
 
 // callStandardImageGenAPI uses the /images/generations endpoint (OpenAI and compatible providers).
 func (t *CreateImageTool) callStandardImageGenAPI(ctx context.Context, apiKey, apiBase, model, prompt string, params map[string]any) ([]byte, *providers.Usage, error) {
-	body := map[string]interface{}{
+	body := map[string]any{
 		"model":           model,
 		"prompt":          prompt,
 		"n":               1,
@@ -262,11 +262,11 @@ func (t *CreateImageTool) callGeminiNativeImageGen(ctx context.Context, apiKey, 
 
 	url := fmt.Sprintf("%s/models/%s:generateContent?key=%s", nativeBase, model, apiKey)
 
-	body := map[string]interface{}{
-		"contents": []map[string]interface{}{
-			{"parts": []map[string]interface{}{{"text": prompt}}},
+	body := map[string]any{
+		"contents": []map[string]any{
+			{"parts": []map[string]any{{"text": prompt}}},
 		},
-		"generationConfig": map[string]interface{}{
+		"generationConfig": map[string]any{
 			"responseModalities": []string{"TEXT", "IMAGE"},
 		},
 	}
@@ -350,7 +350,7 @@ func (t *CreateImageTool) parseImageResponse(respBody []byte) ([]byte, *provider
 	var resp struct {
 		Choices []struct {
 			Message struct {
-				Content interface{} `json:"content"`
+				Content any `json:"content"`
 				Images  []struct {
 					ImageURL struct {
 						URL string `json:"url"`
@@ -382,11 +382,11 @@ func (t *CreateImageTool) parseImageResponse(respBody []byte) ([]byte, *provider
 	}
 
 	// Try multipart content array (some providers return content as array of parts)
-	if parts, ok := msg.Content.([]interface{}); ok {
+	if parts, ok := msg.Content.([]any); ok {
 		for _, part := range parts {
-			if m, ok := part.(map[string]interface{}); ok {
+			if m, ok := part.(map[string]any); ok {
 				if m["type"] == "image_url" {
-					if imgURL, ok := m["image_url"].(map[string]interface{}); ok {
+					if imgURL, ok := m["image_url"].(map[string]any); ok {
 						if url, ok := imgURL["url"].(string); ok {
 							if imageBytes, err := decodeDataURL(url); err == nil {
 								return imageBytes, convertUsage(resp.Usage), nil
@@ -403,11 +403,11 @@ func (t *CreateImageTool) parseImageResponse(respBody []byte) ([]byte, *provider
 
 // decodeDataURL decodes a data:image/...;base64,... URL into raw bytes.
 func decodeDataURL(dataURL string) ([]byte, error) {
-	idx := strings.Index(dataURL, ";base64,")
-	if idx < 0 {
+	_, after, ok := strings.Cut(dataURL, ";base64,")
+	if !ok {
 		return nil, fmt.Errorf("not a base64 data URL")
 	}
-	b64 := dataURL[idx+8:]
+	b64 := after
 	return base64.StdEncoding.DecodeString(b64)
 }
 

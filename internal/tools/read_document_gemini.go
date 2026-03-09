@@ -20,14 +20,14 @@ func geminiNativeDocumentCall(ctx context.Context, apiKey, model, prompt string,
 	b64 := base64.StdEncoding.EncodeToString(docData)
 
 	// Gemini generateContent request body.
-	body := map[string]interface{}{
-		"contents": []map[string]interface{}{
+	body := map[string]any{
+		"contents": []map[string]any{
 			{
-				"parts": []map[string]interface{}{
+				"parts": []map[string]any{
 					{
-						"inline_data": map[string]interface{}{
+						"inline_data": map[string]any{
 							"mime_type": docMime,
-							"data":     b64,
+							"data":      b64,
 						},
 					},
 					{
@@ -36,7 +36,7 @@ func geminiNativeDocumentCall(ctx context.Context, apiKey, model, prompt string,
 				},
 			},
 		},
-		"generationConfig": map[string]interface{}{
+		"generationConfig": map[string]any{
 			"maxOutputTokens": 16384,
 			"temperature":     0.2,
 		},
@@ -117,4 +117,3 @@ func geminiNativeDocumentCall(ctx context.Context, apiKey, model, prompt string,
 		},
 	}, nil
 }
-

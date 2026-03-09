@@ -28,7 +28,7 @@ func (m *ExecApprovalMethods) Register(router *gateway.MethodRouter) {
 
 func (m *ExecApprovalMethods) handleList(_ context.Context, client *gateway.Client, req *protocol.RequestFrame) {
 	if m.manager == nil {
-		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 			"pending": []any{},
 		}))
 		return
@@ -52,7 +52,7 @@ func (m *ExecApprovalMethods) handleList(_ context.Context, client *gateway.Clie
 		})
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"pending": items,
 	}))
 }
@@ -87,7 +87,7 @@ func (m *ExecApprovalMethods) handleApprove(ctx context.Context, client *gateway
 		return
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"resolved": true,
 		"decision": string(decision),
 	}))
@@ -117,7 +117,7 @@ func (m *ExecApprovalMethods) handleDeny(ctx context.Context, client *gateway.Cl
 		return
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"resolved": true,
 		"decision": "deny",
 	}))

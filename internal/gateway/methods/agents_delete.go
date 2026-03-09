@@ -92,7 +92,7 @@ func (m *AgentsMethods) handleDelete(ctx context.Context, client *gateway.Client
 		}
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"ok":              true,
 		"agentId":         params.AgentID,
 		"removedBindings": removedBindings,

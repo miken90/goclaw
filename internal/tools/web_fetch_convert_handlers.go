@@ -29,7 +29,7 @@ func (c *converter) handleHeading(n *html.Node) {
 	c.ensureDoubleNewline()
 	if c.mode == modeMarkdown && len(n.Data) == 2 && n.Data[0] == 'h' {
 		level := int(n.Data[1] - '0')
-		for i := 0; i < level; i++ {
+		for range level {
 			c.buf.WriteByte('#')
 		}
 		c.buf.WriteByte(' ')
@@ -82,7 +82,7 @@ func (c *converter) handlePre(n *html.Node) {
 		lang := ""
 		if code := findChild(n, atom.Code); code != nil {
 			cls := getAttr(code, "class")
-			for _, part := range strings.Fields(cls) {
+			for part := range strings.FieldsSeq(cls) {
 				if rest, ok := strings.CutPrefix(part, "language-"); ok {
 					lang = rest
 					break

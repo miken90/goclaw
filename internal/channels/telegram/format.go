@@ -298,12 +298,12 @@ func parseTableRow(line string) []string {
 // stripInlineMarkdown removes common inline markdown markers from text.
 // Used for table cells that render inside code blocks where formatting has no effect.
 var (
-	reStripBoldAsterisks   = regexp.MustCompile(`\*\*(.+?)\*\*`)
-	reStripBoldUnderscores = regexp.MustCompile(`__(.+?)__`)
-	reStripItalicAsterisk  = regexp.MustCompile(`\*([^*]+)\*`)
+	reStripBoldAsterisks    = regexp.MustCompile(`\*\*(.+?)\*\*`)
+	reStripBoldUnderscores  = regexp.MustCompile(`__(.+?)__`)
+	reStripItalicAsterisk   = regexp.MustCompile(`\*([^*]+)\*`)
 	reStripItalicUnderscore = regexp.MustCompile(`_([^_]+)_`)
-	reStripStrikethrough   = regexp.MustCompile(`~~(.+?)~~`)
-	reStripInlineCode      = regexp.MustCompile("`([^`]+)`")
+	reStripStrikethrough    = regexp.MustCompile(`~~(.+?)~~`)
+	reStripInlineCode       = regexp.MustCompile("`([^`]+)`")
 )
 
 func stripInlineMarkdown(s string) string {
@@ -325,10 +325,7 @@ func renderRow(cells []string, colWidths []int) string {
 			cell = cells[j]
 		}
 		// Pad with spaces to align columns
-		padding := w - displayWidth(cell)
-		if padding < 0 {
-			padding = 0
-		}
+		padding := max(w-displayWidth(cell), 0)
 		parts = append(parts, " "+cell+strings.Repeat(" ", padding)+" ")
 	}
 	return "|" + strings.Join(parts, "|") + "|"

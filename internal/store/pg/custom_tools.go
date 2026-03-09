@@ -193,9 +193,9 @@ func (s *PGCustomToolStore) ListAll(ctx context.Context) ([]store.CustomToolDef,
 	return s.scanTools(rows)
 }
 
-func buildCustomToolWhere(opts store.CustomToolListOpts) (string, []interface{}) {
+func buildCustomToolWhere(opts store.CustomToolListOpts) (string, []any) {
 	conditions := []string{"enabled = true"}
-	var args []interface{}
+	var args []any
 	argIdx := 1
 
 	if opts.AgentID != nil {

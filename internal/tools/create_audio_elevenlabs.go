@@ -26,7 +26,7 @@ func (t *CreateAudioTool) callElevenLabsSoundEffect(ctx context.Context, prompt 
 		durationSeconds = 30
 	}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"text":             prompt,
 		"output_format":    "mp3_44100_128",
 		"prompt_influence": 0.3,

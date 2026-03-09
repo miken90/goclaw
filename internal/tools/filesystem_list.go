@@ -46,11 +46,11 @@ func (t *ListFilesTool) SetSandboxKey(key string) {}
 
 func (t *ListFilesTool) Name() string        { return "list_files" }
 func (t *ListFilesTool) Description() string { return "List files and directories in a path" }
-func (t *ListFilesTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *ListFilesTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"path": map[string]interface{}{
+		"properties": map[string]any{
+			"path": map[string]any{
 				"type":        "string",
 				"description": "Directory path to list (default: workspace root)",
 			},
@@ -58,7 +58,7 @@ func (t *ListFilesTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *ListFilesTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *ListFilesTool) Execute(ctx context.Context, args map[string]any) *Result {
 	path, _ := args["path"].(string)
 	if path == "" {
 		path = "."

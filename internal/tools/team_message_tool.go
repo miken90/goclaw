@@ -26,19 +26,19 @@ func (t *TeamMessageTool) Description() string {
 	return "Send and receive messages within your team. Actions: send (direct message to a teammate), broadcast (message all teammates), read (check unread messages). See TEAM.md for your teammates."
 }
 
-func (t *TeamMessageTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *TeamMessageTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"action": map[string]interface{}{
+		"properties": map[string]any{
+			"action": map[string]any{
 				"type":        "string",
 				"description": "'send', 'broadcast', or 'read'",
 			},
-			"to": map[string]interface{}{
+			"to": map[string]any{
 				"type":        "string",
 				"description": "Target agent key (required for action=send)",
 			},
-			"text": map[string]interface{}{
+			"text": map[string]any{
 				"type":        "string",
 				"description": "Message content (required for action=send and action=broadcast)",
 			},
@@ -47,7 +47,7 @@ func (t *TeamMessageTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *TeamMessageTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *TeamMessageTool) Execute(ctx context.Context, args map[string]any) *Result {
 	action, _ := args["action"].(string)
 
 	switch action {
@@ -62,7 +62,7 @@ func (t *TeamMessageTool) Execute(ctx context.Context, args map[string]interface
 	}
 }
 
-func (t *TeamMessageTool) executeSend(ctx context.Context, args map[string]interface{}) *Result {
+func (t *TeamMessageTool) executeSend(ctx context.Context, args map[string]any) *Result {
 	team, agentID, err := t.manager.resolveTeam(ctx)
 	if err != nil {
 		return ErrorResult(err.Error())
@@ -134,7 +134,7 @@ func (t *TeamMessageTool) executeSend(ctx context.Context, args map[string]inter
 	return NewResult(fmt.Sprintf("Message sent to %s.", toKey))
 }
 
-func (t *TeamMessageTool) executeBroadcast(ctx context.Context, args map[string]interface{}) *Result {
+func (t *TeamMessageTool) executeBroadcast(ctx context.Context, args map[string]any) *Result {
 	team, agentID, err := t.manager.resolveTeam(ctx)
 	if err != nil {
 		return ErrorResult(err.Error())
@@ -207,7 +207,7 @@ func (t *TeamMessageTool) executeRead(ctx context.Context) *Result {
 		_ = t.manager.teamStore.MarkRead(ctx, msg.ID)
 	}
 
-	out, _ := json.Marshal(map[string]interface{}{
+	out, _ := json.Marshal(map[string]any{
 		"messages": messages,
 		"count":    len(messages),
 	})

@@ -7,7 +7,7 @@ import "encoding/json"
 func (p *AnthropicProvider) buildRawBlock(blockType string, result *ChatResponse, toolCallJSON map[int]string, _ int) json.RawMessage {
 	switch blockType {
 	case "thinking":
-		block := map[string]interface{}{
+		block := map[string]any{
 			"type":     "thinking",
 			"thinking": result.Thinking,
 		}
@@ -15,7 +15,7 @@ func (p *AnthropicProvider) buildRawBlock(blockType string, result *ChatResponse
 			return b
 		}
 	case "text":
-		block := map[string]interface{}{
+		block := map[string]any{
 			"type": "text",
 			"text": result.Content,
 		}
@@ -26,13 +26,13 @@ func (p *AnthropicProvider) buildRawBlock(blockType string, result *ChatResponse
 		if len(result.ToolCalls) > 0 {
 			tc := result.ToolCalls[len(result.ToolCalls)-1]
 			// Parse accumulated JSON for this tool call
-			args := make(map[string]interface{})
+			args := make(map[string]any)
 			for i, rawJSON := range toolCallJSON {
 				if i == len(result.ToolCalls)-1 && rawJSON != "" {
 					_ = json.Unmarshal([]byte(rawJSON), &args)
 				}
 			}
-			block := map[string]interface{}{
+			block := map[string]any{
 				"type":  "tool_use",
 				"id":    tc.ID,
 				"name":  tc.Name,
@@ -44,7 +44,7 @@ func (p *AnthropicProvider) buildRawBlock(blockType string, result *ChatResponse
 		}
 	case "redacted_thinking":
 		// Pass through as-is (we don't have the encrypted data in streaming)
-		block := map[string]interface{}{
+		block := map[string]any{
 			"type": "redacted_thinking",
 		}
 		if b, err := json.Marshal(block); err == nil {
@@ -54,26 +54,26 @@ func (p *AnthropicProvider) buildRawBlock(blockType string, result *ChatResponse
 	return nil
 }
 
-func (p *AnthropicProvider) buildRequestBody(model string, req ChatRequest, stream bool) map[string]interface{} {
+func (p *AnthropicProvider) buildRequestBody(model string, req ChatRequest, stream bool) map[string]any {
 	// Separate system messages and build conversation messages
-	var systemBlocks []map[string]interface{}
-	var messages []map[string]interface{}
+	var systemBlocks []map[string]any
+	var messages []map[string]any
 
 	for _, msg := range req.Messages {
 		switch msg.Role {
 		case "system":
-			systemBlocks = append(systemBlocks, map[string]interface{}{
+			systemBlocks = append(systemBlocks, map[string]any{
 				"type": "text",
 				"text": msg.Content,
 			})
 
 		case "user":
 			if len(msg.Images) > 0 {
-				var blocks []map[string]interface{}
+				var blocks []map[string]any
 				for _, img := range msg.Images {
-					blocks = append(blocks, map[string]interface{}{
+					blocks = append(blocks, map[string]any{
 						"type": "image",
-						"source": map[string]interface{}{
+						"source": map[string]any{
 							"type":       "base64",
 							"media_type": img.MimeType,
 							"data":       img.Data,
@@ -81,17 +81,17 @@ func (p *AnthropicProvider) buildRequestBody(model string, req ChatRequest, stre
 					})
 				}
 				if msg.Content != "" {
-					blocks = append(blocks, map[string]interface{}{
+					blocks = append(blocks, map[string]any{
 						"type": "text",
 						"text": msg.Content,
 					})
 				}
-				messages = append(messages, map[string]interface{}{
+				messages = append(messages, map[string]any{
 					"role":    "user",
 					"content": blocks,
 				})
 			} else {
-				messages = append(messages, map[string]interface{}{
+				messages = append(messages, map[string]any{
 					"role":    "user",
 					"content": msg.Content,
 				})
@@ -103,7 +103,7 @@ func (p *AnthropicProvider) buildRequestBody(model string, req ChatRequest, stre
 			if msg.RawAssistantContent != nil {
 				var rawBlocks []json.RawMessage
 				if json.Unmarshal(msg.RawAssistantContent, &rawBlocks) == nil && len(rawBlocks) > 0 {
-					messages = append(messages, map[string]interface{}{
+					messages = append(messages, map[string]any{
 						"role":    "assistant",
 						"content": rawBlocks,
 					})
@@ -111,30 +111,30 @@ func (p *AnthropicProvider) buildRequestBody(model string, req ChatRequest, stre
 				}
 			}
 
-			var blocks []map[string]interface{}
+			var blocks []map[string]any
 			if msg.Content != "" {
-				blocks = append(blocks, map[string]interface{}{
+				blocks = append(blocks, map[string]any{
 					"type": "text",
 					"text": msg.Content,
 				})
 			}
 			for _, tc := range msg.ToolCalls {
-				blocks = append(blocks, map[string]interface{}{
+				blocks = append(blocks, map[string]any{
 					"type":  "tool_use",
 					"id":    tc.ID,
 					"name":  tc.Name,
 					"input": tc.Arguments,
 				})
 			}
-			messages = append(messages, map[string]interface{}{
+			messages = append(messages, map[string]any{
 				"role":    "assistant",
 				"content": blocks,
 			})
 
 		case "tool":
-			messages = append(messages, map[string]interface{}{
+			messages = append(messages, map[string]any{
 				"role": "user",
-				"content": []map[string]interface{}{
+				"content": []map[string]any{
 					{
 						"type":        "tool_result",
 						"tool_use_id": msg.ToolCallID,
@@ -145,11 +145,11 @@ func (p *AnthropicProvider) buildRequestBody(model string, req ChatRequest, stre
 		}
 	}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"model":         model,
 		"max_tokens":    4096,
 		"messages":      messages,
-		"cache_control": map[string]interface{}{"type": "ephemeral"},
+		"cache_control": map[string]any{"type": "ephemeral"},
 	}
 
 	if stream {
@@ -162,10 +162,10 @@ func (p *AnthropicProvider) buildRequestBody(model string, req ChatRequest, stre
 
 	// Translate tools to Anthropic format
 	if len(req.Tools) > 0 {
-		var tools []map[string]interface{}
+		var tools []map[string]any
 		for _, t := range req.Tools {
 			cleanedParams := CleanSchemaForProvider("anthropic", t.Function.Parameters)
-			tool := map[string]interface{}{
+			tool := map[string]any{
 				"name":         t.Function.Name,
 				"description":  t.Function.Description,
 				"input_schema": cleanedParams,
@@ -186,7 +186,7 @@ func (p *AnthropicProvider) buildRequestBody(model string, req ChatRequest, stre
 	// Enable extended thinking if thinking_level is set
 	if level, ok := req.Options[OptThinkingLevel].(string); ok && level != "" && level != "off" {
 		budget := anthropicThinkingBudget(level)
-		body["thinking"] = map[string]interface{}{
+		body["thinking"] = map[string]any{
 			"type":          "enabled",
 			"budget_tokens": budget,
 		}

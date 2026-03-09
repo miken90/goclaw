@@ -42,7 +42,7 @@ func callMinimaxImageGen(ctx context.Context, apiKey, apiBase, model, prompt str
 	size := aspectRatioToMinimaxSize(params)
 	promptOptimizer := GetParamBool(params, "prompt_optimizer", true)
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"model":                model,
 		"prompt":               prompt,
 		"size":                 size,

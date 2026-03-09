@@ -44,23 +44,23 @@ func (t *HandoffTool) Description() string {
 		"Use action=transfer to hand off, action=clear to remove a previous handoff."
 }
 
-func (t *HandoffTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *HandoffTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"action": map[string]interface{}{
+		"properties": map[string]any{
+			"action": map[string]any{
 				"type":        "string",
 				"description": "'transfer' (default) or 'clear'",
 			},
-			"agent": map[string]interface{}{
+			"agent": map[string]any{
 				"type":        "string",
 				"description": "Target agent key (required for action=transfer)",
 			},
-			"reason": map[string]interface{}{
+			"reason": map[string]any{
 				"type":        "string",
 				"description": "Why the handoff is happening (required for action=transfer)",
 			},
-			"transfer_context": map[string]interface{}{
+			"transfer_context": map[string]any{
 				"type":        "boolean",
 				"description": "Pass conversation summary to target agent (default true)",
 			},
@@ -69,7 +69,7 @@ func (t *HandoffTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *HandoffTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *HandoffTool) Execute(ctx context.Context, args map[string]any) *Result {
 	action, _ := args["action"].(string)
 	if action == "" {
 		action = "transfer"
@@ -85,7 +85,7 @@ func (t *HandoffTool) Execute(ctx context.Context, args map[string]interface{}) 
 	}
 }
 
-func (t *HandoffTool) executeTransfer(ctx context.Context, args map[string]interface{}) *Result {
+func (t *HandoffTool) executeTransfer(ctx context.Context, args map[string]any) *Result {
 	targetAgentKey, _ := args["agent"].(string)
 	if targetAgentKey == "" {
 		return ErrorResult("agent is required for handoff")

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -80,46 +81,47 @@ func formatDelegateAnnounce(task *DelegationTask, artifacts *DelegateArtifacts, 
 			task.TargetAgentKey, err.Error(), elapsed.Round(time.Millisecond))
 	}
 
-	msg := "[System Message] All team delegations completed.\n\n"
+	var msg strings.Builder
+	msg.WriteString("[System Message] All team delegations completed.\n\n")
 
 	// List auto-completed task IDs so LLM doesn't reuse them
 	if len(artifacts.CompletedTaskIDs) > 0 {
-		msg += "Auto-completed team tasks: "
+		msg.WriteString("Auto-completed team tasks: ")
 		for i, tid := range artifacts.CompletedTaskIDs {
 			if i > 0 {
-				msg += ", "
+				msg.WriteString(", ")
 			}
-			msg += tid
+			msg.WriteString(tid)
 		}
-		msg += "\nFor follow-up delegations, create NEW tasks (do not reuse completed task IDs).\n\n"
+		msg.WriteString("\nFor follow-up delegations, create NEW tasks (do not reuse completed task IDs).\n\n")
 	}
 
 	// Render each delegation result
 	for i, r := range artifacts.Results {
-		msg += fmt.Sprintf("--- Result from %q ---\n%s\n", r.AgentKey, r.Content)
+		msg.WriteString(fmt.Sprintf("--- Result from %q ---\n%s\n", r.AgentKey, r.Content))
 		if len(r.Deliverables) > 0 {
 			for _, d := range r.Deliverables {
 				preview := d
 				if runes := []rune(preview); len(runes) > 4000 {
 					preview = string(runes[:4000]) + "\n[...truncated, full content in team_tasks]"
 				}
-				msg += fmt.Sprintf("\n[Deliverable]\n%s\n", preview)
+				msg.WriteString(fmt.Sprintf("\n[Deliverable]\n%s\n", preview))
 			}
 		}
 		if r.HasMedia {
-			msg += "[media file(s) attached — will be delivered automatically. Do NOT recreate or call create_image.]\n"
+			msg.WriteString("[media file(s) attached — will be delivered automatically. Do NOT recreate or call create_image.]\n")
 		}
 		if i < len(artifacts.Results)-1 {
-			msg += "\n"
+			msg.WriteString("\n")
 		}
 	}
 
-	msg += fmt.Sprintf("\nStats: total elapsed %s\n\n", elapsed.Round(time.Millisecond))
-	msg += "Review the results above. You may:\n" +
+	msg.WriteString(fmt.Sprintf("\nStats: total elapsed %s\n\n", elapsed.Round(time.Millisecond)))
+	msg.WriteString("Review the results above. You may:\n" +
 		"- Present a comprehensive summary to the user (if the task is fully done)\n" +
 		"- Delegate follow-up tasks to refine, combine, or extend these results\n" +
 		"- Ask a member to revise based on another member's output\n" +
-		"Any media files attached will be delivered automatically — do NOT recreate them."
+		"Any media files attached will be delivered automatically — do NOT recreate them.")
 
-	return msg
+	return msg.String()
 }

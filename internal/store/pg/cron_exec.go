@@ -99,12 +99,12 @@ func (s *PGCronStore) GetRunLog(jobID string, limit, offset int) ([]store.CronRu
 	return result, total
 }
 
-func (s *PGCronStore) Status() map[string]interface{} {
+func (s *PGCronStore) Status() map[string]any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var count int64
 	s.db.QueryRow("SELECT COUNT(*) FROM cron_jobs WHERE enabled = true").Scan(&count)
-	return map[string]interface{}{
+	return map[string]any{
 		"enabled": s.running,
 		"jobs":    count,
 	}

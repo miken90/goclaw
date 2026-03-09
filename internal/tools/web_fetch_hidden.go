@@ -67,7 +67,7 @@ func hasHiddenClass(n *html.Node) bool {
 	if classAttr == "" {
 		return false
 	}
-	for _, cls := range strings.Fields(classAttr) {
+	for cls := range strings.FieldsSeq(classAttr) {
 		if hiddenClasses[strings.ToLower(cls)] {
 			return true
 		}

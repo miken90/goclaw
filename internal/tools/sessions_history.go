@@ -32,19 +32,19 @@ func (t *SessionsHistoryTool) Description() string {
 	return "Fetch message history for a session."
 }
 
-func (t *SessionsHistoryTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *SessionsHistoryTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"session_key": map[string]interface{}{
+		"properties": map[string]any{
+			"session_key": map[string]any{
 				"type":        "string",
 				"description": "Session key to fetch history from",
 			},
-			"limit": map[string]interface{}{
+			"limit": map[string]any{
 				"type":        "number",
 				"description": "Max messages to return (default 20)",
 			},
-			"include_tools": map[string]interface{}{
+			"include_tools": map[string]any{
 				"type":        "boolean",
 				"description": "Include tool call/result messages (default false)",
 			},
@@ -53,7 +53,7 @@ func (t *SessionsHistoryTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *SessionsHistoryTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *SessionsHistoryTool) Execute(ctx context.Context, args map[string]any) *Result {
 	if t.sessions == nil {
 		return ErrorResult("session store not available")
 	}
@@ -111,7 +111,7 @@ func (t *SessionsHistoryTool) Execute(ctx context.Context, args map[string]inter
 		entries = entries[len(entries)-limit:]
 	}
 
-	out, _ := json.Marshal(map[string]interface{}{
+	out, _ := json.Marshal(map[string]any{
 		"session_key": sessionKey,
 		"messages":    entries,
 		"count":       len(entries),

@@ -20,7 +20,7 @@ func (s *staticTokenSource) Token() (string, error) {
 }
 
 // mustJSON marshals v to JSON string; panics on error.
-func mustJSON(v interface{}) string {
+func mustJSON(v any) string {
 	b, err := json.Marshal(v)
 	if err != nil {
 		panic(err)
@@ -68,7 +68,7 @@ func TestCodexProviderBuildRequestBody(t *testing.T) {
 			{Role: "assistant", Content: "Hi there!"},
 			{Role: "user", Content: "How are you?"},
 		},
-		Options: map[string]interface{}{
+		Options: map[string]any{
 			OptMaxTokens:   1024,
 			OptTemperature: 0.7,
 		},
@@ -97,7 +97,7 @@ func TestCodexProviderBuildRequestBody(t *testing.T) {
 	}
 
 	// Check input items (should exclude system messages)
-	input, ok := body["input"].([]interface{})
+	input, ok := body["input"].([]any)
 	if !ok {
 		t.Fatalf("input is not []interface{}: %T", body["input"])
 	}
@@ -124,10 +124,10 @@ func TestCodexProviderBuildRequestBodyWithTools(t *testing.T) {
 				Function: ToolFunctionSchema{
 					Name:        "get_weather",
 					Description: "Get current weather",
-					Parameters: map[string]interface{}{
+					Parameters: map[string]any{
 						"type": "object",
-						"properties": map[string]interface{}{
-							"city": map[string]interface{}{"type": "string"},
+						"properties": map[string]any{
+							"city": map[string]any{"type": "string"},
 						},
 						"required": []string{"city"},
 					},
@@ -138,7 +138,7 @@ func TestCodexProviderBuildRequestBodyWithTools(t *testing.T) {
 
 	body := p.buildRequestBody(req, true)
 
-	tools, ok := body["tools"].([]map[string]interface{})
+	tools, ok := body["tools"].([]map[string]any)
 	if !ok {
 		t.Fatalf("tools is not []map[string]interface{}: %T", body["tools"])
 	}
@@ -167,7 +167,7 @@ func TestCodexProviderBuildRequestBodyToolCallMessages(t *testing.T) {
 			{
 				Role: "assistant",
 				ToolCalls: []ToolCall{
-					{ID: "call_123", Name: "get_weather", Arguments: map[string]interface{}{"city": "London"}},
+					{ID: "call_123", Name: "get_weather", Arguments: map[string]any{"city": "London"}},
 				},
 			},
 			{Role: "tool", ToolCallID: "call_123", Content: `{"temp": 15}`},
@@ -176,7 +176,7 @@ func TestCodexProviderBuildRequestBodyToolCallMessages(t *testing.T) {
 
 	body := p.buildRequestBody(req, false)
 
-	input, ok := body["input"].([]interface{})
+	input, ok := body["input"].([]any)
 	if !ok {
 		t.Fatalf("input is not []interface{}: %T", body["input"])
 	}
@@ -185,7 +185,7 @@ func TestCodexProviderBuildRequestBodyToolCallMessages(t *testing.T) {
 	}
 
 	// Second item should be function_call
-	fc, ok := input[1].(map[string]interface{})
+	fc, ok := input[1].(map[string]any)
 	if !ok {
 		t.Fatalf("input[1] is not map: %T", input[1])
 	}
@@ -197,7 +197,7 @@ func TestCodexProviderBuildRequestBodyToolCallMessages(t *testing.T) {
 	}
 
 	// Third item should be function_call_output
-	fco, ok := input[2].(map[string]interface{})
+	fco, ok := input[2].(map[string]any)
 	if !ok {
 		t.Fatalf("input[2] is not map: %T", input[2])
 	}
@@ -214,12 +214,12 @@ func TestCodexProviderBuildRequestBodyThinking(t *testing.T) {
 
 	req := ChatRequest{
 		Messages: []Message{{Role: "user", Content: "Think about this"}},
-		Options:  map[string]interface{}{OptThinkingLevel: "high"},
+		Options:  map[string]any{OptThinkingLevel: "high"},
 	}
 
 	body := p.buildRequestBody(req, false)
 
-	reasoning, ok := body["reasoning"].(map[string]interface{})
+	reasoning, ok := body["reasoning"].(map[string]any)
 	if !ok {
 		t.Fatalf("reasoning is not map: %T", body["reasoning"])
 	}
@@ -245,7 +245,7 @@ func TestCodexProviderChat(t *testing.T) {
 		}
 
 		// Verify request body
-		var body map[string]interface{}
+		var body map[string]any
 		json.NewDecoder(r.Body).Decode(&body)
 		if body["model"] != "gpt-4o" {
 			t.Errorf("request model = %v, want gpt-4o", body["model"])
@@ -599,17 +599,17 @@ func TestCodexProviderBuildRequestBodyWithImages(t *testing.T) {
 
 	body := p.buildRequestBody(req, false)
 
-	input, ok := body["input"].([]interface{})
+	input, ok := body["input"].([]any)
 	if !ok || len(input) != 1 {
 		t.Fatalf("expected 1 input item, got %v", body["input"])
 	}
 
-	item, ok := input[0].(map[string]interface{})
+	item, ok := input[0].(map[string]any)
 	if !ok {
 		t.Fatalf("input[0] is not map: %T", input[0])
 	}
 
-	content, ok := item["content"].([]map[string]interface{})
+	content, ok := item["content"].([]map[string]any)
 	if !ok {
 		t.Fatalf("content is not []map: %T", item["content"])
 	}
@@ -625,4 +625,3 @@ func TestCodexProviderBuildRequestBodyWithImages(t *testing.T) {
 		t.Errorf("content[1] type = %v, want input_text", content[1]["type"])
 	}
 }
-

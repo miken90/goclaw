@@ -314,7 +314,7 @@ func vectorToString(v []float32) string {
 		if i > 0 {
 			buf = append(buf, ',')
 		}
-		buf = append(buf, []byte(fmt.Sprintf("%g", f))...)
+		buf = append(buf, fmt.Appendf(nil, "%g", f)...)
 	}
 	buf = append(buf, ']')
 	return string(buf)

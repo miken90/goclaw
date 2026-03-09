@@ -54,12 +54,12 @@ func (m *ChannelInstancesMethods) handleList(ctx context.Context, client *gatewa
 	}
 
 	// Mask credentials in response — never expose secrets via WS.
-	result := make([]map[string]interface{}, 0, len(instances))
+	result := make([]map[string]any, 0, len(instances))
 	for _, inst := range instances {
 		result = append(result, maskInstance(inst))
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"instances": result,
 	}))
 }
@@ -160,7 +160,7 @@ func (m *ChannelInstancesMethods) handleUpdate(ctx context.Context, client *gate
 		return
 	}
 
-	var updates map[string]interface{}
+	var updates map[string]any
 	if err := json.Unmarshal(params.Updates, &updates); err != nil {
 		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgInvalidUpdates)))
 		return
@@ -173,7 +173,7 @@ func (m *ChannelInstancesMethods) handleUpdate(ctx context.Context, client *gate
 	}
 
 	m.emitCacheInvalidate()
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{"status": "updated"}))
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{"status": "updated"}))
 }
 
 func (m *ChannelInstancesMethods) handleDelete(ctx context.Context, client *gateway.Client, req *protocol.RequestFrame) {
@@ -209,31 +209,31 @@ func (m *ChannelInstancesMethods) handleDelete(ctx context.Context, client *gate
 	}
 
 	m.emitCacheInvalidate()
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{"status": "deleted"}))
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{"status": "deleted"}))
 }
 
 // maskInstance returns a map representation with credentials masked.
-func maskInstance(inst store.ChannelInstanceData) map[string]interface{} {
-	result := map[string]interface{}{
-		"id":           inst.ID,
-		"name":         inst.Name,
-		"display_name": inst.DisplayName,
-		"channel_type": inst.ChannelType,
-		"agent_id":     inst.AgentID,
-		"config":       inst.Config,
-		"enabled":      inst.Enabled,
-		"is_default":       store.IsDefaultChannelInstance(inst.Name),
-		"has_credentials":  len(inst.Credentials) > 0,
-		"created_by":       inst.CreatedBy,
-		"created_at":       inst.CreatedAt,
-		"updated_at":       inst.UpdatedAt,
+func maskInstance(inst store.ChannelInstanceData) map[string]any {
+	result := map[string]any{
+		"id":              inst.ID,
+		"name":            inst.Name,
+		"display_name":    inst.DisplayName,
+		"channel_type":    inst.ChannelType,
+		"agent_id":        inst.AgentID,
+		"config":          inst.Config,
+		"enabled":         inst.Enabled,
+		"is_default":      store.IsDefaultChannelInstance(inst.Name),
+		"has_credentials": len(inst.Credentials) > 0,
+		"created_by":      inst.CreatedBy,
+		"created_at":      inst.CreatedAt,
+		"updated_at":      inst.UpdatedAt,
 	}
 
 	// Mask credentials: show keys with "***" values
 	if len(inst.Credentials) > 0 {
-		var raw map[string]interface{}
+		var raw map[string]any
 		if json.Unmarshal(inst.Credentials, &raw) == nil {
-			masked := make(map[string]interface{}, len(raw))
+			masked := make(map[string]any, len(raw))
 			for k := range raw {
 				masked[k] = "***"
 			}

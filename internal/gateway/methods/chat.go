@@ -155,7 +155,7 @@ func (m *ChatMethods) handleSend(ctx context.Context, client *gateway.Client, re
 			return
 		}
 
-		resp := map[string]interface{}{
+		resp := map[string]any{
 			"runId":   result.RunID,
 			"content": result.Content,
 			"usage":   result.Usage,
@@ -191,7 +191,7 @@ func (m *ChatMethods) handleHistory(ctx context.Context, client *gateway.Client,
 
 	history := m.sessions.GetHistory(sessionKey)
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"messages": history,
 	}))
 }
@@ -237,7 +237,7 @@ func (m *ChatMethods) handleInject(ctx context.Context, client *gateway.Client, 
 		Content: text,
 	})
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"ok":        true,
 		"messageId": messageID,
 	}))
@@ -281,7 +281,7 @@ func (m *ChatMethods) handleAbort(ctx context.Context, client *gateway.Client, r
 		abortedIDs = m.agents.AbortRunsForSession(params.SessionKey)
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"ok":      true,
 		"aborted": len(abortedIDs) > 0,
 		"runIds":  abortedIDs,

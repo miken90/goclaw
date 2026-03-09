@@ -29,15 +29,15 @@ func (t *DelegateSearchTool) Description() string {
 	return "Search for available delegation target agents by keyword or description. Use this to find the right agent to delegate a task to."
 }
 
-func (t *DelegateSearchTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *DelegateSearchTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"query": map[string]interface{}{
+		"properties": map[string]any{
+			"query": map[string]any{
 				"type":        "string",
 				"description": "Search keywords to find relevant agents",
 			},
-			"max_results": map[string]interface{}{
+			"max_results": map[string]any{
 				"type":        "integer",
 				"description": "Maximum number of results (default 5)",
 			},
@@ -46,7 +46,7 @@ func (t *DelegateSearchTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *DelegateSearchTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *DelegateSearchTool) Execute(ctx context.Context, args map[string]any) *Result {
 	query, _ := args["query"].(string)
 	if query == "" {
 		return ErrorResult("query parameter is required")
@@ -96,7 +96,7 @@ func (t *DelegateSearchTool) Execute(ctx context.Context, args map[string]interf
 		})
 	}
 
-	data, _ := json.MarshalIndent(map[string]interface{}{
+	data, _ := json.MarshalIndent(map[string]any{
 		"agents": out,
 		"count":  len(out),
 	}, "", "  ")

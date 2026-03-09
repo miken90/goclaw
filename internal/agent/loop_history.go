@@ -120,7 +120,7 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 		HasSpawn:               l.tools != nil && hasSpawn,
 		HasSkillSearch:         hasSkillSearch,
 		HasMCPToolSearch:       hasMCPToolSearch,
-		HasKnowledgeGraph:     hasKG,
+		HasKnowledgeGraph:      hasKG,
 		MCPToolDescs:           mcpToolDescs,
 		ContextFiles:           contextFiles,
 		AgentType:              l.agentType,
@@ -397,46 +397,47 @@ func (l *Loop) maybeSummarize(ctx context.Context, sessionKey string) {
 		summary := l.sessions.GetSummary(sessionKey)
 		toSummarize := history[:len(history)-keepLast]
 
-		var sb string
+		var sb strings.Builder
 		var mediaKinds []string
 		for _, m := range toSummarize {
 			if m.Role == "user" {
-				sb += fmt.Sprintf("user: %s\n", m.Content)
+				sb.WriteString(fmt.Sprintf("user: %s\n", m.Content))
 			} else if m.Role == "assistant" {
-				sb += fmt.Sprintf("assistant: %s\n", SanitizeAssistantContent(m.Content))
+				sb.WriteString(fmt.Sprintf("assistant: %s\n", SanitizeAssistantContent(m.Content)))
 			}
 			for _, ref := range m.MediaRefs {
 				mediaKinds = append(mediaKinds, ref.Kind)
 			}
 		}
 
-		prompt := "Provide a concise summary of this conversation, preserving key context:\n"
+		var prompt strings.Builder
+		prompt.WriteString("Provide a concise summary of this conversation, preserving key context:\n")
 		if len(mediaKinds) > 0 {
 			// Deduplicate and count media types for a compact note.
 			counts := make(map[string]int)
 			for _, k := range mediaKinds {
 				counts[k]++
 			}
-			prompt += "\nNote: user shared media files ("
+			prompt.WriteString("\nNote: user shared media files (")
 			first := true
 			for k, n := range counts {
 				if !first {
-					prompt += ", "
+					prompt.WriteString(", ")
 				}
-				prompt += fmt.Sprintf("%d %s(s)", n, k)
+				prompt.WriteString(fmt.Sprintf("%d %s(s)", n, k))
 				first = false
 			}
-			prompt += ") which are no longer in context. Mention briefly if relevant.\n"
+			prompt.WriteString(") which are no longer in context. Mention briefly if relevant.\n")
 		}
 		if summary != "" {
-			prompt += "Existing context: " + summary + "\n"
+			prompt.WriteString("Existing context: " + summary + "\n")
 		}
-		prompt += "\n" + sb
+		prompt.WriteString("\n" + sb.String())
 
 		resp, err := l.provider.Chat(sctx, providers.ChatRequest{
-			Messages: []providers.Message{{Role: "user", Content: prompt}},
+			Messages: []providers.Message{{Role: "user", Content: prompt.String()}},
 			Model:    l.model,
-			Options:  map[string]interface{}{"max_tokens": 1024, "temperature": 0.3},
+			Options:  map[string]any{"max_tokens": 1024, "temperature": 0.3},
 		})
 		if err != nil {
 			slog.Warn("summarization failed", "session", sessionKey, "error", err)

@@ -36,7 +36,7 @@ func (m *ConfigMethods) Register(router *gateway.MethodRouter) {
 }
 
 func (m *ConfigMethods) handleGet(_ context.Context, client *gateway.Client, req *protocol.RequestFrame) {
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"config": m.cfg.MaskedCopy(),
 		"hash":   m.cfg.Hash(),
 		"path":   m.cfgPath,
@@ -93,7 +93,7 @@ func (m *ConfigMethods) handleApply(ctx context.Context, client *gateway.Client,
 	m.cfg.ApplyEnvOverrides()
 	m.broadcastChanged()
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"ok":      true,
 		"path":    m.cfgPath,
 		"config":  m.cfg.MaskedCopy(),
@@ -165,7 +165,7 @@ func (m *ConfigMethods) handlePatch(ctx context.Context, client *gateway.Client,
 	m.cfg.ApplyEnvOverrides()
 	m.broadcastChanged()
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"ok":      true,
 		"path":    m.cfgPath,
 		"config":  m.cfg.MaskedCopy(),
@@ -184,37 +184,37 @@ func (m *ConfigMethods) broadcastChanged() {
 // handleSchema returns the config JSON schema for UI form generation.
 // Matching TS config.schema (src/gateway/server-methods/config.ts:276-289).
 func (m *ConfigMethods) handleSchema(_ context.Context, client *gateway.Client, req *protocol.RequestFrame) {
-	schema := map[string]interface{}{
+	schema := map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"agents": map[string]interface{}{
+		"properties": map[string]any{
+			"agents": map[string]any{
 				"type":        "object",
 				"description": "Agent configuration (defaults + per-agent overrides)",
 			},
-			"channels": map[string]interface{}{
+			"channels": map[string]any{
 				"type":        "object",
 				"description": "Channel configuration (telegram, discord, slack, etc.)",
 			},
-			"providers": map[string]interface{}{
+			"providers": map[string]any{
 				"type":        "object",
 				"description": "AI provider API keys and settings",
 			},
-			"gateway": map[string]interface{}{
+			"gateway": map[string]any{
 				"type":        "object",
 				"description": "Gateway server settings (host, port, token)",
 			},
-			"tools": map[string]interface{}{
+			"tools": map[string]any{
 				"type":        "object",
 				"description": "Tool configuration (browser, exec, web search)",
 			},
-			"sessions": map[string]interface{}{
+			"sessions": map[string]any{
 				"type":        "object",
 				"description": "Session storage configuration",
 			},
 		},
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"json": schema,
 	}))
 }

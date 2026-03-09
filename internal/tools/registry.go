@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"sync"
 	"time"
 
@@ -57,7 +58,7 @@ func (r *Registry) Unregister(name string) {
 }
 
 // Execute runs a tool by name with the given arguments.
-func (r *Registry) Execute(ctx context.Context, name string, args map[string]interface{}) *Result {
+func (r *Registry) Execute(ctx context.Context, name string, args map[string]any) *Result {
 	return r.ExecuteWithContext(ctx, name, args, "", "", "", "", nil)
 }
 
@@ -67,7 +68,7 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 //
 // Context values are injected into ctx so tools can read them without mutable fields,
 // making tool instances thread-safe for concurrent execution.
-func (r *Registry) ExecuteWithContext(ctx context.Context, name string, args map[string]interface{}, channel, chatID, peerKind, sessionKey string, asyncCB AsyncCallback) *Result {
+func (r *Registry) ExecuteWithContext(ctx context.Context, name string, args map[string]any, channel, chatID, peerKind, sessionKey string, asyncCB AsyncCallback) *Result {
 	r.mu.RLock()
 	tool, ok := r.tools[name]
 	r.mu.RUnlock()
@@ -166,8 +167,6 @@ func (r *Registry) Clone() *Registry {
 		rateLimiter: r.rateLimiter,
 		scrubbing:   r.scrubbing,
 	}
-	for name, tool := range r.tools {
-		clone.tools[name] = tool
-	}
+	maps.Copy(clone.tools, r.tools)
 	return clone
 }

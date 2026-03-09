@@ -74,7 +74,7 @@ func (m *PairingMethods) handleRequest(ctx context.Context, client *gateway.Clie
 		return
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"code": code,
 	}))
 }
@@ -113,7 +113,7 @@ func (m *PairingMethods) handleApprove(ctx context.Context, client *gateway.Clie
 		m.broadcaster(*protocol.NewEvent(protocol.EventDevicePairRes, map[string]any{"action": "approved"}))
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"paired": paired,
 	}))
 }
@@ -141,7 +141,7 @@ func (m *PairingMethods) handleDeny(ctx context.Context, client *gateway.Client,
 		m.broadcaster(*protocol.NewEvent(protocol.EventDevicePairRes, map[string]any{"action": "denied"}))
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"denied": true,
 	}))
 }
@@ -150,7 +150,7 @@ func (m *PairingMethods) handleList(_ context.Context, client *gateway.Client, r
 	pending := m.service.ListPending()
 	paired := m.service.ListPaired()
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"pending": pending,
 		"paired":  paired,
 	}))
@@ -191,7 +191,7 @@ func (m *PairingMethods) handleRevoke(ctx context.Context, client *gateway.Clien
 		})
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"revoked": true,
 	}))
 }
@@ -213,7 +213,7 @@ func (m *PairingMethods) handleBrowserPairingStatus(ctx context.Context, client 
 	}
 
 	if m.service.IsPaired(params.SenderID, "browser") {
-		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 			"status": "approved",
 		}))
 		return
@@ -223,14 +223,14 @@ func (m *PairingMethods) handleBrowserPairingStatus(ctx context.Context, client 
 	pending := m.service.ListPending()
 	for _, p := range pending {
 		if p.SenderID == params.SenderID && p.Channel == "browser" {
-			client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+			client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 				"status": "pending",
 			}))
 			return
 		}
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"status": "expired",
 	}))
 }

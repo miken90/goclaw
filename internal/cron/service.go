@@ -104,10 +104,10 @@ func (cs *Service) AddJob(name string, schedule Schedule, message string, delive
 
 	now := nowMS()
 	job := Job{
-		ID:      generateID(),
-		Name:    name,
-		AgentID: agentID,
-		Enabled: true,
+		ID:       generateID(),
+		Name:     name,
+		AgentID:  agentID,
+		Enabled:  true,
 		Schedule: schedule,
 		Payload: Payload{
 			Kind:    "agent_turn",
@@ -259,14 +259,13 @@ func (cs *Service) UpdateJob(jobID string, patch JobPatch) (*Job, error) {
 }
 
 // Status returns the service status.
-func (cs *Service) Status() map[string]interface{} {
+func (cs *Service) Status() map[string]any {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
-	return map[string]interface{}{
+	return map[string]any{
 		"enabled":      cs.running,
 		"jobs":         len(cs.store.Jobs),
 		"nextWakeAtMs": cs.getNextWakeMS(),
 	}
 }
-

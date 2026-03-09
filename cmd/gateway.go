@@ -771,7 +771,7 @@ func runGateway() {
 
 		// Route activity events to Router (status registry) and DelegateManager (progress tracking).
 		if agentEvent.Type == protocol.AgentEventActivity {
-			payloadMap, _ := agentEvent.Payload.(map[string]interface{})
+			payloadMap, _ := agentEvent.Payload.(map[string]any)
 			phase, _ := payloadMap["phase"].(string)
 			tool, _ := payloadMap["tool"].(string)
 			iteration := 0

@@ -89,7 +89,7 @@ func (t *ReadDocumentTool) callProvider(ctx context.Context, cp credentialProvid
 			},
 		},
 		Model: model,
-		Options: map[string]interface{}{
+		Options: map[string]any{
 			"max_tokens":  16384,
 			"temperature": 0.2,
 		},

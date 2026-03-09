@@ -88,7 +88,7 @@ func (m *AgentLinksMethods) handleList(ctx context.Context, client *gateway.Clie
 		return
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"links": links,
 		"count": len(links),
 	}))
@@ -182,7 +182,7 @@ func (m *AgentLinksMethods) handleCreate(ctx context.Context, client *gateway.Cl
 	}
 	m.emitTeamCacheInvalidate()
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"link": link,
 	}))
 
@@ -281,7 +281,7 @@ func (m *AgentLinksMethods) handleUpdate(ctx context.Context, client *gateway.Cl
 	m.invalidateLinkAgents(ctx, linkID)
 	m.emitTeamCacheInvalidate()
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{"ok": true}))
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{"ok": true}))
 
 	// Emit agent_link.updated event
 	if m.msgBus != nil {
@@ -350,7 +350,7 @@ func (m *AgentLinksMethods) handleDelete(ctx context.Context, client *gateway.Cl
 	}
 	m.emitTeamCacheInvalidate()
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{"ok": true}))
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{"ok": true}))
 
 	// Emit agent_link.deleted event
 	if m.msgBus != nil && link != nil {

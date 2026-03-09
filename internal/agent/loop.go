@@ -334,7 +334,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 	totalToolCalls := 0
 	var finalContent string
 	var finalThinking string
-	var asyncToolCalls []string   // track async spawn tool names for fallback
+	var asyncToolCalls []string    // track async spawn tool names for fallback
 	var mediaResults []MediaResult // media files from tool MEDIA: results
 	var deliverables []string      // actual content from tool outputs (for team task results)
 	var blockReplies int           // count of block.reply events emitted (for dedup in consumer)
@@ -347,7 +347,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 	// Team task orphan detection: track team_tasks create vs spawn calls.
 	// If the LLM creates tasks but forgets to spawn, inject a reminder.
 	var teamTaskCreates int  // count of team_tasks action=create calls
-	var teamTaskSpawns  int  // count of spawn calls with team_task_id
+	var teamTaskSpawns int   // count of spawn calls with team_task_id
 	var teamTaskRetried bool // only retry once to prevent infinite loops
 
 	// Inject retry hook so channels can update placeholder on LLM retries.
@@ -379,7 +379,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 			Type:    protocol.AgentEventActivity,
 			AgentID: l.id,
 			RunID:   req.RunID,
-			Payload: map[string]interface{}{"phase": "thinking", "iteration": iteration},
+			Payload: map[string]any{"phase": "thinking", "iteration": iteration},
 		})
 
 		// Build provider request with policy-filtered tools
@@ -399,7 +399,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 			Messages: messages,
 			Tools:    toolDefs,
 			Model:    l.model,
-			Options: map[string]interface{}{
+			Options: map[string]any{
 				providers.OptMaxTokens:   8192,
 				providers.OptTemperature: 0.7,
 				providers.OptSessionKey:  req.SessionKey,
@@ -505,7 +505,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 					Type:    protocol.AgentEventActivity,
 					AgentID: l.id,
 					RunID:   req.RunID,
-					Payload: map[string]interface{}{"phase": "compacting", "iteration": iteration},
+					Payload: map[string]any{"phase": "compacting", "iteration": iteration},
 				})
 				if compacted := l.compactMessagesInPlace(ctx, messages); compacted != nil {
 					messages = compacted
@@ -562,7 +562,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 			Content:             resp.Content,
 			Thinking:            resp.Thinking, // reasoning_content passback for thinking models (Kimi, DeepSeek)
 			ToolCalls:           resp.ToolCalls,
-			Phase:               resp.Phase, // preserve Codex phase metadata (gpt-5.3-codex)
+			Phase:               resp.Phase,               // preserve Codex phase metadata (gpt-5.3-codex)
 			RawAssistantContent: resp.RawAssistantContent, // preserve thinking blocks for Anthropic passback
 		}
 		messages = append(messages, assistantMsg)
@@ -617,7 +617,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 				Type:    protocol.AgentEventActivity,
 				AgentID: l.id,
 				RunID:   req.RunID,
-				Payload: map[string]interface{}{
+				Payload: map[string]any{
 					"phase":     "tool_exec",
 					"tool":      toolNames[0],
 					"tools":     toolNames,
@@ -634,7 +634,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 				Type:    protocol.AgentEventToolCall,
 				AgentID: l.id,
 				RunID:   req.RunID,
-				Payload: map[string]interface{}{"name": tc.Name, "id": tc.ID, "arguments": truncateToolArgs(tc.Arguments, 500)},
+				Payload: map[string]any{"name": tc.Name, "id": tc.ID, "arguments": truncateToolArgs(tc.Arguments, 500)},
 			})
 
 			argsJSON, _ := json.Marshal(tc.Arguments)
@@ -675,7 +675,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 				}
 			}
 
-			toolResultPayload := map[string]interface{}{
+			toolResultPayload := map[string]any{
 				"name":      tc.Name,
 				"id":        tc.ID,
 				"is_error":  result.IsError,
@@ -748,7 +748,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 					Type:    protocol.AgentEventToolCall,
 					AgentID: l.id,
 					RunID:   req.RunID,
-					Payload: map[string]interface{}{"name": tc.Name, "id": tc.ID, "arguments": truncateToolArgs(tc.Arguments, 500)},
+					Payload: map[string]any{"name": tc.Name, "id": tc.ID, "arguments": truncateToolArgs(tc.Arguments, 500)},
 				})
 			}
 
@@ -816,7 +816,7 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 					}
 				}
 
-				parToolResultPayload := map[string]interface{}{
+				parToolResultPayload := map[string]any{
 					"name":      r.tc.Name,
 					"id":        r.tc.ID,
 					"is_error":  r.result.IsError,
@@ -981,8 +981,8 @@ func (l *Loop) runLoop(ctx context.Context, req RunRequest) (*RunResult, error) 
 }
 
 // truncateToolArgs returns a copy of arguments with string values truncated to maxLen.
-func truncateToolArgs(args map[string]interface{}, maxLen int) map[string]interface{} {
-	out := make(map[string]interface{}, len(args))
+func truncateToolArgs(args map[string]any, maxLen int) map[string]any {
+	out := make(map[string]any, len(args))
 	for k, v := range args {
 		if s, ok := v.(string); ok && len(s) > maxLen {
 			out[k] = truncateStr(s, maxLen)

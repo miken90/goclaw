@@ -29,19 +29,19 @@ func (t *TtsTool) Description() string {
 	return "Convert text to speech audio. Returns a MEDIA: path to the generated audio file."
 }
 
-func (t *TtsTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *TtsTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"text": map[string]interface{}{
+		"properties": map[string]any{
+			"text": map[string]any{
 				"type":        "string",
 				"description": "The text to convert to speech",
 			},
-			"voice": map[string]interface{}{
+			"voice": map[string]any{
 				"type":        "string",
 				"description": "Voice ID (provider-specific). Optional — uses default if omitted.",
 			},
-			"provider": map[string]interface{}{
+			"provider": map[string]any{
 				"type":        "string",
 				"description": "TTS provider: openai, elevenlabs, edge, minimax. Optional — uses primary if omitted.",
 			},
@@ -53,7 +53,7 @@ func (t *TtsTool) Parameters() map[string]interface{} {
 // SetContext is a no-op; channel is now read from ctx (thread-safe).
 func (t *TtsTool) SetContext(channel, _ string) {}
 
-func (t *TtsTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *TtsTool) Execute(ctx context.Context, args map[string]any) *Result {
 	text, _ := args["text"].(string)
 	if text == "" {
 		return &Result{ForLLM: "error: text is required", IsError: true}

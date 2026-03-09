@@ -33,35 +33,35 @@ func (t *EvaluateLoopTool) Description() string {
 		"generator revises until approved or max rounds reached."
 }
 
-func (t *EvaluateLoopTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *EvaluateLoopTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"generator": map[string]interface{}{
+		"properties": map[string]any{
+			"generator": map[string]any{
 				"type":        "string",
 				"description": "Agent key for the content generator",
 			},
-			"evaluator": map[string]interface{}{
+			"evaluator": map[string]any{
 				"type":        "string",
 				"description": "Agent key for the quality evaluator",
 			},
-			"task": map[string]interface{}{
+			"task": map[string]any{
 				"type":        "string",
 				"description": "Initial task for the generator",
 			},
-			"max_rounds": map[string]interface{}{
+			"max_rounds": map[string]any{
 				"type":        "number",
 				"description": "Maximum generate-evaluate rounds (default 3, max 5)",
 			},
-			"pass_criteria": map[string]interface{}{
+			"pass_criteria": map[string]any{
 				"type":        "string",
 				"description": "Criteria the evaluator uses to approve/reject output",
 			},
-			"context": map[string]interface{}{
+			"context": map[string]any{
 				"type":        "string",
 				"description": "Optional additional context for both agents",
 			},
-			"team_task_id": map[string]interface{}{
+			"team_task_id": map[string]any{
 				"type":        "string",
 				"description": "Optional team task ID for auto-completion on success",
 			},
@@ -70,7 +70,7 @@ func (t *EvaluateLoopTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *EvaluateLoopTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *EvaluateLoopTool) Execute(ctx context.Context, args map[string]any) *Result {
 	generatorKey, _ := args["generator"].(string)
 	evaluatorKey, _ := args["evaluator"].(string)
 	task, _ := args["task"].(string)
@@ -81,10 +81,7 @@ func (t *EvaluateLoopTool) Execute(ctx context.Context, args map[string]interfac
 
 	maxRounds := defaultMaxRounds
 	if v, ok := args["max_rounds"].(float64); ok && int(v) > 0 {
-		maxRounds = int(v)
-		if maxRounds > maxAllowedRounds {
-			maxRounds = maxAllowedRounds
-		}
+		maxRounds = min(int(v), maxAllowedRounds)
 	}
 
 	passCriteria, _ := args["pass_criteria"].(string)

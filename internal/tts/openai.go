@@ -71,7 +71,7 @@ func (p *OpenAIProvider) Synthesize(ctx context.Context, text string, opts Optio
 		format = "mp3"
 	}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"model":           model,
 		"input":           text,
 		"voice":           voice,

@@ -94,7 +94,7 @@ func (s *PGCronStore) ListJobs(includeDisabled bool, agentID, userID string) []s
 		 interval_ms, payload, delete_after_run, next_run_at, last_run_at, last_status, last_error,
 		 created_at, updated_at FROM cron_jobs WHERE 1=1`
 
-	var args []interface{}
+	var args []any
 	argIdx := 1
 
 	if !includeDisabled {

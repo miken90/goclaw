@@ -44,7 +44,7 @@ func NewCodexProvider(name string, tokenSource TokenSource, apiBase, defaultMode
 	}
 }
 
-func (p *CodexProvider) Name() string          { return p.name }
+func (p *CodexProvider) Name() string           { return p.name }
 func (p *CodexProvider) DefaultModel() string   { return p.defaultModel }
 func (p *CodexProvider) SupportsThinking() bool { return true }
 
@@ -97,7 +97,7 @@ func (p *CodexProvider) ChatStream(ctx context.Context, req ChatRequest, onChunk
 		if acc.name == "" {
 			continue
 		}
-		args := make(map[string]interface{})
+		args := make(map[string]any)
 		_ = json.Unmarshal([]byte(acc.rawArgs), &args)
 		result.ToolCalls = append(result.ToolCalls, ToolCall{
 			ID:        acc.callID,

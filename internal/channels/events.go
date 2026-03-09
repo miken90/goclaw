@@ -13,7 +13,7 @@ import (
 // HandleAgentEvent routes agent lifecycle events to streaming/reaction channels.
 // Called from the bus event subscriber — must be non-blocking.
 // eventType: "run.started", "chunk", "tool.call", "tool.result", "run.completed", "run.failed"
-func (m *Manager) HandleAgentEvent(eventType, runID string, payload interface{}) {
+func (m *Manager) HandleAgentEvent(eventType, runID string, payload any) {
 	val, ok := m.runs.Load(runID)
 	if !ok {
 		return
@@ -187,11 +187,11 @@ func (m *Manager) HandleAgentEvent(eventType, runID string, payload interface{})
 }
 
 // extractPayloadString extracts a string field from a payload (map[string]string or map[string]interface{}).
-func extractPayloadString(payload interface{}, key string) string {
+func extractPayloadString(payload any, key string) string {
 	switch p := payload.(type) {
 	case map[string]string:
 		return p[key]
-	case map[string]interface{}:
+	case map[string]any:
 		if v, ok := p[key].(string); ok {
 			return v
 		}
@@ -214,28 +214,28 @@ func copyRoutingMeta(src map[string]string) map[string]string {
 // toolStatusMap maps builtin tool names to user-friendly status messages.
 var toolStatusMap = map[string]string{
 	// Filesystem
-	"read_file":   "📝 Reading file...",
-	"write_file":  "📝 Writing file...",
-	"list_files":  "📝 Listing files...",
-	"edit":        "📝 Editing file...",
+	"read_file":  "📝 Reading file...",
+	"write_file": "📝 Writing file...",
+	"list_files": "📝 Listing files...",
+	"edit":       "📝 Editing file...",
 	// Runtime
 	"exec": "⚡ Running code...",
 	// Web
 	"web_search": "🔍 Searching the web...",
 	"web_fetch":  "🔍 Fetching web content...",
 	// Memory
-	"memory_search":         "🧠 Searching memory...",
-	"memory_get":            "🧠 Retrieving memory...",
+	"memory_search":          "🧠 Searching memory...",
+	"memory_get":             "🧠 Retrieving memory...",
 	"knowledge_graph_search": "🧠 Querying knowledge graph...",
 	// Media
-	"read_image":   "👁 Analyzing image...",
+	"read_image":    "👁 Analyzing image...",
 	"read_document": "📄 Reading document...",
-	"read_audio":   "🎧 Processing audio...",
-	"read_video":   "🎬 Processing video...",
-	"create_image": "🎨 Creating image...",
-	"create_video": "🎬 Creating video...",
-	"create_audio": "🎵 Creating audio...",
-	"tts":          "🔊 Generating speech...",
+	"read_audio":    "🎧 Processing audio...",
+	"read_video":    "🎬 Processing video...",
+	"create_image":  "🎨 Creating image...",
+	"create_video":  "🎬 Creating video...",
+	"create_audio":  "🎵 Creating audio...",
+	"tts":           "🔊 Generating speech...",
 	// Browser
 	"browser": "🌐 Browsing...",
 	// Delegation & teams

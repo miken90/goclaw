@@ -19,7 +19,7 @@ type BridgeTool struct {
 	toolName       string // original MCP tool name
 	registeredName string // may include prefix: "{prefix}__{toolName}"
 	description    string
-	inputSchema    map[string]interface{} // JSON Schema for parameters
+	inputSchema    map[string]any // JSON Schema for parameters
 	client         *mcpclient.Client
 	timeoutSec     int
 	connected      *atomic.Bool
@@ -73,9 +73,9 @@ func ensureMCPPrefix(prefix, serverName string) string {
 	return prefix
 }
 
-func (t *BridgeTool) Name() string                       { return t.registeredName }
-func (t *BridgeTool) Description() string                { return t.description }
-func (t *BridgeTool) Parameters() map[string]interface{} { return t.inputSchema }
+func (t *BridgeTool) Name() string               { return t.registeredName }
+func (t *BridgeTool) Description() string        { return t.description }
+func (t *BridgeTool) Parameters() map[string]any { return t.inputSchema }
 
 // ServerName returns the name of the MCP server this tool belongs to.
 func (t *BridgeTool) ServerName() string { return t.serverName }
@@ -83,7 +83,7 @@ func (t *BridgeTool) ServerName() string { return t.serverName }
 // OriginalName returns the original MCP tool name (without prefix).
 func (t *BridgeTool) OriginalName() string { return t.toolName }
 
-func (t *BridgeTool) Execute(ctx context.Context, args map[string]interface{}) *tools.Result {
+func (t *BridgeTool) Execute(ctx context.Context, args map[string]any) *tools.Result {
 	if !t.connected.Load() {
 		return tools.ErrorResult(fmt.Sprintf("MCP server %q is disconnected", t.serverName))
 	}
@@ -113,8 +113,8 @@ func (t *BridgeTool) Execute(ctx context.Context, args map[string]interface{}) *
 }
 
 // inputSchemaToMap converts mcp.ToolInputSchema to the map format expected by tools.Tool.Parameters().
-func inputSchemaToMap(schema mcpgo.ToolInputSchema) map[string]interface{} {
-	m := map[string]interface{}{
+func inputSchemaToMap(schema mcpgo.ToolInputSchema) map[string]any {
+	m := map[string]any{
 		"type": schema.Type,
 	}
 	if schema.Type == "" {

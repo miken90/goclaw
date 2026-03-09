@@ -17,29 +17,29 @@ import (
 type DynamicTool struct {
 	def       store.CustomToolDef
 	workspace string
-	params    map[string]interface{}
+	params    map[string]any
 }
 
 // NewDynamicTool creates a Tool from a DB-stored custom tool definition.
 func NewDynamicTool(def store.CustomToolDef, workspace string) *DynamicTool {
-	var params map[string]interface{}
+	var params map[string]any
 	if len(def.Parameters) > 0 {
 		json.Unmarshal(def.Parameters, &params)
 	}
 	if params == nil {
-		params = map[string]interface{}{
+		params = map[string]any{
 			"type":       "object",
-			"properties": map[string]interface{}{},
+			"properties": map[string]any{},
 		}
 	}
 	return &DynamicTool{def: def, workspace: workspace, params: params}
 }
 
-func (t *DynamicTool) Name() string                         { return t.def.Name }
-func (t *DynamicTool) Description() string                  { return t.def.Description }
-func (t *DynamicTool) Parameters() map[string]interface{}    { return t.params }
+func (t *DynamicTool) Name() string               { return t.def.Name }
+func (t *DynamicTool) Description() string        { return t.def.Description }
+func (t *DynamicTool) Parameters() map[string]any { return t.params }
 
-func (t *DynamicTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *DynamicTool) Execute(ctx context.Context, args map[string]any) *Result {
 	// Render command template with shell-escaped args
 	command := renderCommand(t.def.Command, args)
 
@@ -117,7 +117,7 @@ func (t *DynamicTool) Execute(ctx context.Context, args map[string]interface{}) 
 
 // renderCommand replaces {{.key}} placeholders with shell-escaped arg values.
 // Uses simple string replacement (NOT Go text/template) for security.
-func renderCommand(tmpl string, args map[string]interface{}) string {
+func renderCommand(tmpl string, args map[string]any) string {
 	result := tmpl
 	for key, val := range args {
 		placeholder := "{{." + key + "}}"

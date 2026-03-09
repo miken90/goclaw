@@ -1,5 +1,7 @@
 package providers
 
+import "slices"
+
 import "strings"
 
 // Unsupported schema keys by provider.
@@ -34,7 +36,7 @@ func CleanToolSchemas(providerName string, tools []ToolDefinition) []ToolDefinit
 }
 
 // CleanSchemaForProvider cleans a single parameters map for a provider.
-func CleanSchemaForProvider(providerName string, params map[string]interface{}) map[string]interface{} {
+func CleanSchemaForProvider(providerName string, params map[string]any) map[string]any {
 	removeKeys := unsupportedKeysForProvider(providerName)
 	if removeKeys == nil {
 		return params
@@ -54,21 +56,21 @@ func unsupportedKeysForProvider(name string) []string {
 }
 
 // cleanSchema recursively removes unsupported keys from a JSON Schema map.
-func cleanSchema(schema map[string]interface{}, removeKeys []string) map[string]interface{} {
+func cleanSchema(schema map[string]any, removeKeys []string) map[string]any {
 	if schema == nil {
 		return nil
 	}
 
-	result := make(map[string]interface{}, len(schema))
+	result := make(map[string]any, len(schema))
 	for k, v := range schema {
 		if shouldRemoveKey(k, removeKeys) {
 			continue
 		}
 
 		switch val := v.(type) {
-		case map[string]interface{}:
+		case map[string]any:
 			result[k] = cleanSchema(val, removeKeys)
-		case []interface{}:
+		case []any:
 			result[k] = cleanSchemaSlice(val, removeKeys)
 		default:
 			result[k] = v
@@ -78,10 +80,10 @@ func cleanSchema(schema map[string]interface{}, removeKeys []string) map[string]
 }
 
 // cleanSchemaSlice recurses into arrays (e.g. "anyOf", "oneOf", "allOf").
-func cleanSchemaSlice(items []interface{}, removeKeys []string) []interface{} {
-	result := make([]interface{}, len(items))
+func cleanSchemaSlice(items []any, removeKeys []string) []any {
+	result := make([]any, len(items))
 	for i, item := range items {
-		if m, ok := item.(map[string]interface{}); ok {
+		if m, ok := item.(map[string]any); ok {
 			result[i] = cleanSchema(m, removeKeys)
 		} else {
 			result[i] = item
@@ -91,10 +93,5 @@ func cleanSchemaSlice(items []interface{}, removeKeys []string) []interface{} {
 }
 
 func shouldRemoveKey(key string, removeKeys []string) bool {
-	for _, rk := range removeKeys {
-		if key == rk {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(removeKeys, key)
 }

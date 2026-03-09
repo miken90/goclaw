@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"slices"
 
 	"github.com/nextlevelbuilder/goclaw/internal/agent"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
@@ -34,12 +35,7 @@ func (m *AgentsMethods) isOwnerUser(userID string) bool {
 	if userID == "" {
 		return false
 	}
-	for _, id := range m.cfg.Gateway.OwnerIDs {
-		if id == userID {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(m.cfg.Gateway.OwnerIDs, userID)
 }
 
 func (m *AgentsMethods) Register(router *gateway.MethodRouter) {
@@ -74,7 +70,7 @@ func (m *AgentsMethods) handleAgent(_ context.Context, client *gateway.Client, r
 		return
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"id":        loop.ID(),
 		"isRunning": loop.IsRunning(),
 	}))
@@ -96,7 +92,7 @@ func (m *AgentsMethods) handleAgentWait(_ context.Context, client *gateway.Clien
 	}
 
 	// Return current status (blocking wait is a future enhancement).
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"id":     loop.ID(),
 		"status": "idle",
 	}))
@@ -124,12 +120,12 @@ func (m *AgentsMethods) handleList(ctx context.Context, client *gateway.Client, 
 			return
 		}
 
-		infos := make([]map[string]interface{}, 0, len(agents))
+		infos := make([]map[string]any, 0, len(agents))
 		for _, a := range agents {
 			if a.Status != store.AgentStatusActive {
 				continue
 			}
-			infos = append(infos, map[string]interface{}{
+			infos = append(infos, map[string]any{
 				"id":        a.AgentKey,
 				"name":      a.DisplayName,
 				"model":     a.Model,
@@ -139,7 +135,7 @@ func (m *AgentsMethods) handleList(ctx context.Context, client *gateway.Client, 
 				"isRunning": m.agents.IsRunning(a.AgentKey),
 			})
 		}
-		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 			"agents": infos,
 		}))
 		return
@@ -147,7 +143,7 @@ func (m *AgentsMethods) handleList(ctx context.Context, client *gateway.Client, 
 
 	// Fallback: return router-cached agents.
 	infos := m.agents.ListInfo()
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"agents": infos,
 	}))
 }

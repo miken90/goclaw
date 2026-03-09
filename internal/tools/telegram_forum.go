@@ -33,23 +33,23 @@ func (t *CreateForumTopicTool) Description() string {
 		"Returns the topic's message_thread_id which can be used for routing messages to the topic."
 }
 
-func (t *CreateForumTopicTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *CreateForumTopicTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"chat_id": map[string]interface{}{
+		"properties": map[string]any{
+			"chat_id": map[string]any{
 				"type":        "string",
 				"description": "The Telegram chat ID of the supergroup (e.g. \"-1001234567890\").",
 			},
-			"name": map[string]interface{}{
+			"name": map[string]any{
 				"type":        "string",
 				"description": "Topic name (1-128 characters).",
 			},
-			"icon_color": map[string]interface{}{
+			"icon_color": map[string]any{
 				"type":        "integer",
 				"description": "Optional icon color as RGB integer. Allowed values: 7322096, 16766590, 13338331, 9367192, 16749490, 16478047.",
 			},
-			"icon_custom_emoji_id": map[string]interface{}{
+			"icon_custom_emoji_id": map[string]any{
 				"type":        "string",
 				"description": "Optional custom emoji ID for the topic icon (requires Telegram Premium).",
 			},
@@ -58,7 +58,7 @@ func (t *CreateForumTopicTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *CreateForumTopicTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *CreateForumTopicTool) Execute(ctx context.Context, args map[string]any) *Result {
 	creator := t.provider()
 	if creator == nil {
 		return &Result{ForLLM: "Error: no Telegram channel available", IsError: true}
@@ -90,7 +90,7 @@ func (t *CreateForumTopicTool) Execute(ctx context.Context, args map[string]inte
 		return &Result{ForLLM: fmt.Sprintf("Error creating forum topic: %v", err), IsError: true}
 	}
 
-	result := map[string]interface{}{
+	result := map[string]any{
 		"message_thread_id": threadID,
 		"name":              topicName,
 		"chat_id":           chatIDStr,

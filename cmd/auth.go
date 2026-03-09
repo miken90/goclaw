@@ -39,7 +39,7 @@ func gatewayURL() string {
 }
 
 // gatewayRequest sends an authenticated request to the running gateway.
-func gatewayRequest(method, path string) (map[string]interface{}, error) {
+func gatewayRequest(method, path string) (map[string]any, error) {
 	url := gatewayURL() + path
 	req, err := http.NewRequest(method, url, nil)
 	if err != nil {
@@ -57,7 +57,7 @@ func gatewayRequest(method, path string) (map[string]interface{}, error) {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	var result map[string]interface{}
+	var result map[string]any
 	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("invalid response from gateway: %s", string(body))
 	}

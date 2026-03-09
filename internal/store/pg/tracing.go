@@ -90,9 +90,9 @@ func (s *PGTracingStore) GetTrace(ctx context.Context, traceID uuid.UUID) (*stor
 	return &d, nil
 }
 
-func buildTraceWhere(opts store.TraceListOpts) (string, []interface{}) {
+func buildTraceWhere(opts store.TraceListOpts) (string, []any) {
 	var conditions []string
-	var args []interface{}
+	var args []any
 	argIdx := 1
 
 	if opts.AgentID != nil {
@@ -289,7 +289,7 @@ func (s *PGTracingStore) BatchCreateSpans(ctx context.Context, spans []store.Spa
 	// Build multi-row INSERT
 	const cols = 24
 	valueGroups := make([]string, len(spans))
-	args := make([]interface{}, 0, len(spans)*cols)
+	args := make([]any, 0, len(spans)*cols)
 
 	for i, span := range spans {
 		if span.ID == uuid.Nil {
@@ -298,7 +298,7 @@ func (s *PGTracingStore) BatchCreateSpans(ctx context.Context, spans []store.Spa
 		}
 		base := i * cols
 		placeholders := make([]string, cols)
-		for j := 0; j < cols; j++ {
+		for j := range cols {
 			placeholders[j] = fmt.Sprintf("$%d", base+j+1)
 		}
 		valueGroups[i] = "(" + strings.Join(placeholders, ", ") + ")"
@@ -356,4 +356,3 @@ func (s *PGTracingStore) BatchUpdateTraceAggregates(ctx context.Context, traceID
 		WHERE id = $1`, traceID)
 	return err
 }
-

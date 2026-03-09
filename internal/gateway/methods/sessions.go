@@ -48,7 +48,7 @@ func (m *SessionsMethods) handleList(_ context.Context, client *gateway.Client, 
 		Limit:   params.Limit,
 		Offset:  params.Offset,
 	})
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"sessions": result.Sessions,
 		"total":    result.Total,
 		"limit":    params.Limit,
@@ -71,7 +71,7 @@ func (m *SessionsMethods) handlePreview(ctx context.Context, client *gateway.Cli
 	history := m.sessions.GetHistory(params.Key)
 	summary := m.sessions.GetSummary(params.Key)
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"key":      params.Key,
 		"messages": history,
 		"summary":  summary,
@@ -116,7 +116,7 @@ func (m *SessionsMethods) handlePatch(ctx context.Context, client *gateway.Clien
 	// Save changes to DB
 	m.sessions.Save(params.Key)
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"ok":  true,
 		"key": params.Key,
 	}))
@@ -135,7 +135,7 @@ func (m *SessionsMethods) handleDelete(ctx context.Context, client *gateway.Clie
 		return
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"ok": true,
 	}))
 }
@@ -150,7 +150,7 @@ func (m *SessionsMethods) handleReset(ctx context.Context, client *gateway.Clien
 
 	m.sessions.Reset(params.Key)
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"ok": true,
 	}))
 }

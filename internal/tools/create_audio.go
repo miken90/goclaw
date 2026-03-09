@@ -22,8 +22,8 @@ var audioGenModelDefaults = map[string]string{
 
 // CreateAudioTool generates music or sound effects using AI audio generation APIs.
 type CreateAudioTool struct {
-	registry         *providers.Registry
-	elevenlabsAPIKey string
+	registry          *providers.Registry
+	elevenlabsAPIKey  string
 	elevenlabsBaseURL string
 }
 
@@ -31,8 +31,8 @@ type CreateAudioTool struct {
 // elevenlabsKey and elevenlabsBase are used for ElevenLabs sound effects generation.
 func NewCreateAudioTool(registry *providers.Registry, elevenlabsKey, elevenlabsBase string) *CreateAudioTool {
 	return &CreateAudioTool{
-		registry:         registry,
-		elevenlabsAPIKey: elevenlabsKey,
+		registry:          registry,
+		elevenlabsAPIKey:  elevenlabsKey,
 		elevenlabsBaseURL: elevenlabsBase,
 	}
 }
@@ -43,31 +43,31 @@ func (t *CreateAudioTool) Description() string {
 	return "Generate music, sound effects, or ambient audio from a text description. Returns a MEDIA: path to the generated audio file. Note: for music, duration is determined by lyrics length — provide longer/shorter lyrics to control length. The 'duration' parameter only applies to sound effects."
 }
 
-func (t *CreateAudioTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *CreateAudioTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"prompt": map[string]interface{}{
+		"properties": map[string]any{
+			"prompt": map[string]any{
 				"type":        "string",
 				"description": "Description of audio to generate.",
 			},
-			"type": map[string]interface{}{
+			"type": map[string]any{
 				"type":        "string",
 				"description": "Type of audio: 'music' (default) or 'sound_effect'.",
 			},
-			"duration": map[string]interface{}{
+			"duration": map[string]any{
 				"type":        "integer",
 				"description": "Duration in seconds (only for sound effects). For music, duration is controlled by lyrics length.",
 			},
-			"lyrics": map[string]interface{}{
+			"lyrics": map[string]any{
 				"type":        "string",
 				"description": "Lyrics for music generation. Use [Verse], [Chorus] tags.",
 			},
-			"instrumental": map[string]interface{}{
+			"instrumental": map[string]any{
 				"type":        "boolean",
 				"description": "No vocals (default: false).",
 			},
-			"provider": map[string]interface{}{
+			"provider": map[string]any{
 				"type":        "string",
 				"description": "Force a specific provider (e.g. 'minimax').",
 			},
@@ -76,7 +76,7 @@ func (t *CreateAudioTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *CreateAudioTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *CreateAudioTool) Execute(ctx context.Context, args map[string]any) *Result {
 	prompt, _ := args["prompt"].(string)
 	if prompt == "" {
 		return ErrorResult("prompt is required")

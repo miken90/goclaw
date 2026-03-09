@@ -6,12 +6,13 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 )
 
-func boolPtr(b bool) *bool { return &b }
+//go:fix inline
+func boolPtr(b bool) *bool { return new(b) }
 
 func TestResolveTopicConfig_Defaults(t *testing.T) {
 	cfg := config.TelegramConfig{
 		GroupPolicy:    "open",
-		RequireMention: boolPtr(true),
+		RequireMention: new(true),
 		AllowFrom:      []string{"user1"},
 	}
 
@@ -37,7 +38,7 @@ func TestResolveTopicConfig_WildcardGroup(t *testing.T) {
 		Groups: map[string]*config.TelegramGroupConfig{
 			"*": {
 				GroupPolicy:    "allowlist",
-				RequireMention: boolPtr(false),
+				RequireMention: new(false),
 				AllowFrom:      []string{"admin1"},
 			},
 		},
@@ -62,7 +63,7 @@ func TestResolveTopicConfig_SpecificGroupOverridesWildcard(t *testing.T) {
 		Groups: map[string]*config.TelegramGroupConfig{
 			"*": {
 				GroupPolicy:    "allowlist",
-				RequireMention: boolPtr(false),
+				RequireMention: new(false),
 				AllowFrom:      []string{"admin1"},
 				SystemPrompt:   "wildcard prompt",
 			},
@@ -96,12 +97,12 @@ func TestResolveTopicConfig_TopicOverridesGroup(t *testing.T) {
 		GroupPolicy: "open",
 		Groups: map[string]*config.TelegramGroupConfig{
 			"-100123": {
-				RequireMention: boolPtr(true),
+				RequireMention: new(true),
 				SystemPrompt:   "group prompt",
 				Skills:         []string{"skill_a", "skill_b"},
 				Topics: map[string]*config.TelegramTopicConfig{
 					"42": {
-						RequireMention: boolPtr(false),
+						RequireMention: new(false),
 						Skills:         []string{"skill_c"},
 						SystemPrompt:   "topic prompt",
 					},
@@ -171,10 +172,10 @@ func TestResolveTopicConfig_DisabledTopic(t *testing.T) {
 	cfg := config.TelegramConfig{
 		Groups: map[string]*config.TelegramGroupConfig{
 			"-100123": {
-				Enabled: boolPtr(true),
+				Enabled: new(true),
 				Topics: map[string]*config.TelegramTopicConfig{
 					"42": {
-						Enabled: boolPtr(false),
+						Enabled: new(false),
 					},
 				},
 			},
@@ -230,7 +231,7 @@ func TestEffectiveRequireMention(t *testing.T) {
 	}
 
 	// explicit requireMention overrides default
-	r2 := resolvedTopicConfig{requireMention: boolPtr(false)}
+	r2 := resolvedTopicConfig{requireMention: new(false)}
 	if r2.effectiveRequireMention(true) != false {
 		t.Error("effectiveRequireMention(true) with override=false should be false")
 	}

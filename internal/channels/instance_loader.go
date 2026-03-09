@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"sync"
 	"time"
 
@@ -146,7 +147,7 @@ func coerceStringBools(data json.RawMessage) json.RawMessage {
 	if len(data) == 0 {
 		return data
 	}
-	var m map[string]interface{}
+	var m map[string]any
 	if json.Unmarshal(data, &m) != nil {
 		return data
 	}
@@ -176,9 +177,7 @@ func (l *InstanceLoader) LoadedNames() map[string]struct{} {
 	defer l.mu.Unlock()
 
 	result := make(map[string]struct{}, len(l.loaded))
-	for k, v := range l.loaded {
-		result[k] = v
-	}
+	maps.Copy(result, l.loaded)
 	return result
 }
 

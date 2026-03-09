@@ -12,6 +12,7 @@
 package permissions
 
 import (
+	"slices"
 	"strings"
 	"sync"
 
@@ -90,25 +91,15 @@ func (pe *PolicyEngine) CanAccessWithScopes(scopes []Scope, method string) bool 
 
 // RoleFromScopes determines the effective role from a set of scopes.
 func RoleFromScopes(scopes []Scope) Role {
-	for _, s := range scopes {
-		if s == ScopeAdmin {
-			return RoleAdmin
-		}
+	if slices.Contains(scopes, ScopeAdmin) {
+		return RoleAdmin
 	}
-	hasWrite := false
-	for _, s := range scopes {
-		if s == ScopeWrite {
-			hasWrite = true
-			break
-		}
-	}
+	hasWrite := slices.Contains(scopes, ScopeWrite)
 	if hasWrite {
 		return RoleOperator
 	}
-	for _, s := range scopes {
-		if s == ScopeRead {
-			return RoleViewer
-		}
+	if slices.Contains(scopes, ScopeRead) {
+		return RoleViewer
 	}
 	return RoleViewer
 }
@@ -166,12 +157,7 @@ func isAdminMethod(method string) bool {
 		protocol.MethodTeamsDelete,
 		protocol.MethodTeamsTaskList,
 	}
-	for _, m := range adminMethods {
-		if method == m {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(adminMethods, method)
 }
 
 func isWriteMethod(method string) bool {

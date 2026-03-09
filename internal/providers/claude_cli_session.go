@@ -131,7 +131,7 @@ func extractFromMessages(msgs []Message) (systemPrompt, userMsg string, images [
 }
 
 // extractStringOpt gets a string value from Options map by key.
-func extractStringOpt(opts map[string]interface{}, key string) string {
+func extractStringOpt(opts map[string]any, key string) string {
 	if opts == nil {
 		return ""
 	}
@@ -144,7 +144,7 @@ func extractStringOpt(opts map[string]interface{}, key string) string {
 }
 
 // extractBoolOpt gets a bool value from Options map by key.
-func extractBoolOpt(opts map[string]interface{}, key string) bool {
+func extractBoolOpt(opts map[string]any, key string) bool {
 	if opts == nil {
 		return false
 	}
@@ -157,7 +157,7 @@ func extractBoolOpt(opts map[string]interface{}, key string) bool {
 }
 
 // bridgeContextFromOpts builds a BridgeContext from the Options map.
-func bridgeContextFromOpts(opts map[string]interface{}) BridgeContext {
+func bridgeContextFromOpts(opts map[string]any) BridgeContext {
 	return BridgeContext{
 		AgentID:  extractStringOpt(opts, OptAgentID),
 		UserID:   extractStringOpt(opts, OptUserID),
@@ -209,12 +209,12 @@ func sessionFileExists(workDir string, sessionID uuid.UUID) bool {
 
 // buildStreamJSONInput creates stream-json stdin for vision (images + text).
 func buildStreamJSONInput(text string, images []ImageContent) *bytes.Reader {
-	var contentBlocks []map[string]interface{}
+	var contentBlocks []map[string]any
 
 	for _, img := range images {
-		contentBlocks = append(contentBlocks, map[string]interface{}{
+		contentBlocks = append(contentBlocks, map[string]any{
 			"type": "image",
-			"source": map[string]interface{}{
+			"source": map[string]any{
 				"type":       "base64",
 				"media_type": img.MimeType,
 				"data":       img.Data,
@@ -223,15 +223,15 @@ func buildStreamJSONInput(text string, images []ImageContent) *bytes.Reader {
 	}
 
 	if text != "" {
-		contentBlocks = append(contentBlocks, map[string]interface{}{
+		contentBlocks = append(contentBlocks, map[string]any{
 			"type": "text",
 			"text": text,
 		})
 	}
 
-	msg := map[string]interface{}{
+	msg := map[string]any{
 		"type": "user",
-		"message": map[string]interface{}{
+		"message": map[string]any{
 			"role":    "user",
 			"content": contentBlocks,
 		},
@@ -246,8 +246,8 @@ func filterCLIEnv(environ []string) []string {
 	var filtered []string
 	for _, e := range environ {
 		key := e
-		if idx := strings.IndexByte(e, '='); idx >= 0 {
-			key = e[:idx]
+		if before, _, ok := strings.Cut(e, "="); ok {
+			key = before
 		}
 		// Filter out variables that could cause nested CLI conflicts
 		if strings.HasPrefix(key, "CLAUDE") {

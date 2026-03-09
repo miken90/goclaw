@@ -25,7 +25,7 @@ const (
 // Returns the file name (e.g. "files/abc123") and file URI for use in generateContent.
 func geminiFileUpload(ctx context.Context, apiKey, displayName string, data []byte, mime string) (fileName, fileURI string, err error) {
 	// Step 1: Initiate resumable upload.
-	initBody, _ := json.Marshal(map[string]interface{}{
+	initBody, _ := json.Marshal(map[string]any{
 		"file": map[string]string{"display_name": displayName},
 	})
 	initReq, err := http.NewRequestWithContext(ctx, "POST", geminiUploadBase+"?key="+apiKey, bytes.NewReader(initBody))
@@ -97,7 +97,7 @@ func geminiFileUpload(ctx context.Context, apiKey, displayName string, data []by
 func geminiFilePoll(ctx context.Context, apiKey, fileName string) (fileURI string, err error) {
 	url := fmt.Sprintf("%s/%s?key=%s", geminiFilesBase, fileName, apiKey)
 
-	for i := 0; i < geminiFilePollMax; i++ {
+	for i := range geminiFilePollMax {
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
@@ -165,16 +165,16 @@ func geminiFileAPICall(ctx context.Context, apiKey, model, prompt string, data [
 	slog.Info("gemini file api: file active", "uri", fileURI)
 
 	// Call generateContent with file_data reference.
-	body := map[string]interface{}{
-		"contents": []map[string]interface{}{
+	body := map[string]any{
+		"contents": []map[string]any{
 			{
-				"parts": []map[string]interface{}{
-					{"file_data": map[string]interface{}{"mime_type": mime, "file_uri": fileURI}},
+				"parts": []map[string]any{
+					{"file_data": map[string]any{"mime_type": mime, "file_uri": fileURI}},
 					{"text": prompt},
 				},
 			},
 		},
-		"generationConfig": map[string]interface{}{
+		"generationConfig": map[string]any{
 			"maxOutputTokens": 16384,
 			"temperature":     0.2,
 		},

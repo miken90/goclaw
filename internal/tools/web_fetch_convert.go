@@ -10,7 +10,7 @@ import (
 
 // extractJSON pretty-prints JSON content.
 func extractJSON(body []byte) (string, string) {
-	var data interface{}
+	var data any
 	if err := json.Unmarshal(body, &data); err == nil {
 		formatted, _ := json.MarshalIndent(data, "", "  ")
 		return string(formatted), "json"
@@ -55,7 +55,7 @@ var skipElements = map[atom.Atom]bool{
 	atom.Nav:      true,
 	atom.Footer:   true,
 	atom.Picture:  true,
-	atom.Source:    true,
+	atom.Source:   true,
 }
 
 // Additional elements to skip in text mode only.

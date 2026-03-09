@@ -29,8 +29,8 @@ func dashScopeImageEndpoint(apiBase string) string {
 		"/openai",
 		"/v1",
 	} {
-		if strings.HasSuffix(base, suffix) {
-			base = strings.TrimSuffix(base, suffix)
+		if before, ok := strings.CutSuffix(base, suffix); ok {
+			base = before
 			break
 		}
 	}
@@ -48,8 +48,8 @@ func dashScopeTaskEndpoint(apiBase, taskID string) string {
 		"/openai",
 		"/v1",
 	} {
-		if strings.HasSuffix(base, suffix) {
-			base = strings.TrimSuffix(base, suffix)
+		if before, ok := strings.CutSuffix(base, suffix); ok {
+			base = before
 			break
 		}
 	}
@@ -82,14 +82,14 @@ func callDashScopeImageGen(ctx context.Context, apiKey, apiBase, model, prompt s
 
 	endpoint := dashScopeImageEndpoint(apiBase)
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"model": model,
-		"input": map[string]interface{}{
-			"messages": []map[string]interface{}{
+		"input": map[string]any{
+			"messages": []map[string]any{
 				{"role": "user", "content": prompt},
 			},
 		},
-		"parameters": map[string]interface{}{
+		"parameters": map[string]any{
 			"n":             1,
 			"size":          size,
 			"prompt_extend": promptExtend,
@@ -162,7 +162,7 @@ func dashScopePollTask(ctx context.Context, apiKey, apiBase, taskID string, clie
 	const maxPolls = 30
 	const pollInterval = 10 * time.Second
 
-	for i := 0; i < maxPolls; i++ {
+	for i := range maxPolls {
 		select {
 		case <-ctx.Done():
 			return nil, nil, ctx.Err()

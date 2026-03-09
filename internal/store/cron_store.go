@@ -19,7 +19,7 @@ type CronJob struct {
 
 // CronSchedule defines when a job should run.
 type CronSchedule struct {
-	Kind    string `json:"kind"`              // "at", "every", "cron"
+	Kind    string `json:"kind"` // "at", "every", "cron"
 	AtMS    *int64 `json:"atMs,omitempty"`
 	EveryMS *int64 `json:"everyMs,omitempty"`
 	Expr    string `json:"expr,omitempty"`
@@ -79,10 +79,10 @@ type CronJobPatch struct {
 
 // CronEvent represents a job lifecycle event sent to subscribers.
 type CronEvent struct {
-	Action  string `json:"action"`            // "running", "completed", "error"
+	Action  string `json:"action"` // "running", "completed", "error"
 	JobID   string `json:"jobId"`
 	JobName string `json:"jobName,omitempty"`
-	Status  string `json:"status,omitempty"`  // final status for completed/error
+	Status  string `json:"status,omitempty"` // final status for completed/error
 	Error   string `json:"error,omitempty"`
 }
 
@@ -95,7 +95,7 @@ type CronStore interface {
 	UpdateJob(jobID string, patch CronJobPatch) (*CronJob, error)
 	EnableJob(jobID string, enabled bool) error
 	GetRunLog(jobID string, limit, offset int) ([]CronRunLogEntry, int)
-	Status() map[string]interface{}
+	Status() map[string]any
 
 	// Lifecycle
 	Start() error

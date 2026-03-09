@@ -69,6 +69,7 @@ cd ui/web && pnpm install && pnpm dev   # Web dashboard (dev)
 After implementing or modifying Go code, run these checks:
 
 ```bash
+go fix ./...                        # Apply Go version upgrades (run before commit)
 go build ./...                      # Compile check
 go vet ./...                        # Static analysis
 go test -race ./tests/integration/  # Integration tests with race detector

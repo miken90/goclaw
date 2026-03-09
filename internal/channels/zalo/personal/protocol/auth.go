@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -294,13 +295,13 @@ func loadLoginPage(ctx context.Context, sess *Session) (string, error) {
 }
 
 var qrHeaders = http.Header{
-	"Accept":                    {"*/*"},
-	"Content-Type":              {"application/x-www-form-urlencoded"},
-	"Sec-Fetch-Dest":            {"empty"},
-	"Sec-Fetch-Mode":            {"cors"},
-	"Sec-Fetch-Site":            {"same-origin"},
-	"Referer":                   {"https://id.zalo.me/account?continue=https%3A%2F%2Fzalo.me%2Fpc"},
-	"Referrer-Policy":           {"strict-origin-when-cross-origin"},
+	"Accept":          {"*/*"},
+	"Content-Type":    {"application/x-www-form-urlencoded"},
+	"Sec-Fetch-Dest":  {"empty"},
+	"Sec-Fetch-Mode":  {"cors"},
+	"Sec-Fetch-Site":  {"same-origin"},
+	"Referer":         {"https://id.zalo.me/account?continue=https%3A%2F%2Fzalo.me%2Fpc"},
+	"Referrer-Policy": {"strict-origin-when-cross-origin"},
 }
 
 func qrPost(ctx context.Context, sess *Session, endpoint string, formData map[string]string) (*http.Response, error) {
@@ -310,9 +311,7 @@ func qrPost(ctx context.Context, sess *Session, endpoint string, formData map[st
 		return nil, err
 	}
 	req.Header.Set("User-Agent", sess.UserAgent)
-	for k, v := range qrHeaders {
-		req.Header[k] = v
-	}
+	maps.Copy(req.Header, qrHeaders)
 	return sess.Client.Do(req)
 }
 
@@ -456,9 +455,7 @@ func qrGetUserInfo(ctx context.Context, sess *Session) (*QRUserInfo, error) {
 
 func setDefaultHeaders(req *http.Request, sess *Session) {
 	h := defaultHeaders(sess)
-	for k, v := range h {
-		req.Header[k] = v
-	}
+	maps.Copy(req.Header, h)
 }
 
 // readJSON decodes a potentially gzip/deflate-encoded JSON response.

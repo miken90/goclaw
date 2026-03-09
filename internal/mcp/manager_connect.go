@@ -269,10 +269,7 @@ func (m *Manager) tryReconnect(ctx context.Context, ss *serverState) {
 	attempt := ss.reconnAttempts
 	ss.mu.Unlock()
 
-	backoff := initialBackoff * time.Duration(1<<(attempt-1))
-	if backoff > maxBackoff {
-		backoff = maxBackoff
-	}
+	backoff := min(initialBackoff*time.Duration(1<<(attempt-1)), maxBackoff)
 
 	slog.Info("mcp.server.reconnecting",
 		"server", ss.name,

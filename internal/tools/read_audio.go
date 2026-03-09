@@ -59,15 +59,15 @@ func (t *ReadAudioTool) Description() string {
 		"Specify what you want to extract or analyze."
 }
 
-func (t *ReadAudioTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *ReadAudioTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"prompt": map[string]interface{}{
+		"properties": map[string]any{
+			"prompt": map[string]any{
 				"type":        "string",
 				"description": "What to analyze. E.g. 'Transcribe this audio', 'Summarize the conversation', 'What language is spoken?'",
 			},
-			"media_id": map[string]interface{}{
+			"media_id": map[string]any{
 				"type":        "string",
 				"description": "Optional: specific media_id from <media:audio> tag. If omitted, uses most recent audio.",
 			},
@@ -76,7 +76,7 @@ func (t *ReadAudioTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *ReadAudioTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *ReadAudioTool) Execute(ctx context.Context, args map[string]any) *Result {
 	prompt, _ := args["prompt"].(string)
 	if prompt == "" {
 		prompt = "Analyze this audio and describe its contents."

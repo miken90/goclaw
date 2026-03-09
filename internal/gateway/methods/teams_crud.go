@@ -55,7 +55,7 @@ func (m *TeamsMethods) handleGet(ctx context.Context, client *gateway.Client, re
 		return
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"team":    team,
 		"members": members,
 	}))
@@ -107,7 +107,7 @@ func (m *TeamsMethods) handleDelete(ctx context.Context, client *gateway.Client,
 		}
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{"ok": true}))
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{"ok": true}))
 
 	// Emit team.deleted event
 	if m.msgBus != nil && team != nil {
@@ -157,7 +157,7 @@ func (m *TeamsMethods) handleTaskList(ctx context.Context, client *gateway.Clien
 		return
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"tasks": tasks,
 		"count": len(tasks),
 	}))
@@ -166,8 +166,8 @@ func (m *TeamsMethods) handleTaskList(ctx context.Context, client *gateway.Clien
 // --- Update (settings) ---
 
 type teamsUpdateParams struct {
-	TeamID   string                 `json:"teamId"`
-	Settings map[string]interface{} `json:"settings"`
+	TeamID   string         `json:"teamId"`
+	Settings map[string]any `json:"settings"`
 }
 
 func (m *TeamsMethods) handleUpdate(ctx context.Context, client *gateway.Client, req *protocol.RequestFrame) {
@@ -225,7 +225,7 @@ func (m *TeamsMethods) handleUpdate(ctx context.Context, client *gateway.Client,
 
 	m.invalidateTeamCaches(ctx, teamID)
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{"ok": true}))
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{"ok": true}))
 
 	// Emit team.updated event
 	if m.msgBus != nil {
@@ -280,7 +280,7 @@ func (m *TeamsMethods) handleKnownUsers(ctx context.Context, client *gateway.Cli
 		return
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"users": users,
 	}))
 }

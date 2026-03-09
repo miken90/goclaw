@@ -107,13 +107,13 @@ func (m *Manager) GetChannel(name string) (Channel, bool) {
 }
 
 // GetStatus returns the running status of all channels.
-func (m *Manager) GetStatus() map[string]interface{} {
+func (m *Manager) GetStatus() map[string]any {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	status := make(map[string]interface{})
+	status := make(map[string]any)
 	for name, channel := range m.channels {
-		status[name] = map[string]interface{}{
+		status[name] = map[string]any{
 			"enabled": true,
 			"running": channel.IsRunning(),
 		}

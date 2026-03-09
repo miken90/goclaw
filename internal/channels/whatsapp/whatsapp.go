@@ -101,7 +101,7 @@ func (c *Channel) Send(_ context.Context, msg bus.OutboundMessage) error {
 		return fmt.Errorf("whatsapp bridge not connected")
 	}
 
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"type":    "message",
 		"to":      msg.ChatID,
 		"content": msg.Content,
@@ -188,7 +188,7 @@ func (c *Channel) listenLoop() {
 			continue
 		}
 
-		var msg map[string]interface{}
+		var msg map[string]any
 		if err := json.Unmarshal(message, &msg); err != nil {
 			slog.Warn("invalid whatsapp message JSON", "error", err)
 			continue
@@ -203,7 +203,7 @@ func (c *Channel) listenLoop() {
 
 // handleIncomingMessage processes a message received from the bridge.
 // Expected format: {"type":"message","from":"...","chat":"...","content":"...","id":"...","from_name":"...","media":[...]}
-func (c *Channel) handleIncomingMessage(msg map[string]interface{}) {
+func (c *Channel) handleIncomingMessage(msg map[string]any) {
 	senderID, ok := msg["from"].(string)
 	if !ok || senderID == "" {
 		return
@@ -244,7 +244,7 @@ func (c *Channel) handleIncomingMessage(msg map[string]interface{}) {
 	}
 
 	var media []string
-	if mediaData, ok := msg["media"].([]interface{}); ok {
+	if mediaData, ok := msg["media"].([]any); ok {
 		media = make([]string, 0, len(mediaData))
 		for _, m := range mediaData {
 			if path, ok := m.(string); ok {
@@ -368,7 +368,7 @@ func (c *Channel) sendPairingReply(senderID, chatID string) {
 		return
 	}
 
-	payload, _ := json.Marshal(map[string]interface{}{
+	payload, _ := json.Marshal(map[string]any{
 		"type":    "message",
 		"to":      chatID,
 		"content": replyText,
