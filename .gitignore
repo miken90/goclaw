@@ -41,6 +41,7 @@ history/
 plans
 release-manifest.json
 k8s-*/*
+.github/
 
 # Test credentials (never commit)
 tests/**/creds.json
