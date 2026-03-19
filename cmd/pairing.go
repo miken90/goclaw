@@ -205,7 +205,7 @@ func gatewayRPC(method string, params json.RawMessage) (*protocol.ResponseFrame,
 	defer conn.Close()
 
 	// Step 1: Send connect handshake
-	connectParams, _ := json.Marshal(map[string]interface{}{
+	connectParams, _ := json.Marshal(map[string]any{
 		"token":    cfg.Gateway.Token,
 		"protocol": protocol.ProtocolVersion,
 	})

@@ -2,13 +2,15 @@ package tools
 
 import (
 	"encoding/json"
-	"regexp"
 	"strings"
+
+	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 // extractJSON pretty-prints JSON content.
 func extractJSON(body []byte) (string, string) {
-	var data interface{}
+	var data any
 	if err := json.Unmarshal(body, &data); err == nil {
 		formatted, _ := json.MarshalIndent(data, "", "  ")
 		return string(formatted), "json"
@@ -16,173 +18,165 @@ func extractJSON(body []byte) (string, string) {
 	return string(body), "raw"
 }
 
-// --- HTML extraction utilities ---
+// --- DOM-based HTML extraction ---
 
-var (
-	reScript    = regexp.MustCompile(`(?is)<script[\s\S]*?</script>`)
-	reStyle     = regexp.MustCompile(`(?is)<style[\s\S]*?</style>`)
-	reComment   = regexp.MustCompile(`<!--[\s\S]*?-->`)
-	reNav       = regexp.MustCompile(`(?is)<nav[\s\S]*?</nav>`)
-	reFooter    = regexp.MustCompile(`(?is)<footer[\s\S]*?</footer>`)
-	reHeader    = regexp.MustCompile(`(?is)<header[\s\S]*?</header>`)
-	reTag       = regexp.MustCompile(`<[^>]+>`)
-	reMultiNL   = regexp.MustCompile(`\n{3,}`)
-	reMultiSP   = regexp.MustCompile(`[ \t]{2,}`)
-	reH1        = regexp.MustCompile(`(?i)<h1[^>]*>([\s\S]*?)</h1>`)
-	reH2        = regexp.MustCompile(`(?i)<h2[^>]*>([\s\S]*?)</h2>`)
-	reH3        = regexp.MustCompile(`(?i)<h3[^>]*>([\s\S]*?)</h3>`)
-	reH4        = regexp.MustCompile(`(?i)<h4[^>]*>([\s\S]*?)</h4>`)
-	reH5        = regexp.MustCompile(`(?i)<h5[^>]*>([\s\S]*?)</h5>`)
-	reH6        = regexp.MustCompile(`(?i)<h6[^>]*>([\s\S]*?)</h6>`)
-	reParagraph = regexp.MustCompile(`(?i)<p[^>]*>([\s\S]*?)</p>`)
-	reBreak     = regexp.MustCompile(`(?i)<br\s*/?>`)
-	reListItem  = regexp.MustCompile(`(?i)<li[^>]*>([\s\S]*?)</li>`)
-	reAnchor    = regexp.MustCompile(`(?i)<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)</a>`)
-	rePre       = regexp.MustCompile(`(?is)<pre[^>]*>([\s\S]*?)</pre>`)
-	reCode      = regexp.MustCompile(`(?i)<code[^>]*>([\s\S]*?)</code>`)
-	reStrong    = regexp.MustCompile(`(?i)<(?:strong|b)[^>]*>([\s\S]*?)</(?:strong|b)>`)
-	reEm        = regexp.MustCompile(`(?i)<(?:em|i)[^>]*>([\s\S]*?)</(?:em|i)>`)
-	reBlockq    = regexp.MustCompile(`(?is)<blockquote[^>]*>([\s\S]*?)</blockquote>`)
-	reImg       = regexp.MustCompile(`(?i)<img[^>]*alt="([^"]*)"[^>]*/?>`)
+type convertMode int
+
+const (
+	modeMarkdown convertMode = iota
+	modeText
 )
 
-// htmlToMarkdown converts HTML to a markdown-like format.
-// Not a full Readability implementation but covers common patterns.
-func htmlToMarkdown(html string) string {
-	// Remove non-content elements
-	s := reScript.ReplaceAllString(html, "")
-	s = reStyle.ReplaceAllString(s, "")
-	s = reComment.ReplaceAllString(s, "")
-	s = reNav.ReplaceAllString(s, "")
-	s = reFooter.ReplaceAllString(s, "")
-
-	// Convert headings
-	s = reH1.ReplaceAllString(s, "\n# $1\n")
-	s = reH2.ReplaceAllString(s, "\n## $1\n")
-	s = reH3.ReplaceAllString(s, "\n### $1\n")
-	s = reH4.ReplaceAllString(s, "\n#### $1\n")
-	s = reH5.ReplaceAllString(s, "\n##### $1\n")
-	s = reH6.ReplaceAllString(s, "\n###### $1\n")
-
-	// Pre/code blocks (before stripping other tags)
-	s = rePre.ReplaceAllString(s, "\n```\n$1\n```\n")
-	s = reCode.ReplaceAllString(s, "`$1`")
-
-	// Blockquotes
-	s = reBlockq.ReplaceAllStringFunc(s, func(match string) string {
-		inner := reBlockq.FindStringSubmatch(match)
-		if len(inner) < 2 {
-			return match
-		}
-		lines := strings.Split(strings.TrimSpace(inner[1]), "\n")
-		var quoted []string
-		for _, l := range lines {
-			quoted = append(quoted, "> "+strings.TrimSpace(l))
-		}
-		return "\n" + strings.Join(quoted, "\n") + "\n"
-	})
-
-	// Links: <a href="url">text</a> → [text](url)
-	s = reAnchor.ReplaceAllString(s, "[$2]($1)")
-
-	// Images: <img alt="text" ... /> → ![text]
-	s = reImg.ReplaceAllString(s, "![$1]")
-
-	// Bold/italic
-	s = reStrong.ReplaceAllString(s, "**$1**")
-	s = reEm.ReplaceAllString(s, "*$1*")
-
-	// Paragraphs and breaks
-	s = reParagraph.ReplaceAllString(s, "\n$1\n")
-	s = reBreak.ReplaceAllString(s, "\n")
-
-	// List items
-	s = reListItem.ReplaceAllString(s, "\n- $1")
-
-	// Strip remaining tags
-	s = reTag.ReplaceAllString(s, "")
-
-	// Clean up
-	s = decodeHTMLEntities(s)
-	s = reMultiNL.ReplaceAllString(s, "\n\n")
-	s = reMultiSP.ReplaceAllString(s, " ")
-
-	return strings.TrimSpace(s)
+// converter walks a parsed HTML DOM tree and emits markdown or plain text.
+type converter struct {
+	buf       strings.Builder
+	mode      convertMode
+	inPre     bool
+	listDepth int
+	listType  []atom.Atom // stack: atom.Ul / atom.Ol
+	listIndex []int       // ordered list counters
+	inLink    bool
 }
 
-// htmlToText extracts plain text from HTML content.
-func htmlToText(html string) string {
-	s := reScript.ReplaceAllString(html, "")
-	s = reStyle.ReplaceAllString(s, "")
-	s = reComment.ReplaceAllString(s, "")
-	s = reNav.ReplaceAllString(s, "")
-	s = reFooter.ReplaceAllString(s, "")
-	s = reHeader.ReplaceAllString(s, "")
+// Elements to skip entirely (element + all descendants).
+var skipElements = map[atom.Atom]bool{
+	atom.Head:     true,
+	atom.Script:   true,
+	atom.Style:    true,
+	atom.Noscript: true,
+	atom.Svg:      true,
+	atom.Template: true,
+	atom.Iframe:   true,
+	atom.Select:   true,
+	atom.Option:   true,
+	atom.Button:   true,
+	atom.Input:    true,
+	atom.Form:     true,
+	atom.Nav:      true,
+	atom.Footer:   true,
+	atom.Picture:  true,
+	atom.Source:   true,
+}
 
-	// Structural breaks
-	s = reParagraph.ReplaceAllString(s, "\n$1\n")
-	s = reBreak.ReplaceAllString(s, "\n")
-	s = reListItem.ReplaceAllString(s, "\n- $1")
+// Additional elements to skip in text mode only.
+var skipInTextMode = map[atom.Atom]bool{
+	atom.Header: true,
+	atom.Aside:  true,
+}
 
-	// Strip all tags
-	s = reTag.ReplaceAllString(s, "")
+// Block elements that need surrounding newlines.
+var blockElements = map[atom.Atom]bool{
+	atom.P: true, atom.Div: true, atom.Section: true, atom.Article: true,
+	atom.Main: true, atom.H1: true, atom.H2: true, atom.H3: true,
+	atom.H4: true, atom.H5: true, atom.H6: true, atom.Blockquote: true,
+	atom.Pre: true, atom.Ul: true, atom.Ol: true, atom.Li: true,
+	atom.Table: true, atom.Tr: true, atom.Hr: true, atom.Dl: true,
+	atom.Dt: true, atom.Dd: true, atom.Figure: true, atom.Figcaption: true,
+	atom.Details: true, atom.Summary: true, atom.Address: true,
+}
 
-	s = decodeHTMLEntities(s)
-	s = reMultiSP.ReplaceAllString(s, " ")
-	s = reMultiNL.ReplaceAllString(s, "\n\n")
+// htmlToMarkdown converts HTML to a markdown-like format using DOM parsing.
+func htmlToMarkdown(rawHTML string) string {
+	doc, err := html.Parse(strings.NewReader(rawHTML))
+	if err != nil {
+		return stripTagsFallback(rawHTML)
+	}
+	body := findBody(doc)
+	c := &converter{mode: modeMarkdown}
+	c.walkChildren(body)
+	return cleanOutput(c.buf.String())
+}
 
-	// Clean lines
-	lines := strings.Split(s, "\n")
-	var clean []string
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			clean = append(clean, line)
+// htmlToText extracts plain text from HTML content using DOM parsing.
+func htmlToText(rawHTML string) string {
+	doc, err := html.Parse(strings.NewReader(rawHTML))
+	if err != nil {
+		return stripTagsFallback(rawHTML)
+	}
+	body := findBody(doc)
+	c := &converter{mode: modeText}
+	c.walkChildren(body)
+	return cleanTextOutput(c.buf.String())
+}
+
+func (c *converter) walk(n *html.Node) {
+	switch n.Type {
+	case html.TextNode:
+		c.handleText(n)
+		return
+	case html.ElementNode:
+		// handled below
+	case html.DocumentNode:
+		c.walkChildren(n)
+		return
+	default:
+		return
+	}
+
+	// Skip hidden elements (display:none, hidden attr, aria-hidden, etc.)
+	// to prevent hidden-text prompt injection attacks.
+	if isHiddenElement(n) {
+		return
+	}
+
+	tag := n.DataAtom
+
+	if skipElements[tag] {
+		return
+	}
+	if c.mode == modeText && skipInTextMode[tag] {
+		return
+	}
+
+	switch tag {
+	case atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6:
+		c.handleHeading(n)
+	case atom.P:
+		c.handleParagraph(n)
+	case atom.A:
+		c.handleLink(n)
+	case atom.Img:
+		c.handleImage(n)
+	case atom.Pre:
+		c.handlePre(n)
+	case atom.Code:
+		c.handleCode(n)
+	case atom.Blockquote:
+		c.handleBlockquote(n)
+	case atom.Strong, atom.B:
+		c.handleStrong(n)
+	case atom.Em, atom.I:
+		c.handleEmphasis(n)
+	case atom.Br:
+		c.buf.WriteByte('\n')
+	case atom.Hr:
+		c.ensureNewline()
+		if c.mode == modeMarkdown {
+			c.buf.WriteString("---\n")
+		}
+	case atom.Ul, atom.Ol:
+		c.handleList(n)
+	case atom.Li:
+		c.handleListItem(n)
+	case atom.Table:
+		c.handleTable(n)
+	case atom.Dt:
+		c.handleDefinitionTerm(n)
+	case atom.Dd:
+		c.handleDefinitionDesc(n)
+	default:
+		if blockElements[tag] {
+			c.ensureNewline()
+			c.walkChildren(n)
+			c.ensureNewline()
+		} else {
+			c.walkChildren(n)
 		}
 	}
-	return strings.Join(clean, "\n")
 }
 
-// markdownToText strips markdown formatting for text mode.
-func markdownToText(md string) string {
-	s := md
-	// Remove headers markers
-	s = regexp.MustCompile(`(?m)^#{1,6}\s+`).ReplaceAllString(s, "")
-	// Remove bold/italic markers
-	s = strings.ReplaceAll(s, "**", "")
-	s = strings.ReplaceAll(s, "__", "")
-	// Remove inline code
-	s = regexp.MustCompile("`[^`]+`").ReplaceAllStringFunc(s, func(m string) string {
-		return strings.Trim(m, "`")
-	})
-	// Remove links: [text](url) → text
-	s = regexp.MustCompile(`\[([^\]]+)\]\([^)]+\)`).ReplaceAllString(s, "$1")
-	// Remove images
-	s = regexp.MustCompile(`!\[([^\]]*)\]\([^)]+\)`).ReplaceAllString(s, "$1")
-	// Clean whitespace
-	s = reMultiNL.ReplaceAllString(s, "\n\n")
-	return strings.TrimSpace(s)
-}
-
-// decodeHTMLEntities handles common HTML entities.
-func decodeHTMLEntities(s string) string {
-	replacer := strings.NewReplacer(
-		"&amp;", "&",
-		"&lt;", "<",
-		"&gt;", ">",
-		"&quot;", `"`,
-		"&#39;", "'",
-		"&apos;", "'",
-		"&nbsp;", " ",
-		"&mdash;", "\u2014",
-		"&ndash;", "\u2013",
-		"&laquo;", "\u00ab",
-		"&raquo;", "\u00bb",
-		"&bull;", "\u2022",
-		"&hellip;", "...",
-		"&copy;", "(c)",
-		"&reg;", "(R)",
-		"&trade;", "(TM)",
-	)
-	return replacer.Replace(s)
+func (c *converter) walkChildren(n *html.Node) {
+	for child := n.FirstChild; child != nil; child = child.NextSibling {
+		c.walk(child)
+	}
 }

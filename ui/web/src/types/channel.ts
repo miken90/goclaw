@@ -7,6 +7,7 @@ export interface ChannelInstanceData {
   config: Record<string, unknown> | null;
   enabled: boolean;
   is_default: boolean;
+  has_credentials: boolean;
   created_by: string;
   created_at: string;
   updated_at: string;

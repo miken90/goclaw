@@ -3,10 +3,11 @@ package pg
 import (
 	"fmt"
 
+	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
-// NewPGStores creates all stores backed by Postgres (managed mode).
+// NewPGStores creates all stores backed by Postgres.
 func NewPGStores(cfg store.StoreConfig) (*store.Stores, error) {
 	db, err := OpenDB(cfg.PostgresDSN)
 	if err != nil {
@@ -17,10 +18,11 @@ func NewPGStores(cfg store.StoreConfig) (*store.Stores, error) {
 
 	skillsDir := cfg.SkillsStorageDir
 	if skillsDir == "" {
-		skillsDir = "~/.goclaw/skills-store"
+		skillsDir = config.ResolvedDataDirFromEnv() + "/skills-store"
 	}
 
 	return &store.Stores{
+		DB:        db,
 		Sessions:  NewPGSessionStore(db),
 		Memory:    NewPGMemoryStore(db, memCfg),
 		Cron:      NewPGCronStore(db),
@@ -36,5 +38,14 @@ func NewPGStores(cfg store.StoreConfig) (*store.Stores, error) {
 		AgentLinks:       NewPGAgentLinkStore(db),
 		Teams:            NewPGTeamStore(db),
 		BuiltinTools:     NewPGBuiltinToolStore(db),
+		PendingMessages:  NewPGPendingMessageStore(db),
+		KnowledgeGraph:   NewPGKnowledgeGraphStore(db),
+		Contacts:         NewPGContactStore(db),
+		Activity:         NewPGActivityStore(db),
+		Snapshots:        NewPGSnapshotStore(db),
+		SecureCLI:        NewPGSecureCLIStore(db, cfg.EncryptionKey),
+		APIKeys:           NewPGAPIKeyStore(db),
+		Heartbeats:        NewPGHeartbeatStore(db),
+		ConfigPermissions: NewPGConfigPermissionStore(db),
 	}, nil
 }

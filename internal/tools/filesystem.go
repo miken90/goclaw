@@ -11,35 +11,41 @@ import (
 
 	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
 	"github.com/nextlevelbuilder/goclaw/internal/sandbox"
+	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
 // virtualSystemFiles are files dynamically injected into the system prompt.
 // They don't exist on disk — if the model tries to read them, return a hint.
 var virtualSystemFiles = map[string]string{
-	bootstrap.TeamFile:       "TEAM.md is already loaded in your system prompt. Refer to the TEAM.md section in your context above for team member information.",
-	bootstrap.DelegationFile: "DELEGATION.md is already loaded in your system prompt. Refer to the DELEGATION.md section in your context above for delegation instructions and available agents.",
+	bootstrap.TeamFile:         "TEAM.md is already loaded in your system prompt. Refer to the TEAM.md section in your context above for team member information.",
 	bootstrap.AvailabilityFile: "AVAILABILITY.md is already loaded in your system prompt. Refer to the AVAILABILITY.md section in your context above for agent availability information.",
 }
 
 // ReadFileTool reads file contents, optionally through a sandbox container.
 type ReadFileTool struct {
-	workspace       string
-	restrict        bool
-	allowedPrefixes []string              // extra allowed path prefixes (e.g. skills dirs)
-	deniedPrefixes  []string              // path prefixes to deny access to (e.g. .goclaw)
-	sandboxMgr      sandbox.Manager       // nil = direct host access
-	contextFileIntc *ContextFileInterceptor // nil = no virtual FS routing (standalone mode)
-	memIntc         *MemoryInterceptor      // nil = no memory routing (standalone mode)
+	workspace        string
+	restrict         bool
+	allowedPrefixes  []string                // extra allowed path prefixes (e.g. skills dirs)
+	deniedPrefixes   []string                // path prefixes to deny access to (e.g. .goclaw)
+	sandboxMgr       sandbox.Manager         // nil = direct host access
+	contextFileIntc  *ContextFileInterceptor // nil = no virtual FS routing
+	memIntc          *MemoryInterceptor      // nil = no memory routing
+	permStore store.ConfigPermissionStore // nil = no group read restriction
 }
 
-// SetContextFileInterceptor enables virtual FS routing for context files (managed mode).
+// SetContextFileInterceptor enables virtual FS routing for context files.
 func (t *ReadFileTool) SetContextFileInterceptor(intc *ContextFileInterceptor) {
 	t.contextFileIntc = intc
 }
 
-// SetMemoryInterceptor enables virtual FS routing for memory files (managed mode).
+// SetMemoryInterceptor enables virtual FS routing for memory files.
 func (t *ReadFileTool) SetMemoryInterceptor(intc *MemoryInterceptor) {
 	t.memIntc = intc
+}
+
+// SetConfigPermStore enables group read restriction for SOUL.md/AGENTS.md.
+func (t *ReadFileTool) SetConfigPermStore(s store.ConfigPermissionStore) {
+	t.permStore = s
 }
 
 func NewReadFileTool(workspace string, restrict bool) *ReadFileTool {
@@ -66,26 +72,36 @@ func (t *ReadFileTool) SetSandboxKey(key string) {}
 
 func (t *ReadFileTool) Name() string        { return "read_file" }
 func (t *ReadFileTool) Description() string { return "Read the contents of a file" }
-func (t *ReadFileTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *ReadFileTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"path": map[string]interface{}{
+		"properties": map[string]any{
+			"path": map[string]any{
 				"type":        "string",
-				"description": "Path to the file to read",
+				"description": "File path (relative to workspace, or absolute)",
 			},
 		},
 		"required": []string{"path"},
 	}
 }
 
-func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *Result {
 	path, _ := args["path"].(string)
 	if path == "" {
 		return ErrorResult("path is required")
 	}
 
-	// Virtual FS: route context files to DB (managed mode)
+	// Group read restriction: block non-writers from reading SOUL.md/AGENTS.md
+	if t.permStore != nil {
+		base := filepath.Base(path)
+		if base == bootstrap.SoulFile || base == bootstrap.AgentsFile {
+			if err := store.CheckFileWriterPermission(ctx, t.permStore); err != nil {
+				return ErrorResult(fmt.Sprintf("permission denied: %s is restricted in this group", base))
+			}
+		}
+	}
+
+	// Virtual FS: route context files to DB
 	if t.contextFileIntc != nil {
 		if content, handled, err := t.contextFileIntc.ReadFile(ctx, path); handled {
 			if err != nil {
@@ -105,7 +121,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 		return SilentResult(hint)
 	}
 
-	// Virtual FS: route memory files to DB (managed mode)
+	// Virtual FS: route memory files to DB
 	if t.memIntc != nil {
 		if content, handled, err := t.memIntc.ReadFile(ctx, path); handled {
 			if err != nil {
@@ -124,12 +140,13 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 		return t.executeInSandbox(ctx, path, sandboxKey)
 	}
 
-	// Host execution — use per-user workspace from context if available (managed mode)
+	// Host execution — use per-user workspace from context if available
 	workspace := ToolWorkspaceFromCtx(ctx)
 	if workspace == "" {
 		workspace = t.workspace
 	}
-	resolved, err := resolvePathWithAllowed(path, workspace, t.restrict, t.allowedPrefixes)
+	allowed := allowedWithTeamWorkspace(ctx, t.allowedPrefixes)
+	resolved, err := resolvePathWithAllowed(path, workspace, effectiveRestrict(ctx, t.restrict), allowed)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
@@ -137,9 +154,21 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]interface{})
 		return ErrorResult(err.Error())
 	}
 
+	// Block binary files — reading them wastes context with garbled data.
+	if isBinaryFileExt(resolved) {
+		ext := strings.ToLower(filepath.Ext(resolved))
+		return ErrorResult(fmt.Sprintf("cannot read binary file (%s). Use the appropriate tool: read_image for images, read_document for documents, read_audio for audio, read_video for video.", ext))
+	}
+
 	data, err := os.ReadFile(resolved)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to read file: %v", err))
+		msg := fmt.Sprintf("failed to read file: %v", err)
+		if os.IsNotExist(err) {
+			if teamWs := ToolTeamWorkspaceFromCtx(ctx); teamWs != "" && !strings.HasPrefix(resolved, teamWs) {
+				msg += fmt.Sprintf("\nHint: file may be in the team workspace. Try: read_file(path=\"%s/%s\")", teamWs, path)
+			}
+		}
+		return ErrorResult(msg)
 	}
 
 	return SilentResult(string(data))
@@ -160,11 +189,24 @@ func (t *ReadFileTool) executeInSandbox(ctx context.Context, path, sandboxKey st
 }
 
 func (t *ReadFileTool) getFsBridge(ctx context.Context, sandboxKey string) (*sandbox.FsBridge, error) {
-	sb, err := t.sandboxMgr.Get(ctx, sandboxKey, t.workspace)
+	sb, err := t.sandboxMgr.Get(ctx, sandboxKey, t.workspace, SandboxConfigFromCtx(ctx))
 	if err != nil {
 		return nil, err
 	}
 	return sandbox.NewFsBridge(sb.ID(), "/workspace"), nil
+}
+
+// allowedWithTeamWorkspace returns the allowed prefixes with team workspace appended
+// if present in context. Thread-safe: creates a new slice per request.
+func allowedWithTeamWorkspace(ctx context.Context, base []string) []string {
+	teamWs := ToolTeamWorkspaceFromCtx(ctx)
+	if teamWs == "" {
+		return base
+	}
+	out := make([]string, len(base)+1)
+	copy(out, base)
+	out[len(base)] = teamWs
+	return out
 }
 
 // resolvePathWithAllowed is like resolvePath but also allows paths under extra prefixes.
@@ -224,6 +266,29 @@ func checkDeniedPath(resolved, workspace string, deniedPrefixes []string) error 
 	return nil
 }
 
+// binaryFileExts are file extensions that should not be read as text.
+// Reading these wastes context with garbled binary data.
+var binaryFileExts = map[string]bool{
+	// Images
+	".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true,
+	".bmp": true, ".ico": true, ".tiff": true, ".tif": true,
+	// Audio
+	".mp3": true, ".wav": true, ".ogg": true, ".flac": true, ".aac": true, ".m4a": true,
+	// Video
+	".mp4": true, ".avi": true, ".mov": true, ".mkv": true, ".webm": true,
+	// Archives
+	".zip": true, ".tar": true, ".gz": true, ".bz2": true, ".7z": true, ".rar": true,
+	// Documents (binary)
+	".pdf": true, ".docx": true, ".xlsx": true, ".pptx": true,
+	// Executables
+	".exe": true, ".dll": true, ".so": true, ".dylib": true,
+}
+
+// isBinaryFileExt returns true if the file extension indicates a binary file.
+func isBinaryFileExt(path string) bool {
+	return binaryFileExts[strings.ToLower(filepath.Ext(path))]
+}
+
 // resolvePath resolves a path relative to the workspace and validates it.
 // When restrict=true, resolves symlinks to canonical paths and rejects
 // paths that escape the workspace boundary (symlink/hardlink attacks).
@@ -277,12 +342,14 @@ func resolvePath(path, workspace string, restrict bool) (string, error) {
 				}
 				real = resolved
 			} else {
-				// Truly non-existent file (not a symlink): resolve parent and re-validate.
-				parentReal, parentErr := filepath.EvalSymlinks(filepath.Dir(absResolved))
-				if parentErr != nil {
+				// Truly non-existent file (not a symlink): walk up to find the
+				// deepest existing ancestor so nested new dirs (e.g. posts/file.md)
+				// are allowed as long as an ancestor is inside the workspace.
+				ancestorReal, ancestorErr := resolveThroughExistingAncestors(absResolved)
+				if ancestorErr != nil {
 					return "", fmt.Errorf("access denied: cannot resolve path")
 				}
-				real = filepath.Join(parentReal, filepath.Base(absResolved))
+				real = ancestorReal
 			}
 		} else {
 			// Permission error or other — reject.

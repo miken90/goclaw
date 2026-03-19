@@ -1,208 +1,46 @@
 package cmd
 
 import (
-	"context"
 	"log/slog"
-	"path/filepath"
 	"strings"
-	"time"
 
-	"github.com/google/uuid"
-
-	"github.com/nextlevelbuilder/goclaw/internal/agent"
-	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
-	"github.com/nextlevelbuilder/goclaw/internal/heartbeat"
 	"github.com/nextlevelbuilder/goclaw/internal/memory"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/sandbox"
-	"github.com/nextlevelbuilder/goclaw/internal/skills"
-	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 	"github.com/nextlevelbuilder/goclaw/internal/tts"
-	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
 )
 
-// createAgentLoop creates and registers an agent Loop for the given agent ID.
-// Works for "default" and any agent in agents.list.
-func createAgentLoop(agentID string, cfg *config.Config, router *agent.Router, providerReg *providers.Registry, msgBus *bus.MessageBus, sess store.SessionStore, toolsReg *tools.Registry, toolPE *tools.PolicyEngine, contextFiles []bootstrap.ContextFile, skillsLoader *skills.Loader, hasMemory bool, sandboxMgr sandbox.Manager, agentStore store.AgentStore, ensureUserFiles agent.EnsureUserFilesFunc, contextFileLoader agent.ContextFileLoaderFunc) error {
-	agentCfg := cfg.ResolveAgent(agentID)
-
-	provider, err := providerReg.Get(agentCfg.Provider)
-	if err != nil {
-		// Fallback: try any available provider
-		names := providerReg.List()
-		if len(names) == 0 {
-			slog.Warn("no providers configured, agent will fail on first LLM call", "agent", agentID)
-			return nil
-		}
-		provider, _ = providerReg.Get(names[0])
-		slog.Warn("configured provider not found, using fallback", "agent", agentID, "wanted", agentCfg.Provider, "using", names[0])
-	}
-
-	if provider == nil {
-		slog.Warn("no provider available for agent", "agent", agentID)
-		return nil
-	}
-
-	workspace := config.ExpandHome(agentCfg.Workspace)
-	if !filepath.IsAbs(workspace) {
-		workspace, _ = filepath.Abs(workspace)
-	}
-
-	// Resolve sandbox info for system prompt
-	sandboxEnabled := sandboxMgr != nil
-	sandboxContainerDir := ""
-	sandboxWorkspaceAccess := ""
-	if sandboxEnabled {
-		sbCfg := agentCfg.Sandbox
-		if sbCfg == nil {
-			sbCfg = cfg.Agents.Defaults.Sandbox
-		}
-		if sbCfg != nil {
-			resolved := sbCfg.ToSandboxConfig()
-			sandboxContainerDir = resolved.ContainerWorkdir()
-			sandboxWorkspaceAccess = string(resolved.WorkspaceAccess)
-		}
-	}
-
-	// Per-agent skill allowlist.
-	// AgentSpec.Skills: nil = all skills, [] = none, ["x","y"] = only those.
-	var skillAllowList []string
-	var agentToolPolicy *config.ToolPolicySpec
-	if spec, ok := cfg.Agents.List[agentID]; ok {
-		skillAllowList = spec.Skills
-		agentToolPolicy = spec.Tools
-	}
-
-	// Resolve AgentUUID and AgentType from store (standalone mode with FileAgentStore)
-	var agentUUID uuid.UUID
-	var agentType string
-	if agentStore != nil {
-		if ad, err := agentStore.GetByKey(context.Background(), agentID); err == nil {
-			agentUUID = ad.ID
-			agentType = ad.AgentType
-		}
-	}
-
-	loop := agent.NewLoop(agent.LoopConfig{
-		ID:             agentID,
-		AgentUUID:      agentUUID,
-		AgentType:      agentType,
-		Provider:       provider,
-		Model:          agentCfg.Model,
-		ContextWindow:  agentCfg.ContextWindow,
-		MaxIterations:  agentCfg.MaxToolIterations,
-		Workspace:      workspace,
-		Bus:            msgBus,
-		Sessions:       sess,
-		Tools:          toolsReg,
-		ToolPolicy:      toolPE,
-		AgentToolPolicy: agentToolPolicy,
-		OwnerIDs:       cfg.Gateway.OwnerIDs,
-		SkillsLoader:   skillsLoader,
-		SkillAllowList: skillAllowList,
-		HasMemory:      hasMemory,
-		ContextFiles:      contextFiles,
-		EnsureUserFiles:   ensureUserFiles,
-		ContextFileLoader: contextFileLoader,
-		BootstrapCleanup:  buildBootstrapCleanup(agentStore),
-		CompactionCfg:      cfg.Agents.Defaults.Compaction,
-		ContextPruningCfg:  cfg.Agents.Defaults.ContextPruning,
-		SandboxEnabled:         sandboxEnabled,
-		SandboxContainerDir:    sandboxContainerDir,
-		SandboxWorkspaceAccess: sandboxWorkspaceAccess,
-		InjectionAction:        cfg.Gateway.InjectionAction,
-		MaxMessageChars:        cfg.Gateway.MaxMessageChars,
-		OnEvent: func(event agent.AgentEvent) {
-			msgBus.Broadcast(bus.Event{
-				Name:    protocol.EventAgent,
-				Payload: event,
-			})
-		},
-	})
-
-	router.Register(loop)
-	slog.Info("created agent", "agent", agentID, "model", agentCfg.Model, "provider", agentCfg.Provider)
-	return nil
-}
-
-func setupMemory(workspace string, appCfg *config.Config) *memory.Manager {
-	memCfg := appCfg.Agents.Defaults.Memory
-
-	// Check if explicitly disabled
-	if memCfg != nil && memCfg.Enabled != nil && !*memCfg.Enabled {
-		slog.Info("memory system disabled by config")
-		return nil
-	}
-
-	mgrCfg := memory.DefaultManagerConfig(workspace)
-
-	// Apply config overrides
-	if memCfg != nil {
-		if memCfg.MaxResults > 0 {
-			mgrCfg.MaxResults = memCfg.MaxResults
-		}
-		if memCfg.MaxChunkLen > 0 {
-			mgrCfg.MaxChunkLen = memCfg.MaxChunkLen
-		}
-		if memCfg.VectorWeight > 0 {
-			mgrCfg.VectorWeight = memCfg.VectorWeight
-		}
-		if memCfg.TextWeight > 0 {
-			mgrCfg.TextWeight = memCfg.TextWeight
-		}
-	}
-
-	mgr, err := memory.NewManager(mgrCfg)
-	if err != nil {
-		slog.Warn("memory system unavailable", "error", err)
-		return nil
-	}
-
-	// Auto-wire embedding provider (matching TS priority: openai → openrouter → gemini)
-	provider := resolveEmbeddingProvider(appCfg, memCfg)
-	if provider != nil {
-		mgr.SetEmbeddingProvider(provider)
-		slog.Info("memory embeddings enabled", "provider", provider.Name(), "model", provider.Model())
-	} else {
-		slog.Info("memory embeddings disabled (no API key), FTS-only mode")
-	}
-
-	// Index existing memory files on startup
-	ctx := context.Background()
-	if err := mgr.IndexAll(ctx); err != nil {
-		slog.Warn("memory initial indexing failed", "error", err)
-	}
-
-	// Start file watcher for auto re-indexing on changes
-	// (matching TS chokidar watcher with 1500ms debounce)
-	if err := mgr.StartWatcher(ctx); err != nil {
-		slog.Warn("memory file watcher unavailable", "error", err)
-	}
-
-	return mgr
-}
-
 // resolveEmbeddingProvider auto-selects an embedding provider based on config and available API keys.
-// Matching TS embedding provider auto-selection order.
-func resolveEmbeddingProvider(cfg *config.Config, memCfg *config.MemoryConfig) memory.EmbeddingProvider {
+// Resolution order:
+//  1. Explicit provider name from memCfg → hardcoded match → registry lookup (DB providers)
+//  2. Auto-detect: openai → openrouter → gemini (config-file keys)
+//
+// The optional providerReg allows resolving DB-stored provider names (e.g. "openai-embedding")
+// that don't match the hardcoded provider names.
+func resolveEmbeddingProvider(cfg *config.Config, memCfg *config.MemoryConfig, providerReg *providers.Registry) memory.EmbeddingProvider {
 	// Explicit provider in config
 	if memCfg != nil && memCfg.EmbeddingProvider != "" {
-		return createEmbeddingProvider(memCfg.EmbeddingProvider, cfg, memCfg)
+		if p := createEmbeddingProvider(memCfg.EmbeddingProvider, cfg, memCfg, providerReg); p != nil {
+			return p
+		}
+		// Explicit name set but no match — don't auto-detect, log and return nil
+		slog.Warn("embedding provider not found", "name", memCfg.EmbeddingProvider)
+		return nil
 	}
 
 	// Auto-select: openai → openrouter → gemini
 	for _, name := range []string{"openai", "openrouter", "gemini"} {
-		if p := createEmbeddingProvider(name, cfg, memCfg); p != nil {
+		if p := createEmbeddingProvider(name, cfg, memCfg, nil); p != nil {
 			return p
 		}
 	}
 	return nil
 }
 
-func createEmbeddingProvider(name string, cfg *config.Config, memCfg *config.MemoryConfig) memory.EmbeddingProvider {
+func createEmbeddingProvider(name string, cfg *config.Config, memCfg *config.MemoryConfig, providerReg *providers.Registry) memory.EmbeddingProvider {
 	model := "text-embedding-3-small"
 	apiBase := ""
 	if memCfg != nil {
@@ -243,6 +81,22 @@ func createEmbeddingProvider(name string, cfg *config.Config, memCfg *config.Mem
 		}
 		return memory.NewOpenAIEmbeddingProvider("gemini", cfg.Providers.Gemini.APIKey, "https://generativelanguage.googleapis.com/v1beta/openai", geminiModel).
 			WithDimensions(1536)
+	}
+
+	// Fallback: resolve from provider registry (DB-stored providers like "openai-embedding").
+	// Any OpenAI-compatible provider in the registry can serve embeddings.
+	if providerReg != nil {
+		if regProv, err := providerReg.Get(name); err == nil {
+			if op, ok := regProv.(*providers.OpenAIProvider); ok {
+				embBase := op.APIBase()
+				if apiBase != "" {
+					embBase = apiBase // memCfg override takes precedence
+				}
+				slog.Info("embedding provider resolved from registry", "name", name, "base", embBase, "model", model)
+				return memory.NewOpenAIEmbeddingProvider(name, op.APIKey(), embBase, model)
+			}
+			slog.Warn("embedding provider in registry is not OpenAI-compatible", "name", name)
+		}
 	}
 	return nil
 }
@@ -303,11 +157,12 @@ func setupSubagents(providerReg *providers.Registry, cfg *config.Config, msgBus 
 		return reg
 	}
 
-	return tools.NewSubagentManager(provider, agentCfg.Model, msgBus, toolsFactory, subCfg)
+	return tools.NewSubagentManager(provider, providerReg, agentCfg.Model, msgBus, toolsFactory, subCfg)
 }
 
 // setupTTS creates the TTS manager from config and registers providers.
-// Returns nil if no TTS provider has an API key configured.
+// Edge TTS is always registered (free, no API key required).
+// Always returns a non-nil manager with at least one provider.
 func setupTTS(cfg *config.Config) *tts.Manager {
 	ttsCfg := cfg.Tts
 
@@ -340,13 +195,12 @@ func setupTTS(cfg *config.Config) *tts.Manager {
 		}))
 	}
 
-	if ttsCfg.Edge.Enabled {
-		mgr.RegisterProvider(tts.NewEdgeProvider(tts.EdgeConfig{
-			Voice:     ttsCfg.Edge.Voice,
-			Rate:      ttsCfg.Edge.Rate,
-			TimeoutMs: ttsCfg.TimeoutMs,
-		}))
-	}
+	// Edge TTS is free (no API key) — always register so it's available as primary or fallback.
+	mgr.RegisterProvider(tts.NewEdgeProvider(tts.EdgeConfig{
+		Voice:     ttsCfg.Edge.Voice,
+		Rate:      ttsCfg.Edge.Rate,
+		TimeoutMs: ttsCfg.TimeoutMs,
+	}))
 
 	if key := ttsCfg.MiniMax.APIKey; key != "" {
 		mgr.RegisterProvider(tts.NewMiniMaxProvider(tts.MiniMaxConfig{
@@ -364,97 +218,4 @@ func setupTTS(cfg *config.Config) *tts.Manager {
 	}
 
 	return mgr
-}
-
-// setupHeartbeat creates and configures the heartbeat service from config.
-// Returns nil if heartbeats are disabled (every="0m" or no config).
-// Matching TS startHeartbeatRunner().
-func setupHeartbeat(cfg *config.Config, router *agent.Router, sess store.SessionStore, msgBus *bus.MessageBus, workspace string, managedStores *store.Stores) *heartbeat.Service {
-	hbCfg := cfg.Agents.Defaults.Heartbeat
-
-	// Determine interval
-	interval := heartbeat.DefaultInterval()
-	if hbCfg != nil && hbCfg.Every != "" {
-		d, err := parseDuration(hbCfg.Every)
-		if err != nil {
-			slog.Warn("heartbeat: invalid 'every' value, using default", "value", hbCfg.Every, "error", err)
-		} else {
-			interval = d
-		}
-	}
-
-	// Disabled
-	if interval <= 0 {
-		slog.Info("heartbeat disabled (every=0)")
-		return nil
-	}
-
-	agentID := resolveDefaultAgentManaged(cfg, managedStores)
-
-	svcCfg := heartbeat.Config{
-		AgentID:   agentID,
-		Interval:  interval,
-		Workspace: workspace,
-	}
-
-	if hbCfg != nil {
-		svcCfg.ActiveHours = hbCfg.ActiveHours
-		svcCfg.Model = hbCfg.Model
-		svcCfg.Target = hbCfg.Target
-		svcCfg.To = hbCfg.To
-		svcCfg.Prompt = hbCfg.Prompt
-		svcCfg.AckMaxChars = hbCfg.AckMaxChars
-		if hbCfg.Session != "" {
-			svcCfg.SessionKey = hbCfg.Session
-		}
-	}
-
-	// Build agent runner callback
-	runner := func(ctx context.Context, aID, sessionKey, message, runID string) (string, error) {
-		loop, err := router.Get(aID)
-		if err != nil {
-			return "", err
-		}
-		result, err := loop.Run(ctx, agent.RunRequest{
-			SessionKey: sessionKey,
-			Message:    message,
-			Channel:    "heartbeat",
-			RunID:      runID,
-			Stream:     false,
-		})
-		if err != nil {
-			return "", err
-		}
-		return result.Content, nil
-	}
-
-	// Build last-used resolver
-	lastUsed := func(aID string) (string, string) {
-		return sess.LastUsedChannel(aID)
-	}
-
-	return heartbeat.NewService(svcCfg, runner, msgBus, lastUsed)
-}
-
-// parseDuration parses a duration string like "30m", "1h", "0m".
-func parseDuration(s string) (time.Duration, error) {
-	return time.ParseDuration(s)
-}
-
-// resolveDefaultAgentManaged resolves the default agent ID, falling back to the
-// managed-mode DB when config returns the generic "default" (which doesn't exist
-// as a real agent in managed mode — agents live in the DB, not config).
-func resolveDefaultAgentManaged(cfg *config.Config, managedStores *store.Stores) string {
-	agentID := cfg.ResolveDefaultAgentID()
-
-	if managedStores == nil || managedStores.Agents == nil || agentID != config.DefaultAgentID {
-		return agentID
-	}
-
-	agent, err := managedStores.Agents.GetDefault(context.Background())
-	if err != nil {
-		slog.Warn("resolveDefaultAgentManaged: no default agent in DB", "error", err)
-		return agentID
-	}
-	return agent.AgentKey
 }

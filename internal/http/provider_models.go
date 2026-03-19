@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nextlevelbuilder/goclaw/internal/i18n"
+	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
 // ModelInfo is a normalized model entry returned by the list-models endpoint.
@@ -24,20 +26,33 @@ type ModelInfo struct {
 //
 //	GET /v1/providers/{id}/models
 func (h *ProvidersHandler) handleListProviderModels(w http.ResponseWriter, r *http.Request) {
+	locale := extractLocale(r)
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid provider ID"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidID, "provider")})
 		return
 	}
 
 	p, err := h.store.GetProvider(r.Context(), id)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "provider not found"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": i18n.T(locale, i18n.MsgNotFound, "provider", id.String())})
+		return
+	}
+
+	// Claude CLI doesn't need an API key — return hardcoded models
+	if p.ProviderType == store.ProviderClaudeCLI {
+		writeJSON(w, http.StatusOK, map[string]any{"models": claudeCLIModels()})
+		return
+	}
+
+	// ACP agents don't need an API key — return hardcoded models
+	if p.ProviderType == store.ProviderACP {
+		writeJSON(w, http.StatusOK, map[string]any{"models": acpModels()})
 		return
 	}
 
 	if p.APIKey == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "provider has no API key configured"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgRequired, "API key")})
 		return
 	}
 
@@ -48,14 +63,20 @@ func (h *ProvidersHandler) handleListProviderModels(w http.ResponseWriter, r *ht
 
 	switch p.ProviderType {
 	case "anthropic_native":
-		models, err = fetchAnthropicModels(ctx, p.APIKey)
+		models, err = fetchAnthropicModels(ctx, p.APIKey, h.resolveAPIBase(p))
 	case "gemini_native":
 		models, err = fetchGeminiModels(ctx, p.APIKey)
 	case "bailian":
 		models = bailianModels()
+	case "dashscope":
+		models = dashScopeModels()
+	case "minimax_native":
+		models = minimaxModels()
+	case "suno":
+		models = sunoModels()
 	default:
 		// All other types use OpenAI-compatible /models endpoint
-		apiBase := strings.TrimRight(p.APIBase, "/")
+		apiBase := strings.TrimRight(h.resolveAPIBase(p), "/")
 		if apiBase == "" {
 			apiBase = "https://api.openai.com/v1"
 		}
@@ -65,16 +86,20 @@ func (h *ProvidersHandler) handleListProviderModels(w http.ResponseWriter, r *ht
 	if err != nil {
 		slog.Warn("providers.models", "provider", p.Name, "error", err)
 		// Return empty list instead of error — provider may not support /models
-		writeJSON(w, http.StatusOK, map[string]interface{}{"models": []ModelInfo{}})
+		writeJSON(w, http.StatusOK, map[string]any{"models": []ModelInfo{}})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{"models": models})
+	writeJSON(w, http.StatusOK, map[string]any{"models": models})
 }
 
 // fetchAnthropicModels calls the Anthropic models API.
-func fetchAnthropicModels(ctx context.Context, apiKey string) ([]ModelInfo, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.anthropic.com/v1/models", nil)
+func fetchAnthropicModels(ctx context.Context, apiKey, apiBase string) ([]ModelInfo, error) {
+	base := strings.TrimRight(apiBase, "/")
+	if base == "" {
+		base = "https://api.anthropic.com/v1"
+	}
+	req, err := http.NewRequestWithContext(ctx, "GET", base+"/models", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -163,6 +188,75 @@ func bailianModels() []ModelInfo {
 	}
 }
 
+// minimaxModels returns a hardcoded list of MiniMax models.
+// MiniMax does not expose a /v1/models endpoint.
+func minimaxModels() []ModelInfo {
+	return []ModelInfo{
+		// Chat / text
+		{ID: "MiniMax-Text-01", Name: "MiniMax Text 01"},
+		{ID: "MiniMax-M1", Name: "MiniMax M1"},
+		{ID: "MiniMax-M2.5", Name: "MiniMax M2.5"},
+		// Image generation
+		{ID: "image-01", Name: "Image 01"},
+		// Video generation
+		{ID: "MiniMax-Hailuo-2.3", Name: "Hailuo Video 2.3"},
+		{ID: "MiniMax-Hailuo-2", Name: "Hailuo Video 2"},
+		{ID: "T2V-01-Director", Name: "T2V-01 Director"},
+		// Music generation
+		{ID: "music-2.5+", Name: "Music 2.5+"},
+		{ID: "music-2.5", Name: "Music 2.5"},
+		// TTS
+		{ID: "speech-02-hd", Name: "Speech 02 HD"},
+		{ID: "speech-02-turbo", Name: "Speech 02 Turbo"},
+	}
+}
+
+// dashScopeModels returns a hardcoded list of DashScope (Qwen) models.
+// DashScope does not expose a standard /v1/models endpoint.
+func dashScopeModels() []ModelInfo {
+	return []ModelInfo{
+		// Qwen3.5 series — Text Generation + Deep Thinking + Visual Understanding
+		{ID: "qwen3.5-plus", Name: "Qwen 3.5 Plus"},
+		{ID: "qwen3.5-turbo", Name: "Qwen 3.5 Turbo"},
+		// Qwen3 hosted series — Text + Thinking
+		{ID: "qwen3-max", Name: "Qwen 3 Max"},
+		{ID: "qwen3-plus", Name: "Qwen 3 Plus"},
+		{ID: "qwen3-turbo", Name: "Qwen 3 Turbo"},
+		// Image generation
+		{ID: "wan2.6-image", Name: "Wan 2.6 Image"},
+		{ID: "wan2.1-image", Name: "Wan 2.1 Image"},
+		// Video generation
+		{ID: "wan2.6-video", Name: "Wan 2.6 Video"},
+	}
+}
+
+// sunoModels returns a hardcoded list of Suno music generation models.
+func sunoModels() []ModelInfo {
+	return []ModelInfo{
+		{ID: "v4.5", Name: "Suno V4.5"},
+		{ID: "v4", Name: "Suno V4"},
+		{ID: "v3.5", Name: "Suno V3.5"},
+	}
+}
+
+// claudeCLIModels returns the model aliases accepted by the Claude CLI.
+func claudeCLIModels() []ModelInfo {
+	return []ModelInfo{
+		{ID: "sonnet", Name: "Sonnet"},
+		{ID: "opus", Name: "Opus"},
+		{ID: "haiku", Name: "Haiku"},
+	}
+}
+
+// acpModels returns the model aliases for ACP-compatible coding agents.
+func acpModels() []ModelInfo {
+	return []ModelInfo{
+		{ID: "claude", Name: "Claude"},
+		{ID: "codex", Name: "Codex"},
+		{ID: "gemini", Name: "Gemini"},
+	}
+}
+
 // fetchOpenAIModels calls an OpenAI-compatible /models endpoint.
 func fetchOpenAIModels(ctx context.Context, apiBase, apiKey string) ([]ModelInfo, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", apiBase+"/models", nil)
@@ -198,4 +292,3 @@ func fetchOpenAIModels(ctx context.Context, apiBase, apiKey string) ([]ModelInfo
 	}
 	return models, nil
 }
-

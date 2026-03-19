@@ -2,7 +2,10 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"maps"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,16 +15,42 @@ import (
 // Registry manages tool registration and execution.
 type Registry struct {
 	tools       map[string]Tool
+	aliases     map[string]string // alias name → canonical tool name
 	mu          sync.RWMutex
 	rateLimiter *ToolRateLimiter // nil = no rate limiting
 	scrubbing   bool             // scrub credentials from output (default true)
+
+	// deferredActivator is called when a tool is not in the registry but may be
+	// a deferred MCP tool. Returns true if the tool was successfully activated.
+	deferredActivator func(name string) bool
 }
 
 func NewRegistry() *Registry {
 	return &Registry{
 		tools:     make(map[string]Tool),
+		aliases:   make(map[string]string),
 		scrubbing: true, // enabled by default
 	}
+}
+
+// SetDeferredActivator registers a callback that activates deferred tools on demand.
+// Used by the MCP Manager to enable lazy activation when a deferred tool is called directly.
+func (r *Registry) SetDeferredActivator(fn func(name string) bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deferredActivator = fn
+}
+
+// TryActivateDeferred attempts to activate a named tool via the deferred activator.
+// Returns true if the tool is now in the registry (either already was or just activated).
+func (r *Registry) TryActivateDeferred(name string) bool {
+	r.mu.RLock()
+	fn := r.deferredActivator
+	r.mu.RUnlock()
+	if fn == nil {
+		return false
+	}
+	return fn(name)
 }
 
 // SetRateLimiter enables per-key tool rate limiting.
@@ -41,12 +70,44 @@ func (r *Registry) Register(tool Tool) {
 	r.tools[tool.Name()] = tool
 }
 
-// Get returns a tool by name.
+// RegisterAlias maps an alias name to a canonical tool name.
+// Rejected if alias collides with an existing real tool.
+func (r *Registry) RegisterAlias(alias, canonical string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.tools[alias]; exists {
+		slog.Warn("alias conflicts with registered tool", "alias", alias, "canonical", canonical)
+		return
+	}
+	r.aliases[alias] = canonical
+}
+
+// Aliases returns a copy of the alias map.
+func (r *Registry) Aliases() map[string]string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	cp := make(map[string]string, len(r.aliases))
+	maps.Copy(cp, r.aliases)
+	return cp
+}
+
+// resolve looks up a tool by name, checking real tools first, then aliases.
+func (r *Registry) resolve(name string) (Tool, bool) {
+	if t, ok := r.tools[name]; ok {
+		return t, true
+	}
+	if canonical, ok := r.aliases[name]; ok {
+		t, ok := r.tools[canonical]
+		return t, ok
+	}
+	return nil, false
+}
+
+// Get returns a tool by name (checks real tools first, then aliases).
 func (r *Registry) Get(name string) (Tool, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	t, ok := r.tools[name]
-	return t, ok
+	return r.resolve(name)
 }
 
 // Unregister removes a tool from the registry by name.
@@ -57,7 +118,7 @@ func (r *Registry) Unregister(name string) {
 }
 
 // Execute runs a tool by name with the given arguments.
-func (r *Registry) Execute(ctx context.Context, name string, args map[string]interface{}) *Result {
+func (r *Registry) Execute(ctx context.Context, name string, args map[string]any) *Result {
 	return r.ExecuteWithContext(ctx, name, args, "", "", "", "", nil)
 }
 
@@ -67,9 +128,9 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]int
 //
 // Context values are injected into ctx so tools can read them without mutable fields,
 // making tool instances thread-safe for concurrent execution.
-func (r *Registry) ExecuteWithContext(ctx context.Context, name string, args map[string]interface{}, channel, chatID, peerKind, sessionKey string, asyncCB AsyncCallback) *Result {
+func (r *Registry) ExecuteWithContext(ctx context.Context, name string, args map[string]any, channel, chatID, peerKind, sessionKey string, asyncCB AsyncCallback) *Result {
 	r.mu.RLock()
-	tool, ok := r.tools[name]
+	tool, ok := r.resolve(name)
 	r.mu.RUnlock()
 
 	if !ok {
@@ -88,6 +149,7 @@ func (r *Registry) ExecuteWithContext(ctx context.Context, name string, args map
 	}
 	if sessionKey != "" {
 		ctx = WithToolSandboxKey(ctx, sessionKey)
+		ctx = WithToolSessionKey(ctx, sessionKey)
 	}
 	if asyncCB != nil {
 		ctx = WithToolAsyncCB(ctx, asyncCB)
@@ -97,6 +159,21 @@ func (r *Registry) ExecuteWithContext(ctx context.Context, name string, args map
 	if r.rateLimiter != nil && sessionKey != "" {
 		if err := r.rateLimiter.Allow(sessionKey); err != nil {
 			return ErrorResult(err.Error())
+		}
+	}
+
+	// Detect empty tool call arguments — typically caused by providers truncating
+	// or dropping arguments when output is too large (e.g. DashScope with long content).
+	// Give the model an actionable hint instead of a confusing "X is required" error.
+	if len(args) == 0 {
+		if params := tool.Parameters(); params != nil {
+			if req, ok := params["required"].([]string); ok && len(req) > 0 {
+				return ErrorResult(fmt.Sprintf(
+					"Tool call had empty arguments (required: %s). "+
+						"This usually means your previous response was too long for the API to include tool parameters. "+
+						"Try again with shorter content — split into smaller parts if needed.",
+					strings.Join(req, ", ")))
+			}
 		}
 	}
 
@@ -125,18 +202,33 @@ func (r *Registry) ExecuteWithContext(ctx context.Context, name string, args map
 }
 
 // ProviderDefs returns tool definitions for LLM provider APIs.
+// Includes alias definitions (same params/description, alias name).
 func (r *Registry) ProviderDefs() []providers.ToolDefinition {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	defs := make([]providers.ToolDefinition, 0, len(r.tools))
+	defs := make([]providers.ToolDefinition, 0, len(r.tools)+len(r.aliases))
 	for _, tool := range r.tools {
 		defs = append(defs, ToProviderDef(tool))
+	}
+	for alias, canonical := range r.aliases {
+		tool, ok := r.tools[canonical]
+		if !ok {
+			continue
+		}
+		defs = append(defs, providers.ToolDefinition{
+			Type: "function",
+			Function: providers.ToolFunctionSchema{
+				Name:        alias,
+				Description: tool.Description(),
+				Parameters:  tool.Parameters(),
+			},
+		})
 	}
 	return defs
 }
 
-// List returns all registered tool names.
+// List returns all registered canonical tool names (excludes aliases).
 func (r *Registry) List() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -154,7 +246,7 @@ func (r *Registry) Count() int {
 	return len(r.tools)
 }
 
-// Clone creates a shallow copy of the registry with all registered tools.
+// Clone creates a shallow copy of the registry with all registered tools and aliases.
 // The clone shares the rate limiter (thread-safe) and scrubbing setting.
 // Used by subagent toolsFactory so subagents inherit parent tools (web_fetch, web_search, etc.).
 func (r *Registry) Clone() *Registry {
@@ -162,11 +254,11 @@ func (r *Registry) Clone() *Registry {
 	defer r.mu.RUnlock()
 	clone := &Registry{
 		tools:       make(map[string]Tool, len(r.tools)),
+		aliases:     make(map[string]string, len(r.aliases)),
 		rateLimiter: r.rateLimiter,
 		scrubbing:   r.scrubbing,
 	}
-	for name, tool := range r.tools {
-		clone.tools[name] = tool
-	}
+	maps.Copy(clone.tools, r.tools)
+	maps.Copy(clone.aliases, r.aliases)
 	return clone
 }

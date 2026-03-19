@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/google/uuid"
@@ -91,6 +92,25 @@ func (c *Channel) handleBotCommand(ctx context.Context, message *telego.Message,
 		return true
 
 	case "/reset":
+		// In group chats, only file writers can reset conversation history.
+		if isGroup && c.configPermStore != nil {
+			agentID, err := c.resolveAgentUUID(ctx)
+			if err == nil {
+				groupID := fmt.Sprintf("group:%s:%s", c.Name(), chatIDStr)
+				senderNumericID := strings.SplitN(senderID, "|", 2)[0]
+				isWriter, err := c.configPermStore.CheckPermission(ctx, agentID, groupID, "file_writer", senderNumericID)
+				if err != nil {
+					slog.Warn("security.reset_writer_check_failed", "error", err, "sender", senderNumericID)
+					// fail-open: allow reset if DB check fails
+				} else if !isWriter {
+					msg := tu.Message(chatIDObj, "Only file writers can reset conversation history in this group.")
+					setThread(msg)
+					c.bot.SendMessage(ctx, msg)
+					return true
+				}
+			}
+		}
+
 		// Fix: use correct PeerKind so the gateway consumer builds the right session key.
 		peerKind := "direct"
 		if isGroup {
@@ -170,11 +190,11 @@ func (c *Channel) handleBotCommand(ctx context.Context, message *telego.Message,
 		return true
 
 	case "/tasks":
-		c.handleTasksList(ctx, chatID, setThread)
+		c.handleTasksList(ctx, chatID, isGroup, setThread)
 		return true
 
 	case "/task_detail":
-		c.handleTaskDetail(ctx, chatID, text, setThread)
+		c.handleTaskDetail(ctx, chatID, text, isGroup, setThread)
 		return true
 
 	case "/addwriter":

@@ -9,4 +9,5 @@ type Agent interface {
 	Run(ctx context.Context, req RunRequest) (*RunResult, error)
 	IsRunning() bool
 	Model() string
+	ProviderName() string
 }

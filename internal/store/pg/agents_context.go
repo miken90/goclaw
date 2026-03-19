@@ -3,10 +3,14 @@ package pg
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"errors"
+	"path/filepath"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
@@ -81,15 +85,93 @@ func (s *PGAgentStore) DeleteUserContextFile(ctx context.Context, agentID uuid.U
 
 // --- User-Agent Profiles ---
 
-func (s *PGAgentStore) GetOrCreateUserProfile(ctx context.Context, agentID uuid.UUID, userID, workspace string) (bool, error) {
+func (s *PGAgentStore) GetOrCreateUserProfile(ctx context.Context, agentID uuid.UUID, userID, workspace, channel string) (bool, string, error) {
+	// Build workspace with channel segment for isolation.
+	// Store in portable ~ form (e.g. "~/.goclaw/agent-ws/telegram").
+	effectiveWs := config.ContractHome(workspace)
+	if channel != "" {
+		effectiveWs = filepath.Join(effectiveWs, channel)
+	}
+
 	var isInserted bool
+	var storedWorkspace sql.NullString
 	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO user_agent_profiles (agent_id, user_id, workspace, first_seen_at, last_seen_at)
 		VALUES ($1, $2, NULLIF($3, ''), NOW(), NOW())
-		ON CONFLICT (agent_id, user_id) DO UPDATE SET last_seen_at = NOW(), workspace = EXCLUDED.workspace
-		RETURNING (xmax = 0)
-	`, agentID, userID, workspace).Scan(&isInserted)
-	return isInserted, err
+		ON CONFLICT (agent_id, user_id) DO UPDATE SET last_seen_at = NOW()
+		RETURNING (xmax = 0), workspace
+	`, agentID, userID, effectiveWs).Scan(&isInserted, &storedWorkspace)
+	if err != nil {
+		return false, effectiveWs, err
+	}
+	ws := effectiveWs
+	if storedWorkspace.Valid && storedWorkspace.String != "" {
+		ws = storedWorkspace.String
+	}
+	return isInserted, ws, nil
+}
+
+// EnsureUserProfile creates a minimal user_agent_profiles row if not exists.
+// Used when admin manually adds a contact as an agent instance via the UI.
+func (s *PGAgentStore) EnsureUserProfile(ctx context.Context, agentID uuid.UUID, userID string) error {
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO user_agent_profiles (agent_id, user_id, first_seen_at, last_seen_at)
+		VALUES ($1, $2, NOW(), NOW())
+		ON CONFLICT (agent_id, user_id) DO NOTHING
+	`, agentID, userID)
+	return err
+}
+
+// --- User Instances ---
+
+func (s *PGAgentStore) ListUserInstances(ctx context.Context, agentID uuid.UUID) ([]store.UserInstanceData, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT p.user_id,
+		       TO_CHAR(p.first_seen_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS first_seen_at,
+		       TO_CHAR(p.last_seen_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS last_seen_at,
+		       COALESCE(fc.cnt, 0) AS file_count,
+		       COALESCE(p.metadata, '{}')
+		FROM user_agent_profiles p
+		LEFT JOIN (
+		    SELECT user_id, COUNT(*) AS cnt
+		    FROM user_context_files
+		    WHERE agent_id = $1
+		    GROUP BY user_id
+		) fc ON fc.user_id = p.user_id
+		WHERE p.agent_id = $1
+		ORDER BY p.last_seen_at DESC
+	`, agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []store.UserInstanceData
+	for rows.Next() {
+		var d store.UserInstanceData
+		var metaJSON []byte
+		if err := rows.Scan(&d.UserID, &d.FirstSeenAt, &d.LastSeenAt, &d.FileCount, &metaJSON); err != nil {
+			continue
+		}
+		if len(metaJSON) > 0 {
+			json.Unmarshal(metaJSON, &d.Metadata)
+		}
+		result = append(result, d)
+	}
+	return result, nil
+}
+
+func (s *PGAgentStore) UpdateUserProfileMetadata(ctx context.Context, agentID uuid.UUID, userID string, metadata map[string]string) error {
+	metaJSON, err := json.Marshal(metadata)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx,
+		`UPDATE user_agent_profiles SET metadata = COALESCE(metadata, '{}') || $3::jsonb
+		 WHERE agent_id = $1 AND user_id = $2`,
+		agentID, userID, metaJSON,
+	)
+	return err
 }
 
 // --- User Overrides ---
@@ -101,7 +183,7 @@ func (s *PGAgentStore) GetUserOverride(ctx context.Context, agentID uuid.UUID, u
 		agentID, userID,
 	).Scan(&d.AgentID, &d.UserID, &d.Provider, &d.Model)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil // not found = no override
 		}
 		return nil, nil

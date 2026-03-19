@@ -10,17 +10,17 @@ func TestCleanToolSchemas_Gemini(t *testing.T) {
 		Function: ToolFunctionSchema{
 			Name:        "test",
 			Description: "desc",
-			Parameters: map[string]interface{}{
+			Parameters: map[string]any{
 				"type": "object",
-				"properties": map[string]interface{}{
-					"name": map[string]interface{}{
+				"properties": map[string]any{
+					"name": map[string]any{
 						"type":    "string",
 						"default": "world",
 					},
 				},
-				"$defs":                map[string]interface{}{"Foo": "bar"},
+				"$defs":                map[string]any{"Foo": "bar"},
 				"additionalProperties": false,
-				"examples":             []interface{}{"a"},
+				"examples":             []any{"a"},
 			},
 		},
 	}}
@@ -43,8 +43,8 @@ func TestCleanToolSchemas_Gemini(t *testing.T) {
 	}
 
 	// Nested "default" should be removed
-	props := params["properties"].(map[string]interface{})
-	nameSchema := props["name"].(map[string]interface{})
+	props := params["properties"].(map[string]any)
+	nameSchema := props["name"].(map[string]any)
 	if _, ok := nameSchema["default"]; ok {
 		t.Error("expected nested 'default' to be removed for gemini")
 	}
@@ -54,15 +54,15 @@ func TestCleanToolSchemas_Gemini(t *testing.T) {
 }
 
 func TestCleanToolSchemas_Anthropic(t *testing.T) {
-	params := map[string]interface{}{
+	params := map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"url": map[string]interface{}{
+		"properties": map[string]any{
+			"url": map[string]any{
 				"type": "string",
 				"$ref": "#/$defs/URL",
 			},
 		},
-		"$defs":                map[string]interface{}{"URL": "..."},
+		"$defs":                map[string]any{"URL": "..."},
 		"additionalProperties": false,
 		"default":              "x",
 	}
@@ -73,8 +73,8 @@ func TestCleanToolSchemas_Anthropic(t *testing.T) {
 	if _, ok := cleaned["$defs"]; ok {
 		t.Error("expected $defs removed for anthropic")
 	}
-	props := cleaned["properties"].(map[string]interface{})
-	urlSchema := props["url"].(map[string]interface{})
+	props := cleaned["properties"].(map[string]any)
+	urlSchema := props["url"].(map[string]any)
 	if _, ok := urlSchema["$ref"]; ok {
 		t.Error("expected nested $ref removed for anthropic")
 	}
@@ -93,7 +93,7 @@ func TestCleanToolSchemas_Unknown(t *testing.T) {
 		Type: "function",
 		Function: ToolFunctionSchema{
 			Name: "test",
-			Parameters: map[string]interface{}{
+			Parameters: map[string]any{
 				"$ref":    "something",
 				"default": "val",
 			},
@@ -122,13 +122,13 @@ func TestCleanSchema_NilParams(t *testing.T) {
 }
 
 func TestCleanSchema_NestedArray(t *testing.T) {
-	params := map[string]interface{}{
-		"anyOf": []interface{}{
-			map[string]interface{}{
+	params := map[string]any{
+		"anyOf": []any{
+			map[string]any{
 				"type":    "string",
 				"default": "x",
 			},
-			map[string]interface{}{
+			map[string]any{
 				"type":    "number",
 				"$ref":    "#/defs/Num",
 				"default": 42,
@@ -137,12 +137,12 @@ func TestCleanSchema_NestedArray(t *testing.T) {
 	}
 
 	cleaned := CleanSchemaForProvider("gemini", params)
-	anyOf := cleaned["anyOf"].([]interface{})
+	anyOf := cleaned["anyOf"].([]any)
 	if len(anyOf) != 2 {
 		t.Fatalf("expected 2 items, got %d", len(anyOf))
 	}
 
-	first := anyOf[0].(map[string]interface{})
+	first := anyOf[0].(map[string]any)
 	if _, ok := first["default"]; ok {
 		t.Error("expected 'default' removed in array item")
 	}
@@ -150,7 +150,7 @@ func TestCleanSchema_NestedArray(t *testing.T) {
 		t.Error("expected 'type' to remain in array item")
 	}
 
-	second := anyOf[1].(map[string]interface{})
+	second := anyOf[1].(map[string]any)
 	if _, ok := second["$ref"]; ok {
 		t.Error("expected '$ref' removed in array item")
 	}
@@ -160,13 +160,13 @@ func TestCleanSchema_NestedArray(t *testing.T) {
 }
 
 func TestCleanSchema_DeepNesting(t *testing.T) {
-	params := map[string]interface{}{
+	params := map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"config": map[string]interface{}{
+		"properties": map[string]any{
+			"config": map[string]any{
 				"type": "object",
-				"properties": map[string]interface{}{
-					"nested": map[string]interface{}{
+				"properties": map[string]any{
+					"nested": map[string]any{
 						"type":    "string",
 						"default": "deep",
 						"$ref":    "#/deep",
@@ -177,10 +177,10 @@ func TestCleanSchema_DeepNesting(t *testing.T) {
 	}
 
 	cleaned := CleanSchemaForProvider("gemini", params)
-	props := cleaned["properties"].(map[string]interface{})
-	config := props["config"].(map[string]interface{})
-	innerProps := config["properties"].(map[string]interface{})
-	nested := innerProps["nested"].(map[string]interface{})
+	props := cleaned["properties"].(map[string]any)
+	config := props["config"].(map[string]any)
+	innerProps := config["properties"].(map[string]any)
+	nested := innerProps["nested"].(map[string]any)
 
 	if _, ok := nested["default"]; ok {
 		t.Error("expected deeply nested 'default' removed")

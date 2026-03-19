@@ -12,10 +12,20 @@ import (
 
 // ListFilesTool lists files in a directory, optionally through a sandbox container.
 type ListFilesTool struct {
-	workspace      string
-	restrict       bool
-	deniedPrefixes []string // path prefixes to deny access to (e.g. .goclaw)
-	sandboxMgr     sandbox.Manager
+	workspace       string
+	restrict        bool
+	deniedPrefixes  []string // path prefixes to deny access to (e.g. .goclaw)
+	sandboxMgr      sandbox.Manager
+	contextFileIntc *ContextFileInterceptor // unused, satisfies InterceptorAware
+	memIntc         *MemoryInterceptor      // nil = no memory routing
+}
+
+func (t *ListFilesTool) SetContextFileInterceptor(intc *ContextFileInterceptor) {
+	t.contextFileIntc = intc
+}
+
+func (t *ListFilesTool) SetMemoryInterceptor(intc *MemoryInterceptor) {
+	t.memIntc = intc
 }
 
 // DenyPaths adds path prefixes that list_files must reject/filter.
@@ -36,22 +46,35 @@ func (t *ListFilesTool) SetSandboxKey(key string) {}
 
 func (t *ListFilesTool) Name() string        { return "list_files" }
 func (t *ListFilesTool) Description() string { return "List files and directories in a path" }
-func (t *ListFilesTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *ListFilesTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"path": map[string]interface{}{
+		"properties": map[string]any{
+			"path": map[string]any{
 				"type":        "string",
-				"description": "Directory path to list (default: workspace root)",
+				"description": "Directory path (relative to workspace; omit for workspace root)",
 			},
 		},
 	}
 }
 
-func (t *ListFilesTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *ListFilesTool) Execute(ctx context.Context, args map[string]any) *Result {
 	path, _ := args["path"].(string)
 	if path == "" {
 		path = "."
+	}
+
+	// Virtual FS: route memory directory listing to DB
+	if t.memIntc != nil {
+		if listing, handled, err := t.memIntc.ListFiles(ctx, path); handled {
+			if err != nil {
+				return ErrorResult(fmt.Sprintf("failed to list memory files: %v", err))
+			}
+			if listing == "" {
+				return SilentResult("No memory files stored yet")
+			}
+			return SilentResult(listing)
+		}
 	}
 
 	// Sandbox routing (sandboxKey from ctx — thread-safe)
@@ -60,12 +83,13 @@ func (t *ListFilesTool) Execute(ctx context.Context, args map[string]interface{}
 		return t.executeInSandbox(ctx, path, sandboxKey)
 	}
 
-	// Host execution — use per-user workspace from context if available (managed mode)
+	// Host execution — use per-user workspace from context if available
 	workspace := ToolWorkspaceFromCtx(ctx)
 	if workspace == "" {
 		workspace = t.workspace
 	}
-	resolved, err := resolvePath(path, workspace, t.restrict)
+	allowed := allowedWithTeamWorkspace(ctx, nil)
+	resolved, err := resolvePathWithAllowed(path, workspace, effectiveRestrict(ctx, t.restrict), allowed)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
@@ -76,15 +100,19 @@ func (t *ListFilesTool) Execute(ctx context.Context, args map[string]interface{}
 	entries, err := os.ReadDir(resolved)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return SilentResult(fmt.Sprintf("Directory does not exist: %s", path))
+			msg := fmt.Sprintf("Directory does not exist: %s", path)
+			if teamWs := ToolTeamWorkspaceFromCtx(ctx); teamWs != "" && !strings.HasPrefix(resolved, teamWs) {
+				msg += fmt.Sprintf("\nHint: try the team workspace path: list_files(path=\"%s/%s\")", teamWs, path)
+			}
+			return SilentResult(msg)
 		}
 		return ErrorResult(fmt.Sprintf("failed to list directory: %v", err))
 	}
 
 	var sb strings.Builder
 	for _, entry := range entries {
-		// Filter out denied directories from listing
-		if entry.IsDir() && len(t.deniedPrefixes) > 0 {
+		// Filter out denied entries (both files and directories) from listing.
+		if len(t.deniedPrefixes) > 0 {
 			entryPath := filepath.Join(resolved, entry.Name())
 			if checkDeniedPath(entryPath, t.workspace, t.deniedPrefixes) != nil {
 				continue
@@ -119,7 +147,7 @@ func (t *ListFilesTool) executeInSandbox(ctx context.Context, path, sandboxKey s
 }
 
 func (t *ListFilesTool) getFsBridge(ctx context.Context, sandboxKey string) (*sandbox.FsBridge, error) {
-	sb, err := t.sandboxMgr.Get(ctx, sandboxKey, t.workspace)
+	sb, err := t.sandboxMgr.Get(ctx, sandboxKey, t.workspace, SandboxConfigFromCtx(ctx))
 	if err != nil {
 		return nil, err
 	}

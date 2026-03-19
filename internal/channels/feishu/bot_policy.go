@@ -46,7 +46,7 @@ func (c *Channel) fetchSenderName(ctx context.Context, openID string) string {
 
 // --- Policy checks ---
 
-func (c *Channel) checkGroupPolicy(senderID string) bool {
+func (c *Channel) checkGroupPolicy(senderID, chatID string) bool {
 	groupPolicy := c.cfg.GroupPolicy
 	if groupPolicy == "" {
 		groupPolicy = "open"
@@ -64,6 +64,39 @@ func (c *Channel) checkGroupPolicy(senderID string) bool {
 				return true
 			}
 		}
+		return false
+	case "pairing":
+		// Allowlist bypass (per-user)
+		inAllowList := c.HasAllowList() && c.IsAllowed(senderID)
+		inGroupAllowList := false
+		for _, allowed := range c.groupAllowList {
+			if senderID == allowed || strings.TrimPrefix(allowed, "@") == senderID {
+				inGroupAllowList = true
+				break
+			}
+		}
+		if inAllowList || inGroupAllowList {
+			return true
+		}
+
+		// Group-level pairing (one approval per group, matching Telegram pattern)
+		if _, cached := c.approvedGroups.Load(chatID); cached {
+			return true
+		}
+		groupSenderID := fmt.Sprintf("group:%s", chatID)
+		if c.pairingService != nil {
+			paired, err := c.pairingService.IsPaired(groupSenderID, c.Name())
+			if err != nil {
+				slog.Warn("security.pairing_check_failed, assuming paired (fail-open)",
+					"group_sender", groupSenderID, "channel", c.Name(), "error", err)
+				paired = true
+			}
+			if paired {
+				c.approvedGroups.Store(chatID, true)
+				return true
+			}
+		}
+		c.sendPairingReply(groupSenderID, chatID)
 		return false
 	default: // "open"
 		return true
@@ -91,7 +124,14 @@ func (c *Channel) checkDMPolicy(senderID, chatID string) bool {
 	default: // "pairing"
 		paired := false
 		if c.pairingService != nil {
-			paired = c.pairingService.IsPaired(senderID, c.Name())
+			p, err := c.pairingService.IsPaired(senderID, c.Name())
+			if err != nil {
+				slog.Warn("security.pairing_check_failed, assuming paired (fail-open)",
+					"sender_id", senderID, "channel", c.Name(), "error", err)
+				paired = true
+			} else {
+				paired = p
+			}
 		}
 		inAllowList := c.HasAllowList() && c.IsAllowed(senderID)
 
@@ -111,12 +151,12 @@ func (c *Channel) sendPairingReply(senderID, chatID string) {
 
 	// Debounce
 	if lastSent, ok := c.pairingDebounce.Load(senderID); ok {
-		if time.Since(lastSent.(time.Time)) < pairingDebounceTime {
+		if t, ok := lastSent.(time.Time); ok && time.Since(t) < pairingDebounceTime {
 			return
 		}
 	}
 
-	code, err := c.pairingService.RequestPairing(senderID, c.Name(), chatID, "default")
+	code, err := c.pairingService.RequestPairing(senderID, c.Name(), chatID, "default", nil)
 	if err != nil {
 		slog.Debug("feishu pairing request failed", "sender_id", senderID, "error", err)
 		return

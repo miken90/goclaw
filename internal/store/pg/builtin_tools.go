@@ -66,7 +66,7 @@ func (s *PGBuiltinToolStore) Update(ctx context.Context, name string, updates ma
 		switch sv := v.(type) {
 		case json.RawMessage:
 			allowed["settings"] = []byte(sv)
-		case map[string]interface{}:
+		case map[string]any:
 			b, err := json.Marshal(sv)
 			if err != nil {
 				return fmt.Errorf("marshal settings: %w", err)
@@ -85,7 +85,7 @@ func (s *PGBuiltinToolStore) Update(ctx context.Context, name string, updates ma
 
 	// Build UPDATE with name as PK (not UUID)
 	var setClauses []string
-	var args []interface{}
+	var args []any
 	i := 1
 	for col, val := range allowed {
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", col, i))
@@ -116,6 +116,11 @@ func (s *PGBuiltinToolStore) Seed(ctx context.Context, tools []store.BuiltinTool
 		   category = EXCLUDED.category,
 		   requires = EXCLUDED.requires,
 		   metadata = EXCLUDED.metadata,
+		   settings = CASE
+		     WHEN builtin_tools.settings IS NULL OR builtin_tools.settings::text IN ('{}', 'null')
+		     THEN EXCLUDED.settings
+		     ELSE builtin_tools.settings
+		   END,
 		   updated_at = EXCLUDED.updated_at`)
 	if err != nil {
 		return fmt.Errorf("prepare seed stmt: %w", err)

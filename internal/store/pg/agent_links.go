@@ -28,6 +28,20 @@ const linkSelectCols = `id, source_agent_id, target_agent_id, direction, team_id
 const linkSelectColsJoined = `l.id, l.source_agent_id, l.target_agent_id, l.direction, l.team_id, l.description,
 	l.max_concurrent, l.settings, l.status, l.created_by, l.created_at, l.updated_at`
 
+// targetTeamLeadCols detects if the "target" agent (the other side of the link) is a team lead.
+// Uses $1 = fromAgentID to determine which side is the target via CASE.
+const targetTeamLeadCols = `EXISTS(
+		SELECT 1 FROM agent_teams tl
+		WHERE tl.lead_agent_id = CASE WHEN l.source_agent_id = $1 THEN l.target_agent_id ELSE l.source_agent_id END
+		  AND tl.status = 'active'
+	 ) AS target_is_team_lead,
+	 COALESCE((
+		SELECT tl.name FROM agent_teams tl
+		WHERE tl.lead_agent_id = CASE WHEN l.source_agent_id = $1 THEN l.target_agent_id ELSE l.source_agent_id END
+		  AND tl.status = 'active'
+		LIMIT 1
+	 ), '') AS target_team_name`
+
 func (s *PGAgentLinkStore) CreateLink(ctx context.Context, link *store.AgentLinkData) error {
 	if link.ID == uuid.Nil {
 		link.ID = store.GenNewID()
@@ -77,7 +91,9 @@ func (s *PGAgentLinkStore) ListLinksFrom(ctx context.Context, agentID uuid.UUID)
 		 ta.agent_key AS target_agent_key,
 		 COALESCE(ta.display_name, '') AS target_display_name,
 		 COALESCE(ta.frontmatter, '') AS target_description,
-		 COALESCE(tm.name, '') AS team_name
+		 COALESCE(tm.name, '') AS team_name,
+		 EXISTS(SELECT 1 FROM agent_teams tl WHERE tl.lead_agent_id = l.target_agent_id AND tl.status = 'active') AS target_is_team_lead,
+		 COALESCE((SELECT tl.name FROM agent_teams tl WHERE tl.lead_agent_id = l.target_agent_id AND tl.status = 'active' LIMIT 1), '') AS target_team_name
 		 FROM agent_links l
 		 JOIN agents sa ON sa.id = l.source_agent_id
 		 JOIN agents ta ON ta.id = l.target_agent_id
@@ -98,7 +114,9 @@ func (s *PGAgentLinkStore) ListLinksTo(ctx context.Context, agentID uuid.UUID) (
 		 ta.agent_key AS target_agent_key,
 		 COALESCE(ta.display_name, '') AS target_display_name,
 		 COALESCE(ta.frontmatter, '') AS target_description,
-		 COALESCE(tm.name, '') AS team_name
+		 COALESCE(tm.name, '') AS team_name,
+		 EXISTS(SELECT 1 FROM agent_teams tl WHERE tl.lead_agent_id = l.target_agent_id AND tl.status = 'active') AS target_is_team_lead,
+		 COALESCE((SELECT tl.name FROM agent_teams tl WHERE tl.lead_agent_id = l.target_agent_id AND tl.status = 'active' LIMIT 1), '') AS target_team_name
 		 FROM agent_links l
 		 JOIN agents sa ON sa.id = l.source_agent_id
 		 JOIN agents ta ON ta.id = l.target_agent_id
@@ -134,12 +152,15 @@ func (s *PGAgentLinkStore) DelegateTargets(ctx context.Context, fromAgentID uuid
 		 CASE WHEN l.source_agent_id = $1 THEN ta.agent_key ELSE sa.agent_key END AS target_agent_key,
 		 CASE WHEN l.source_agent_id = $1 THEN COALESCE(ta.display_name, '') ELSE COALESCE(sa.display_name, '') END AS target_display_name,
 		 CASE WHEN l.source_agent_id = $1 THEN COALESCE(ta.frontmatter, '') ELSE COALESCE(sa.frontmatter, '') END AS target_description,
-		 COALESCE(tm.name, '') AS team_name
+		 COALESCE(tm.name, '') AS team_name,
+		 `+targetTeamLeadCols+`
 		 FROM agent_links l
 		 JOIN agents sa ON sa.id = l.source_agent_id
 		 JOIN agents ta ON ta.id = l.target_agent_id
 		 LEFT JOIN agent_teams tm ON tm.id = l.team_id
-		 WHERE l.status = 'active' AND (
+		 WHERE l.status = 'active'
+		   AND CASE WHEN l.source_agent_id = $1 THEN ta.status ELSE sa.status END = 'active'
+		   AND (
 			(l.source_agent_id = $1 AND l.direction IN ('outbound', 'bidirectional'))
 			OR
 			(l.target_agent_id = $1 AND l.direction IN ('inbound', 'bidirectional'))
@@ -179,12 +200,14 @@ func (s *PGAgentLinkStore) SearchDelegateTargets(ctx context.Context, fromAgentI
 		 CASE WHEN l.source_agent_id = $1 THEN ta.agent_key ELSE sa.agent_key END AS target_agent_key,
 		 CASE WHEN l.source_agent_id = $1 THEN COALESCE(ta.display_name, '') ELSE COALESCE(sa.display_name, '') END AS target_display_name,
 		 CASE WHEN l.source_agent_id = $1 THEN COALESCE(ta.frontmatter, '') ELSE COALESCE(sa.frontmatter, '') END AS target_description,
-		 COALESCE(tm.name, '') AS team_name
+		 COALESCE(tm.name, '') AS team_name,
+		 `+targetTeamLeadCols+`
 		 FROM agent_links l
 		 JOIN agents sa ON sa.id = l.source_agent_id
 		 JOIN agents ta ON ta.id = l.target_agent_id
 		 LEFT JOIN agent_teams tm ON tm.id = l.team_id
 		 WHERE l.status = 'active'
+		   AND CASE WHEN l.source_agent_id = $1 THEN ta.status ELSE sa.status END = 'active'
 		   AND (
 		     (l.source_agent_id = $1 AND l.direction IN ('outbound', 'bidirectional'))
 		     OR
@@ -211,12 +234,14 @@ func (s *PGAgentLinkStore) SearchDelegateTargetsByEmbedding(ctx context.Context,
 		 CASE WHEN l.source_agent_id = $1 THEN ta.agent_key ELSE sa.agent_key END AS target_agent_key,
 		 CASE WHEN l.source_agent_id = $1 THEN COALESCE(ta.display_name, '') ELSE COALESCE(sa.display_name, '') END AS target_display_name,
 		 CASE WHEN l.source_agent_id = $1 THEN COALESCE(ta.frontmatter, '') ELSE COALESCE(sa.frontmatter, '') END AS target_description,
-		 COALESCE(tm.name, '') AS team_name
+		 COALESCE(tm.name, '') AS team_name,
+		 `+targetTeamLeadCols+`
 		 FROM agent_links l
 		 JOIN agents sa ON sa.id = l.source_agent_id
 		 JOIN agents ta ON ta.id = l.target_agent_id
 		 LEFT JOIN agent_teams tm ON tm.id = l.team_id
 		 WHERE l.status = 'active'
+		   AND CASE WHEN l.source_agent_id = $1 THEN ta.status ELSE sa.status END = 'active'
 		   AND (
 		     (l.source_agent_id = $1 AND l.direction IN ('outbound', 'bidirectional'))
 		     OR
@@ -267,7 +292,7 @@ func scanLinkRowsJoined(rows *sql.Rows) ([]store.AgentLinkData, error) {
 			&d.ID, &d.SourceAgentID, &d.TargetAgentID, &d.Direction, &d.TeamID, &desc,
 			&d.MaxConcurrent, &d.Settings, &d.Status, &d.CreatedBy, &d.CreatedAt, &d.UpdatedAt,
 			&d.SourceAgentKey, &d.TargetAgentKey, &d.TargetDisplayName, &d.TargetDescription,
-			&d.TeamName,
+			&d.TeamName, &d.TargetIsTeamLead, &d.TargetTeamName,
 		); err != nil {
 			return nil, err
 		}

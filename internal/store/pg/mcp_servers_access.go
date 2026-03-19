@@ -63,6 +63,51 @@ func (s *PGMCPServerStore) ListAgentGrants(ctx context.Context, agentID uuid.UUI
 	return result, nil
 }
 
+func (s *PGMCPServerStore) ListServerGrants(ctx context.Context, serverID uuid.UUID) ([]store.MCPAgentGrant, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, server_id, agent_id, enabled,
+		 COALESCE(tool_allow, '[]'::jsonb), COALESCE(tool_deny, '[]'::jsonb),
+		 COALESCE(config_overrides, '{}'::jsonb), granted_by, created_at
+		 FROM mcp_agent_grants WHERE server_id = $1 ORDER BY created_at`, serverID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]store.MCPAgentGrant, 0)
+	for rows.Next() {
+		var g store.MCPAgentGrant
+		if err := rows.Scan(&g.ID, &g.ServerID, &g.AgentID, &g.Enabled,
+			&g.ToolAllow, &g.ToolDeny, &g.ConfigOverrides, &g.GrantedBy, &g.CreatedAt); err != nil {
+			continue
+		}
+		result = append(result, g)
+	}
+	return result, nil
+}
+
+// --- Counts ---
+
+func (s *PGMCPServerStore) CountAgentGrantsByServer(ctx context.Context) (map[uuid.UUID]int, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT server_id, COUNT(*) FROM mcp_agent_grants GROUP BY server_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make(map[uuid.UUID]int)
+	for rows.Next() {
+		var serverID uuid.UUID
+		var count int
+		if err := rows.Scan(&serverID, &count); err != nil {
+			continue
+		}
+		result[serverID] = count
+	}
+	return result, nil
+}
+
 // --- User Grants ---
 
 func (s *PGMCPServerStore) GrantToUser(ctx context.Context, g *store.MCPUserGrant) error {
@@ -113,15 +158,16 @@ func (s *PGMCPServerStore) ListAccessible(ctx context.Context, agentID uuid.UUID
 	}
 	defer rows.Close()
 
-	var result []store.MCPAccessInfo
+	result := make([]store.MCPAccessInfo, 0)
 	for rows.Next() {
 		var srv store.MCPServerData
 		var displayName, command, url, apiKey, toolPrefix *string
-		var toolAllowJSON, toolDenyJSON []byte
+		var args, headers, env *[]byte
+		var toolAllowJSON, toolDenyJSON *[]byte
 
 		if err := rows.Scan(
 			&srv.ID, &srv.Name, &displayName, &srv.Transport, &command,
-			&srv.Args, &url, &srv.Headers, &srv.Env,
+			&args, &url, &headers, &env,
 			&apiKey, &toolPrefix, &srv.TimeoutSec,
 			&srv.Settings, &srv.Enabled, &srv.CreatedBy, &srv.CreatedAt, &srv.UpdatedAt,
 			&toolAllowJSON, &toolDenyJSON,
@@ -132,6 +178,9 @@ func (s *PGMCPServerStore) ListAccessible(ctx context.Context, agentID uuid.UUID
 		srv.Command = derefStr(command)
 		srv.URL = derefStr(url)
 		srv.ToolPrefix = derefStr(toolPrefix)
+		srv.Args = derefBytes(args)
+		srv.Headers = s.decryptJSONB(derefBytes(headers))
+		srv.Env = s.decryptJSONB(derefBytes(env))
 		if apiKey != nil && *apiKey != "" && s.encKey != "" {
 			if decrypted, err := crypto.Decrypt(*apiKey, s.encKey); err == nil {
 				srv.APIKey = decrypted
@@ -142,10 +191,10 @@ func (s *PGMCPServerStore) ListAccessible(ctx context.Context, agentID uuid.UUID
 
 		info := store.MCPAccessInfo{Server: srv}
 		if toolAllowJSON != nil {
-			json.Unmarshal(toolAllowJSON, &info.ToolAllow)
+			json.Unmarshal(*toolAllowJSON, &info.ToolAllow)
 		}
 		if toolDenyJSON != nil {
-			json.Unmarshal(toolDenyJSON, &info.ToolDeny)
+			json.Unmarshal(*toolDenyJSON, &info.ToolDeny)
 		}
 		result = append(result, info)
 	}

@@ -1,67 +1,53 @@
 # Base docker-compose — shared service definition.
-# Combine with an overlay for your deployment mode:
+# Pre-built images: ghcr.io/nextlevelbuilder/goclaw (also on Docker Hub: digitop/goclaw)
 #
-#   Recommended (Managed + Web Dashboard):
-#     docker compose -f docker-compose.yml -f docker-compose.managed.yml -f docker-compose.selfservice.yml up -d --build
+# Combine with overlays for your deployment:
 #
-#   Standalone:    docker compose -f docker-compose.yml -f docker-compose.standalone.yml up -d --build
-#   Managed only:  docker compose -f docker-compose.yml -f docker-compose.managed.yml up -d --build
-#   Managed+OTel:  docker compose -f docker-compose.yml -f docker-compose.managed.yml -f docker-compose.otel.yml up -d --build
+#   Recommended (+ Web Dashboard, pre-built images):
+#     docker compose -f docker-compose.yml -f docker-compose.postgres.yml -f docker-compose.selfservice.yml up -d
+#
+#   Build from source (add --build):
+#     docker compose -f docker-compose.yml -f docker-compose.postgres.yml -f docker-compose.selfservice.yml up -d --build
+#
+#   Without dashboard:  docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+#   With OTel tracing:  docker compose -f docker-compose.yml -f docker-compose.postgres.yml -f docker-compose.otel.yml up -d --build
 
 services:
   goclaw:
+    image: ghcr.io/nextlevelbuilder/goclaw:latest
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        ENABLE_OTEL: "false"
+        ENABLE_OTEL: "${ENABLE_OTEL:-false}"
+        ENABLE_PYTHON: "${ENABLE_PYTHON:-true}"
+        ENABLE_FULL_SKILLS: "${ENABLE_FULL_SKILLS:-false}"
     ports:
       - "${GOCLAW_PORT:-18790}:18790"
     env_file:
       - path: .env
         required: false
     environment:
-      # Core
       - GOCLAW_HOST=0.0.0.0
       - GOCLAW_PORT=18790
       - GOCLAW_CONFIG=/app/data/config.json
       - GOCLAW_GATEWAY_TOKEN=${GOCLAW_GATEWAY_TOKEN:-}
       - GOCLAW_ENCRYPTION_KEY=${GOCLAW_ENCRYPTION_KEY:-}
-      - GOCLAW_OWNER_IDS=${GOCLAW_OWNER_IDS:-}
-      # Provider (at least one required)
-      - GOCLAW_PROVIDER=${GOCLAW_PROVIDER:-}
-      - GOCLAW_MODEL=${GOCLAW_MODEL:-}
-      - GOCLAW_OPENROUTER_API_KEY=${GOCLAW_OPENROUTER_API_KEY:-}
-      - GOCLAW_ANTHROPIC_API_KEY=${GOCLAW_ANTHROPIC_API_KEY:-}
-      - GOCLAW_ANTHROPIC_BASE_URL=${GOCLAW_ANTHROPIC_BASE_URL:-}
-      - GOCLAW_OPENAI_API_KEY=${GOCLAW_OPENAI_API_KEY:-}
-      - GOCLAW_MINIMAX_API_KEY=${GOCLAW_MINIMAX_API_KEY:-}
-      - GOCLAW_GROQ_API_KEY=${GOCLAW_GROQ_API_KEY:-}
-      - GOCLAW_DEEPSEEK_API_KEY=${GOCLAW_DEEPSEEK_API_KEY:-}
-      - GOCLAW_GEMINI_API_KEY=${GOCLAW_GEMINI_API_KEY:-}
-      - GOCLAW_MISTRAL_API_KEY=${GOCLAW_MISTRAL_API_KEY:-}
-      - GOCLAW_XAI_API_KEY=${GOCLAW_XAI_API_KEY:-}
-      - GOCLAW_COHERE_API_KEY=${GOCLAW_COHERE_API_KEY:-}
-      - GOCLAW_PERPLEXITY_API_KEY=${GOCLAW_PERPLEXITY_API_KEY:-}
-      # Channels
-      - GOCLAW_TELEGRAM_TOKEN=${GOCLAW_TELEGRAM_TOKEN:-}
-      - GOCLAW_DISCORD_TOKEN=${GOCLAW_DISCORD_TOKEN:-}
-      - GOCLAW_LARK_APP_ID=${GOCLAW_LARK_APP_ID:-}
-      - GOCLAW_LARK_APP_SECRET=${GOCLAW_LARK_APP_SECRET:-}
-      - GOCLAW_LARK_ENCRYPT_KEY=${GOCLAW_LARK_ENCRYPT_KEY:-}
-      - GOCLAW_LARK_VERIFICATION_TOKEN=${GOCLAW_LARK_VERIFICATION_TOKEN:-}
-      - GOCLAW_ZALO_TOKEN=${GOCLAW_ZALO_TOKEN:-}
-      - GOCLAW_WHATSAPP_BRIDGE_URL=${GOCLAW_WHATSAPP_BRIDGE_URL:-}
+      - GOCLAW_SKILLS_DIR=/app/data/skills
       # Debug
       - GOCLAW_TRACE_VERBOSE=${GOCLAW_TRACE_VERBOSE:-0}
     volumes:
       - goclaw-data:/app/data
-      - goclaw-workspace:/app/workspace  # standalone mode workspace
+      - goclaw-workspace:/app/workspace
     security_opt:
       - no-new-privileges:true
+    init: true
     cap_drop:
       - ALL
-    read_only: true
+    cap_add:
+      - SETUID
+      - SETGID
+      - CHOWN
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=256m
     deploy:
@@ -70,8 +56,16 @@ services:
           memory: 1G
           cpus: '2.0'
           pids: 200
+    networks:
+      - default
+      - shared
     restart: unless-stopped
 
 volumes:
   goclaw-data:
   goclaw-workspace:
+
+networks:
+  shared:
+    name: shared
+    driver: bridge

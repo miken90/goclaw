@@ -5,25 +5,29 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/gateway"
+	"github.com/nextlevelbuilder/goclaw/internal/i18n"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
 )
 
 // allowedAgentFiles is the list of files exposed via agents.files.* RPCs.
-// TOOLS.md and HEARTBEAT.md excluded — only useful in standalone mode.
+// TOOLS.md excluded — not applicable.
 var allowedAgentFiles = []string{
 	bootstrap.AgentsFile, bootstrap.SoulFile, bootstrap.IdentityFile,
-	bootstrap.UserFile, bootstrap.BootstrapFile, bootstrap.MemoryJSONFile,
+	bootstrap.UserFile, bootstrap.UserPredefinedFile, bootstrap.BootstrapFile, bootstrap.MemoryJSONFile,
+	bootstrap.HeartbeatFile,
 }
 
 // --- agents.files.list ---
 // Matching TS src/gateway/server-methods/agents.ts:399-422
 
-func (m *AgentsMethods) handleFilesList(_ context.Context, client *gateway.Client, req *protocol.RequestFrame) {
+func (m *AgentsMethods) handleFilesList(ctx context.Context, client *gateway.Client, req *protocol.RequestFrame) {
+	locale := store.LocaleFromContext(ctx)
 	var params agentParams
 	if req.Params != nil {
 		json.Unmarshal(req.Params, &params)
@@ -32,18 +36,18 @@ func (m *AgentsMethods) handleFilesList(_ context.Context, client *gateway.Clien
 		params.AgentID = "default"
 	}
 
-	if m.isManaged && m.agentStore != nil {
-		// --- Managed mode: list from DB ---
+	if m.agentStore != nil {
+		// --- DB-backed: list from store ---
 		ctx := context.Background()
 		ag, err := m.agentStore.GetByKey(ctx, params.AgentID)
 		if err != nil {
-			client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrNotFound, "agent not found: "+params.AgentID))
+			client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrNotFound, i18n.T(locale, i18n.MsgAgentNotFound, params.AgentID)))
 			return
 		}
 
 		dbFiles, err := m.agentStore.GetAgentContextFiles(ctx, ag.ID)
 		if err != nil {
-			client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInternal, "failed to list files: "+err.Error()))
+			client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInternal, i18n.T(locale, i18n.MsgFailedToList, "files")))
 			return
 		}
 
@@ -53,44 +57,44 @@ func (m *AgentsMethods) handleFilesList(_ context.Context, client *gateway.Clien
 			dbMap[f.FileName] = f
 		}
 
-		files := make([]map[string]interface{}, 0, len(allowedAgentFiles))
+		files := make([]map[string]any, 0, len(allowedAgentFiles))
 		for _, name := range allowedAgentFiles {
 			if f, ok := dbMap[name]; ok {
-				files = append(files, map[string]interface{}{
+				files = append(files, map[string]any{
 					"name":    name,
 					"missing": false,
 					"size":    len(f.Content),
 				})
 			} else {
-				files = append(files, map[string]interface{}{
+				files = append(files, map[string]any{
 					"name":    name,
 					"missing": true,
 				})
 			}
 		}
 
-		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 			"agentId": params.AgentID,
 			"files":   files,
 		}))
 		return
 	}
 
-	// --- Standalone mode: filesystem ---
+	// --- Fallback: filesystem ---
 	ws := m.resolveWorkspace(params.AgentID)
-	files := make([]map[string]interface{}, 0, len(allowedAgentFiles))
+	files := make([]map[string]any, 0, len(allowedAgentFiles))
 
 	for _, name := range allowedAgentFiles {
 		p := filepath.Join(ws, name)
 		info, err := os.Stat(p)
 		if err != nil {
-			files = append(files, map[string]interface{}{
+			files = append(files, map[string]any{
 				"name":    name,
 				"path":    p,
 				"missing": true,
 			})
 		} else {
-			files = append(files, map[string]interface{}{
+			files = append(files, map[string]any{
 				"name":        name,
 				"path":        p,
 				"missing":     false,
@@ -100,7 +104,7 @@ func (m *AgentsMethods) handleFilesList(_ context.Context, client *gateway.Clien
 		}
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"agentId":   params.AgentID,
 		"workspace": ws,
 		"files":     files,
@@ -110,7 +114,8 @@ func (m *AgentsMethods) handleFilesList(_ context.Context, client *gateway.Clien
 // --- agents.files.get ---
 // Matching TS src/gateway/server-methods/agents.ts:423-473
 
-func (m *AgentsMethods) handleFilesGet(_ context.Context, client *gateway.Client, req *protocol.RequestFrame) {
+func (m *AgentsMethods) handleFilesGet(ctx context.Context, client *gateway.Client, req *protocol.RequestFrame) {
+	locale := store.LocaleFromContext(ctx)
 	var params struct {
 		AgentID string `json:"agentId"`
 		Name    string `json:"name"`
@@ -122,34 +127,34 @@ func (m *AgentsMethods) handleFilesGet(_ context.Context, client *gateway.Client
 		params.AgentID = "default"
 	}
 	if params.Name == "" {
-		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, "name is required"))
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgRequired, "name")))
 		return
 	}
 	if !isAllowedFile(params.Name) {
-		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, "file not allowed: "+params.Name))
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgInvalidRequest, "file not allowed: "+params.Name)))
 		return
 	}
 
-	if m.isManaged && m.agentStore != nil {
-		// --- Managed mode: read from DB ---
+	if m.agentStore != nil {
+		// --- DB-backed: read from store ---
 		ctx := context.Background()
 		ag, err := m.agentStore.GetByKey(ctx, params.AgentID)
 		if err != nil {
-			client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrNotFound, "agent not found: "+params.AgentID))
+			client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrNotFound, i18n.T(locale, i18n.MsgAgentNotFound, params.AgentID)))
 			return
 		}
 
 		dbFiles, err := m.agentStore.GetAgentContextFiles(ctx, ag.ID)
 		if err != nil {
-			client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInternal, "failed to get files: "+err.Error()))
+			client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInternal, i18n.T(locale, i18n.MsgFailedToList, "files")))
 			return
 		}
 
 		for _, f := range dbFiles {
 			if f.FileName == params.Name {
-				client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+				client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 					"agentId": params.AgentID,
-					"file": map[string]interface{}{
+					"file": map[string]any{
 						"name":    params.Name,
 						"missing": false,
 						"size":    len(f.Content),
@@ -161,9 +166,9 @@ func (m *AgentsMethods) handleFilesGet(_ context.Context, client *gateway.Client
 		}
 
 		// File not found in DB
-		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 			"agentId": params.AgentID,
-			"file": map[string]interface{}{
+			"file": map[string]any{
 				"name":    params.Name,
 				"missing": true,
 			},
@@ -171,16 +176,16 @@ func (m *AgentsMethods) handleFilesGet(_ context.Context, client *gateway.Client
 		return
 	}
 
-	// --- Standalone mode: filesystem ---
+	// --- Fallback: filesystem ---
 	ws := m.resolveWorkspace(params.AgentID)
 	p := filepath.Join(ws, params.Name)
 
 	info, err := os.Stat(p)
 	if err != nil {
-		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 			"agentId":   params.AgentID,
 			"workspace": ws,
-			"file": map[string]interface{}{
+			"file": map[string]any{
 				"name":    params.Name,
 				"path":    p,
 				"missing": true,
@@ -190,10 +195,10 @@ func (m *AgentsMethods) handleFilesGet(_ context.Context, client *gateway.Client
 	}
 
 	content, _ := os.ReadFile(p)
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"agentId":   params.AgentID,
 		"workspace": ws,
-		"file": map[string]interface{}{
+		"file": map[string]any{
 			"name":        params.Name,
 			"path":        p,
 			"missing":     false,
@@ -207,7 +212,8 @@ func (m *AgentsMethods) handleFilesGet(_ context.Context, client *gateway.Client
 // --- agents.files.set ---
 // Matching TS src/gateway/server-methods/agents.ts:474-515
 
-func (m *AgentsMethods) handleFilesSet(_ context.Context, client *gateway.Client, req *protocol.RequestFrame) {
+func (m *AgentsMethods) handleFilesSet(ctx context.Context, client *gateway.Client, req *protocol.RequestFrame) {
+	locale := store.LocaleFromContext(ctx)
 	var params struct {
 		AgentID string `json:"agentId"`
 		Name    string `json:"name"`
@@ -220,25 +226,25 @@ func (m *AgentsMethods) handleFilesSet(_ context.Context, client *gateway.Client
 		params.AgentID = "default"
 	}
 	if params.Name == "" {
-		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, "name is required"))
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgRequired, "name")))
 		return
 	}
 	if !isAllowedFile(params.Name) {
-		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, "file not allowed: "+params.Name))
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgInvalidRequest, "file not allowed: "+params.Name)))
 		return
 	}
 
-	if m.isManaged && m.agentStore != nil {
-		// --- Managed mode: write to DB ---
+	if m.agentStore != nil {
+		// --- DB-backed: write to store ---
 		ctx := context.Background()
 		ag, err := m.agentStore.GetByKey(ctx, params.AgentID)
 		if err != nil {
-			client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrNotFound, "agent not found: "+params.AgentID))
+			client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrNotFound, i18n.T(locale, i18n.MsgAgentNotFound, params.AgentID)))
 			return
 		}
 
 		if err := m.agentStore.SetAgentContextFile(ctx, ag.ID, params.Name, params.Content); err != nil {
-			client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInternal, "failed to write file: "+err.Error()))
+			client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInternal, i18n.T(locale, i18n.MsgFailedToSave, "file", err.Error())))
 			return
 		}
 
@@ -249,9 +255,9 @@ func (m *AgentsMethods) handleFilesSet(_ context.Context, client *gateway.Client
 			m.interceptor.InvalidateAgent(ag.ID)
 		}
 
-		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 			"agentId": params.AgentID,
-			"file": map[string]interface{}{
+			"file": map[string]any{
 				"name":    params.Name,
 				"missing": false,
 				"size":    len(params.Content),
@@ -261,21 +267,21 @@ func (m *AgentsMethods) handleFilesSet(_ context.Context, client *gateway.Client
 		return
 	}
 
-	// --- Standalone mode: filesystem ---
+	// --- Fallback: filesystem ---
 	ws := m.resolveWorkspace(params.AgentID)
 	os.MkdirAll(ws, 0755)
 	p := filepath.Join(ws, params.Name)
 
 	if err := os.WriteFile(p, []byte(params.Content), 0644); err != nil {
-		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInternal, "failed to write file: "+err.Error()))
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInternal, i18n.T(locale, i18n.MsgFailedToSave, "file", err.Error())))
 		return
 	}
 
 	info, _ := os.Stat(p)
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"agentId":   params.AgentID,
 		"workspace": ws,
-		"file": map[string]interface{}{
+		"file": map[string]any{
 			"name":        params.Name,
 			"path":        p,
 			"missing":     false,
@@ -296,10 +302,5 @@ func (m *AgentsMethods) resolveWorkspace(agentID string) string {
 }
 
 func isAllowedFile(name string) bool {
-	for _, f := range allowedAgentFiles {
-		if f == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(allowedAgentFiles, name)
 }

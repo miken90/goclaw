@@ -29,6 +29,14 @@ type SpanExporter interface {
 	Shutdown(ctx context.Context) error
 }
 
+// spanUpdate represents a deferred span field update, buffered alongside new
+// spans and applied during the same flush cycle (after batch INSERT).
+type spanUpdate struct {
+	SpanID  uuid.UUID
+	TraceID uuid.UUID
+	Updates map[string]any
+}
+
 // Collector buffers spans in memory and periodically flushes them to the
 // TracingStore in batches. Traces are created synchronously (one per run),
 // while spans are buffered for async batch insert.
@@ -38,9 +46,10 @@ type SpanExporter interface {
 type Collector struct {
 	store store.TracingStore
 
-	spanCh chan store.SpanData
-	stopCh chan struct{}
-	wg     sync.WaitGroup
+	spanCh       chan store.SpanData
+	spanUpdateCh chan spanUpdate // deferred span updates (two-phase tracing)
+	stopCh       chan struct{}
+	wg           sync.WaitGroup
 
 	// traces that need aggregate updates on flush
 	dirtyTraces   map[uuid.UUID]struct{}
@@ -48,6 +57,10 @@ type Collector struct {
 
 	verbose  bool         // when true, LLM spans include full input messages
 	exporter SpanExporter // optional external exporter (nil = disabled)
+
+	// OnFlush is called after each flush cycle with the trace IDs that had
+	// their aggregates updated. Used to broadcast realtime trace events.
+	OnFlush func(traceIDs []uuid.UUID)
 }
 
 // NewCollector creates a new tracing collector backed by the given store.
@@ -58,16 +71,25 @@ func NewCollector(ts store.TracingStore) *Collector {
 		slog.Info("tracing: verbose mode enabled (GOCLAW_TRACE_VERBOSE)")
 	}
 	return &Collector{
-		store:       ts,
-		spanCh:      make(chan store.SpanData, defaultBufferSize),
-		stopCh:      make(chan struct{}),
-		dirtyTraces: make(map[uuid.UUID]struct{}),
-		verbose:     verbose,
+		store:        ts,
+		spanCh:       make(chan store.SpanData, defaultBufferSize),
+		spanUpdateCh: make(chan spanUpdate, defaultBufferSize),
+		stopCh:       make(chan struct{}),
+		dirtyTraces:  make(map[uuid.UUID]struct{}),
+		verbose:      verbose,
 	}
 }
 
 // Verbose returns true if verbose tracing is enabled (full LLM input logging).
 func (c *Collector) Verbose() bool { return c.verbose }
+
+// PreviewMaxLen returns the max preview length: 200K when verbose, 500 otherwise.
+func (c *Collector) PreviewMaxLen() int {
+	if c.verbose {
+		return 200_000
+	}
+	return previewMaxLen
+}
 
 // SetExporter attaches an external span exporter (e.g. OpenTelemetry OTLP).
 // When set, spans are exported to the external backend during each flush cycle.
@@ -128,6 +150,30 @@ func (c *Collector) EmitSpan(span store.SpanData) {
 	}
 }
 
+// EmitSpanUpdate enqueues a deferred update for an existing span.
+// Used by two-phase tracing: a "running" span is emitted via EmitSpan before
+// execution starts, then updated via EmitSpanUpdate when execution completes.
+// Non-blocking channel send — safe to call even after ctx cancellation.
+func (c *Collector) EmitSpanUpdate(spanID, traceID uuid.UUID, updates map[string]any) {
+	select {
+	case c.spanUpdateCh <- spanUpdate{SpanID: spanID, TraceID: traceID, Updates: updates}:
+		c.markDirty(traceID)
+	default:
+		slog.Warn("tracing: span update buffer full, dropping update",
+			"span_id", spanID)
+	}
+}
+
+// SetTraceStatus updates only the trace status and marks it dirty for re-aggregation.
+// Used by child trace runs (e.g. announce) to toggle the parent trace back to
+// "running" while the child is active, then "completed" when done.
+func (c *Collector) SetTraceStatus(ctx context.Context, traceID uuid.UUID, status string) {
+	if err := c.store.UpdateTrace(ctx, traceID, map[string]any{"status": status}); err != nil {
+		slog.Warn("tracing: failed to set trace status", "trace_id", traceID, "error", err)
+	}
+	c.markDirty(traceID)
+}
+
 // FinishTrace marks a trace as completed and schedules aggregate update.
 func (c *Collector) FinishTrace(ctx context.Context, traceID uuid.UUID, status string, errMsg string, outputPreview string) {
 	now := time.Now().UTC()
@@ -139,7 +185,7 @@ func (c *Collector) FinishTrace(ctx context.Context, traceID uuid.UUID, status s
 		updates["error"] = errMsg
 	}
 	if outputPreview != "" {
-		updates["output_preview"] = truncatePreview(outputPreview)
+		updates["output_preview"] = c.truncatePreviewStr(outputPreview)
 	}
 	if err := c.store.UpdateTrace(ctx, traceID, updates); err != nil {
 		slog.Warn("tracing: failed to finish trace", "trace_id", traceID, "error", err)
@@ -200,6 +246,29 @@ done:
 		}
 	}
 
+	// Drain and apply deferred span updates (two-phase tracing).
+	// Must run AFTER batch insert so that "running" spans exist before we UPDATE them.
+	var updates []spanUpdate
+	for {
+		select {
+		case u := <-c.spanUpdateCh:
+			updates = append(updates, u)
+		default:
+			goto doneUpdates
+		}
+	}
+doneUpdates:
+	if len(updates) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		for _, u := range updates {
+			if err := c.store.UpdateSpan(ctx, u.SpanID, u.Updates); err != nil {
+				slog.Warn("tracing: span update failed", "span_id", u.SpanID, "error", err)
+			}
+		}
+		slog.Debug("tracing: applied span updates", "count", len(updates))
+	}
+
 	// Update aggregates for dirty traces
 	c.dirtyTracesMu.Lock()
 	dirty := c.dirtyTraces
@@ -215,18 +284,27 @@ done:
 				slog.Warn("tracing: aggregate update failed", "trace_id", traceID, "error", err)
 			}
 		}
+
+		// Notify listeners about updated traces (realtime WS push).
+		if c.OnFlush != nil {
+			ids := make([]uuid.UUID, 0, len(dirty))
+			for id := range dirty {
+				ids = append(ids, id)
+			}
+			c.OnFlush(ids)
+		}
 	}
 }
 
-// truncatePreview sanitizes and truncates a string to previewMaxLen bytes.
-func truncatePreview(s string) string {
+// truncatePreviewStr sanitizes and truncates a string based on verbose mode.
+func (c *Collector) truncatePreviewStr(s string) string {
+	limit := c.PreviewMaxLen()
 	s = strings.ToValidUTF8(s, "")
-	if len(s) <= previewMaxLen {
+	if len(s) <= limit {
 		return s
 	}
-	maxLen := previewMaxLen
-	for maxLen > 0 && !utf8.RuneStart(s[maxLen]) {
-		maxLen--
+	for limit > 0 && !utf8.RuneStart(s[limit]) {
+		limit--
 	}
-	return s[:maxLen] + "..."
+	return s[:limit] + "..."
 }

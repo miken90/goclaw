@@ -107,7 +107,7 @@ type apiResponse struct {
 }
 
 // doJSON performs an authenticated JSON API call with auto token refresh.
-func (c *LarkClient) doJSON(ctx context.Context, method, path string, body interface{}) (*apiResponse, error) {
+func (c *LarkClient) doJSON(ctx context.Context, method, path string, body any) (*apiResponse, error) {
 	resp, err := c.doJSONOnce(ctx, method, path, body)
 	if err != nil {
 		return nil, err
@@ -120,7 +120,7 @@ func (c *LarkClient) doJSON(ctx context.Context, method, path string, body inter
 	return resp, nil
 }
 
-func (c *LarkClient) doJSONOnce(ctx context.Context, method, path string, body interface{}) (*apiResponse, error) {
+func (c *LarkClient) doJSONOnce(ctx context.Context, method, path string, body any) (*apiResponse, error) {
 	token, err := c.getToken(ctx)
 	if err != nil {
 		return nil, err

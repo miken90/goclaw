@@ -64,7 +64,6 @@ func (s *PGCronStore) InvalidateCache() {
 // recomputeStaleJobs fixes enabled jobs that have next_run_at = NULL.
 // This happens when the gateway was stopped/crashed while a job was executing,
 // or when the previously computed next_run_at was consumed but never recomputed.
-// Mirrors the startup logic in cron.Service.Start() (standalone mode).
 func (s *PGCronStore) recomputeStaleJobs() {
 	rows, err := s.db.Query(
 		`SELECT id, schedule_kind, cron_expression, run_at, timezone, interval_ms
@@ -103,7 +102,7 @@ func (s *PGCronStore) recomputeStaleJobs() {
 			schedule.TZ = *tz
 		}
 
-		next := computeNextRun(&schedule, now)
+		next := computeNextRun(&schedule, now, s.defaultTZ)
 		if next == nil {
 			if scheduleKind == "at" {
 				s.db.Exec("UPDATE cron_jobs SET enabled = false, updated_at = $1 WHERE id = $2", now, id)
@@ -237,10 +236,18 @@ func (s *PGCronStore) executeOneJob(job store.CronJob, handler func(job *store.C
 		}
 	} else if id, parseErr := uuid.Parse(job.ID); parseErr == nil {
 		schedule := job.Schedule
-		next := computeNextRun(&schedule, now)
+		next := computeNextRun(&schedule, now, s.defaultTZ)
 		s.db.Exec(
 			"UPDATE cron_jobs SET last_run_at = $1, last_status = $2, last_error = $3, next_run_at = $4, updated_at = $5 WHERE id = $6",
 			now, status, lastError, next, now, id,
 		)
 	}
+
+	// Emit completion event
+	evt := store.CronEvent{Action: "completed", JobID: job.ID, JobName: job.Name, Status: status}
+	if err != nil {
+		evt.Action = "error"
+		evt.Error = err.Error()
+	}
+	s.emitEvent(evt)
 }

@@ -1,22 +1,35 @@
 import { useState, useCallback, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { useParams, useNavigate } from "react-router";
-import { Eye } from "lucide-react";
+import { Eye, PanelLeftOpen } from "lucide-react";
 import { useAuthStore } from "@/stores/use-auth-store";
+import { useIsMobile } from "@/hooks/use-media-query";
+import { cn } from "@/lib/utils";
 import { ChatSidebar } from "./chat-sidebar";
 import { ChatThread } from "./chat-thread";
-import { ChatInput } from "@/components/chat/chat-input";
+import { ChatInput, type AttachedFile } from "@/components/chat/chat-input";
 import { useChatSessions } from "./hooks/use-chat-sessions";
 import { useChatMessages } from "./hooks/use-chat-messages";
 import { useChatSend } from "./hooks/use-chat-send";
-import { isOwnSession } from "@/lib/session-key";
+import { isOwnSession, parseSessionKey } from "@/lib/session-key";
+import { useVirtualKeyboard } from "@/hooks/use-virtual-keyboard";
 
 export function ChatPage() {
+  const { t } = useTranslation("chat");
   const { sessionKey: urlSessionKey } = useParams<{ sessionKey: string }>();
   const navigate = useNavigate();
   const connected = useAuthStore((s) => s.connected);
   const userId = useAuthStore((s) => s.userId);
 
-  const [agentId, setAgentId] = useState("default");
+  const [scrollTrigger, setScrollTrigger] = useState(0);
+
+  const [agentId, setAgentId] = useState(() => {
+    if (urlSessionKey) {
+      const { agentId: parsed } = parseSessionKey(urlSessionKey);
+      if (parsed) return parsed;
+    }
+    return "default";
+  });
   const [sessionKey, setSessionKey] = useState(urlSessionKey ?? "");
 
   const {
@@ -76,10 +89,15 @@ export function ChatPage() {
 
   const handleSessionSelect = useCallback(
     (key: string) => {
+      // Sync agentId from session key to ensure correct routing
+      const { agentId: parsed } = parseSessionKey(key);
+      if (parsed && parsed !== agentId) {
+        setAgentId(parsed);
+      }
       setSessionKey(key);
       navigate(`/chat/${encodeURIComponent(key)}`);
     },
-    [navigate],
+    [navigate, agentId],
   );
 
   const handleAgentChange = useCallback(
@@ -93,7 +111,7 @@ export function ChatPage() {
   );
 
   const handleSend = useCallback(
-    (message: string) => {
+    (message: string, files?: AttachedFile[]) => {
       let key = sessionKey;
       if (!key) {
         key = buildNewSessionKey();
@@ -101,7 +119,8 @@ export function ChatPage() {
         navigate(`/chat/${encodeURIComponent(key)}`);
       }
       // Pass key directly so send() doesn't use a stale closure value
-      send(message, key);
+      send(message, key, files);
+      setScrollTrigger((n) => n + 1);
     },
     [sessionKey, send, buildNewSessionKey, navigate],
   );
@@ -110,21 +129,77 @@ export function ChatPage() {
     abort(sessionKey);
   }, [abort, sessionKey]);
 
+  const isMobile = useIsMobile();
+  useVirtualKeyboard();
+  const [chatSidebarOpen, setChatSidebarOpen] = useState(false);
+
+  const handleSessionSelectMobile = useCallback(
+    (key: string) => {
+      handleSessionSelect(key);
+      setChatSidebarOpen(false);
+    },
+    [handleSessionSelect],
+  );
+
+  const handleNewChatMobile = useCallback(() => {
+    handleNewChat();
+    setChatSidebarOpen(false);
+  }, [handleNewChat]);
+
   return (
-    <div className="flex h-full">
-      {/* Sidebar */}
-      <ChatSidebar
-        agentId={agentId}
-        onAgentChange={handleAgentChange}
-        sessions={sessions}
-        sessionsLoading={sessionsLoading}
-        activeSessionKey={sessionKey}
-        onSessionSelect={handleSessionSelect}
-        onNewChat={handleNewChat}
-      />
+    <div className="relative flex h-full">
+      {/* Chat Sidebar */}
+      {isMobile ? (
+        <>
+          {chatSidebarOpen && (
+            <div
+              className="fixed inset-0 z-40 bg-black/50"
+              onClick={() => setChatSidebarOpen(false)}
+            />
+          )}
+          <div
+            className={cn(
+              "fixed inset-y-0 left-0 z-50 transition-transform duration-200 ease-in-out",
+              chatSidebarOpen ? "translate-x-0" : "-translate-x-full",
+            )}
+          >
+            <ChatSidebar
+              agentId={agentId}
+              onAgentChange={handleAgentChange}
+              sessions={sessions}
+              sessionsLoading={sessionsLoading}
+              activeSessionKey={sessionKey}
+              onSessionSelect={handleSessionSelectMobile}
+              onNewChat={handleNewChatMobile}
+            />
+          </div>
+        </>
+      ) : (
+        <ChatSidebar
+          agentId={agentId}
+          onAgentChange={handleAgentChange}
+          sessions={sessions}
+          sessionsLoading={sessionsLoading}
+          activeSessionKey={sessionKey}
+          onSessionSelect={handleSessionSelect}
+          onNewChat={handleNewChat}
+        />
+      )}
 
       {/* Main chat area */}
       <div className="flex flex-1 flex-col">
+        {isMobile && (
+          <div className="flex items-center border-b px-3 py-2 landscape-compact">
+            <button
+              onClick={() => setChatSidebarOpen(true)}
+              className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+              title={t("openSessions")}
+            >
+              <PanelLeftOpen className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
         {sendError && (
           <div className="border-b bg-destructive/10 px-4 py-2 text-sm text-destructive">
             {sendError}
@@ -138,6 +213,7 @@ export function ChatPage() {
           toolStream={toolStream}
           isRunning={isRunning}
           loading={messagesLoading}
+          scrollTrigger={scrollTrigger}
         />
 
         {isOwn ? (
@@ -150,7 +226,7 @@ export function ChatPage() {
         ) : (
           <div className="flex items-center gap-2 border-t bg-muted/50 px-4 py-3 text-sm text-muted-foreground">
             <Eye className="h-4 w-4" />
-            Read-only — this session belongs to another user
+            {t("readOnly")}
           </div>
         )}
       </div>

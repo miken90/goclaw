@@ -8,14 +8,33 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 const (
-	defaultClaudeModel   = "claude-sonnet-4-5-20250929"
-	anthropicAPIBase     = "https://api.anthropic.com/v1"
-	anthropicAPIVersion  = "2023-06-01"
+	defaultClaudeModel  = "claude-sonnet-4-5-20250929"
+	anthropicAPIBase    = "https://api.anthropic.com/v1"
+	anthropicAPIVersion = "2023-06-01"
 )
+
+// claudeModelAliases maps short model aliases to full Anthropic model IDs.
+// This allows agents configured with aliases (e.g. "opus") to work with the
+// anthropic_native provider, consistent with the Claude CLI provider.
+var claudeModelAliases = map[string]string{
+	"opus":   "claude-opus-4-6",
+	"sonnet": "claude-sonnet-4-6",
+	"haiku":  "claude-haiku-4-5-20251001",
+}
+
+// resolveModel expands a short alias to a full model ID, or returns the input unchanged.
+func resolveAnthropicModel(model, defaultModel string) string {
+	if model == "" {
+		return defaultModel
+	}
+	if full, ok := claudeModelAliases[model]; ok {
+		return full
+	}
+	return model
+}
 
 // AnthropicProvider implements Provider using the Anthropic Claude API via net/http.
 type AnthropicProvider struct {
@@ -32,7 +51,7 @@ func NewAnthropicProvider(apiKey string, opts ...AnthropicOption) *AnthropicProv
 		apiKey:       apiKey,
 		baseURL:      anthropicAPIBase,
 		defaultModel: defaultClaudeModel,
-		client:       &http.Client{Timeout: 120 * time.Second},
+		client:       &http.Client{Timeout: DefaultHTTPTimeout},
 		retryConfig:  DefaultRetryConfig(),
 	}
 	for _, o := range opts {
@@ -55,15 +74,12 @@ func WithAnthropicBaseURL(baseURL string) AnthropicOption {
 	}
 }
 
-func (p *AnthropicProvider) Name() string            { return "anthropic" }
-func (p *AnthropicProvider) DefaultModel() string     { return p.defaultModel }
-func (p *AnthropicProvider) SupportsThinking() bool   { return true }
+func (p *AnthropicProvider) Name() string           { return "anthropic" }
+func (p *AnthropicProvider) DefaultModel() string   { return p.defaultModel }
+func (p *AnthropicProvider) SupportsThinking() bool { return true }
 
 func (p *AnthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
-	model := req.Model
-	if model == "" {
-		model = p.defaultModel
-	}
+	model := resolveAnthropicModel(req.Model, p.defaultModel)
 
 	body := p.buildRequestBody(model, req, false)
 
@@ -83,7 +99,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 	})
 }
 
-func (p *AnthropicProvider) doRequest(ctx context.Context, body interface{}) (io.ReadCloser, error) {
+func (p *AnthropicProvider) doRequest(ctx context.Context, body any) (io.ReadCloser, error) {
 	data, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
@@ -99,7 +115,7 @@ func (p *AnthropicProvider) doRequest(ctx context.Context, body interface{}) (io
 	httpReq.Header.Set("anthropic-version", anthropicAPIVersion)
 
 	// Add beta header for interleaved thinking when thinking is enabled
-	if bodyMap, ok := body.(map[string]interface{}); ok {
+	if bodyMap, ok := body.(map[string]any); ok {
 		if _, hasThinking := bodyMap["thinking"]; hasThinking {
 			httpReq.Header.Set("anthropic-beta", "interleaved-thinking-2025-05-14")
 		}
@@ -138,7 +154,7 @@ func (p *AnthropicProvider) parseResponse(resp *anthropicResponse) *ChatResponse
 		case "redacted_thinking":
 			// Encrypted thinking — cannot display but must preserve for passback
 		case "tool_use":
-			args := make(map[string]interface{})
+			args := make(map[string]any)
 			_ = json.Unmarshal(block.Input, &args)
 			result.ToolCalls = append(result.ToolCalls, ToolCall{
 				ID:        block.ID,
@@ -182,8 +198,8 @@ func (p *AnthropicProvider) parseResponse(resp *anthropicResponse) *ChatResponse
 
 type anthropicResponse struct {
 	Content    []anthropicContentBlock `json:"content"`
-	StopReason string                 `json:"stop_reason"`
-	Usage      anthropicUsage         `json:"usage"`
+	StopReason string                  `json:"stop_reason"`
+	Usage      anthropicUsage          `json:"usage"`
 }
 
 type anthropicContentBlock struct {
@@ -221,8 +237,8 @@ type anthropicContentBlockDeltaEvent struct {
 	Delta struct {
 		Type        string `json:"type"`
 		Text        string `json:"text,omitempty"`
-		Thinking    string `json:"thinking,omitempty"`    // for thinking_delta
-		Signature   string `json:"signature,omitempty"`   // for signature_delta
+		Thinking    string `json:"thinking,omitempty"`  // for thinking_delta
+		Signature   string `json:"signature,omitempty"` // for signature_delta
 		PartialJSON string `json:"partial_json,omitempty"`
 	} `json:"delta"`
 }

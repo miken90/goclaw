@@ -93,16 +93,16 @@ func (p *MiniMaxProvider) Synthesize(ctx context.Context, text string, opts Opti
 		}
 	}
 
-	body := map[string]interface{}{
+	body := map[string]any{
 		"text":   text,
 		"model":  model,
 		"stream": false,
-		"voice_setting": map[string]interface{}{
+		"voice_setting": map[string]any{
 			"voice_id": voiceID,
 			"speed":    1.0,
 			"pitch":    0,
 		},
-		"audio_setting": map[string]interface{}{
+		"audio_setting": map[string]any{
 			"format": audioFormat,
 		},
 	}

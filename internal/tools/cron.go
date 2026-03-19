@@ -13,10 +13,16 @@ import (
 // Matching OpenClaw src/agents/tools/cron-tool.ts.
 type CronTool struct {
 	cronStore store.CronStore
+	permStore store.ConfigPermissionStore // nil = no group restriction
 }
 
 func NewCronTool(cronStore store.CronStore) *CronTool {
 	return &CronTool{cronStore: cronStore}
+}
+
+// SetConfigPermStore enables group cron mutation restriction.
+func (t *CronTool) SetConfigPermStore(s store.ConfigPermissionStore) {
+	t.permStore = s
 }
 
 func (t *CronTool) Name() string { return "cron" }
@@ -39,7 +45,7 @@ JOB SCHEMA (for add action):
   "schedule": { ... },      // Required: when to run
   "message": "string",      // Required: what message to send to the agent
   "deliver": true|false,    // Optional: deliver result to channel (default false)
-  "channel": "telegram",    // Optional: target channel for delivery
+  "channel": "channel-name", // Optional: target channel for delivery (auto-filled from context)
   "to": "chat-id",          // Optional: target chat/recipient ID
   "agentId": "agent-uuid",  // Optional: which agent handles the job (default: current)
   "deleteAfterRun": true    // Optional: auto-delete after execution (default true for "at" schedule)
@@ -51,49 +57,49 @@ SCHEDULE TYPES (schedule.kind):
 - "every": Recurring interval
   { "kind": "every", "everyMs": <interval-ms> }
 - "cron": Cron expression
-  { "kind": "cron", "expr": "<5-field cron expression>", "tz": "<optional-timezone>" }
+  { "kind": "cron", "expr": "<5-field cron expression>", "tz": "<optional IANA timezone, e.g. Asia/Ho_Chi_Minh; omit to use gateway default>" }
 
 CRITICAL CONSTRAINTS:
-- name must be a valid slug (lowercase letters, numbers, hyphens only)
-- message is required for add action
-- schedule is required for add action
+- "name" must be a valid slug (lowercase letters, numbers, hyphens only)
+- For action="add": send the job inside "job", "message" is required and "schedule" is required
+- For action="update", send changes inside "patch"
 - Default: jobs run as isolated agent turns with the specified message
-
-Use jobId as the canonical identifier; id is accepted for compatibility.`
+- Before creating or updating a scheduled job, call the datetime tool first to get the precise current time and unix_ms timestamp. Do NOT guess or estimate timestamps.
+- Use "jobId" as the canonical identifier; "id" is accepted for compatibility.`
 }
 
-func (t *CronTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *CronTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"action": map[string]interface{}{
+		"properties": map[string]any{
+			"action": map[string]any{
 				"type":        "string",
 				"description": "The cron action to perform",
 				"enum":        []string{"status", "list", "add", "update", "remove", "run", "runs"},
 			},
-			"includeDisabled": map[string]interface{}{
+			"includeDisabled": map[string]any{
 				"type":        "boolean",
 				"description": "Include disabled jobs in list (default false)",
 			},
-			"job": map[string]interface{}{
-				"type":        "object",
-				"description": "Job definition for add action (name, schedule, message, deliver, channel, to, agentId, deleteAfterRun)",
+			"job": map[string]any{
+				"type":                 "object",
+				"description":          "Job definition for add action (name, schedule, message, deliver, channel, to, agentId, deleteAfterRun)",
 				"additionalProperties": true,
 			},
-			"jobId": map[string]interface{}{
+			"jobId": map[string]any{
 				"type":        "string",
 				"description": "Job ID for update/remove/run/runs actions",
 			},
-			"id": map[string]interface{}{
+			"id": map[string]any{
 				"type":        "string",
 				"description": "Backward compatibility alias for jobId",
 			},
-			"patch": map[string]interface{}{
-				"type":        "object",
-				"description": "Patch object for update action",
+			"patch": map[string]any{
+				"type":                 "object",
+				"description":          "Patch object for update action",
 				"additionalProperties": true,
 			},
-			"runMode": map[string]interface{}{
+			"runMode": map[string]any{
 				"type":        "string",
 				"description": "Run mode: 'due' (only if due) or 'force' (immediate)",
 				"enum":        []string{"due", "force"},
@@ -103,10 +109,17 @@ func (t *CronTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *CronTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *CronTool) Execute(ctx context.Context, args map[string]any) *Result {
 	action, _ := args["action"].(string)
 	if action == "" {
 		return ErrorResult("action parameter is required")
+	}
+
+	// Group write permission check for mutation actions
+	if t.permStore != nil && (action == "add" || action == "update" || action == "remove") {
+		if err := store.CheckFileWriterPermission(ctx, t.permStore); err != nil {
+			return ErrorResult("permission denied: only file writers can manage cron jobs in group chats")
+		}
 	}
 
 	agentID := resolveAgentIDString(ctx)
@@ -138,11 +151,11 @@ func (t *CronTool) handleStatus() *Result {
 	return NewResult(string(data))
 }
 
-func (t *CronTool) handleList(args map[string]interface{}, agentID, userID string) *Result {
+func (t *CronTool) handleList(args map[string]any, agentID, userID string) *Result {
 	includeDisabled, _ := args["includeDisabled"].(bool)
 	jobs := t.cronStore.ListJobs(includeDisabled, agentID, userID)
 
-	result := map[string]interface{}{
+	result := map[string]any{
 		"jobs":  jobs,
 		"count": len(jobs),
 	}
@@ -150,8 +163,8 @@ func (t *CronTool) handleList(args map[string]interface{}, agentID, userID strin
 	return NewResult(string(data))
 }
 
-func (t *CronTool) handleAdd(ctx context.Context, args map[string]interface{}, agentID, userID string) *Result {
-	jobObj, ok := args["job"].(map[string]interface{})
+func (t *CronTool) handleAdd(ctx context.Context, args map[string]any, agentID, userID string) *Result {
+	jobObj, ok := args["job"].(map[string]any)
 	if !ok {
 		return ErrorResult("job object is required for add action")
 	}
@@ -161,7 +174,7 @@ func (t *CronTool) handleAdd(ctx context.Context, args map[string]interface{}, a
 		return ErrorResult("job.name is required")
 	}
 
-	scheduleObj, ok := jobObj["schedule"].(map[string]interface{})
+	scheduleObj, ok := jobObj["schedule"].(map[string]any)
 	if !ok {
 		return ErrorResult("job.schedule is required")
 	}
@@ -217,13 +230,29 @@ func (t *CronTool) handleAdd(ctx context.Context, args map[string]interface{}, a
 	channel, _ := jobObj["channel"].(string)
 	to, _ := jobObj["to"].(string)
 
-	// Auto-fill channel and to from context if deliver is requested but not specified
-	if deliver {
-		if channel == "" {
-			channel = ToolChannelFromCtx(ctx)
+	// Auto-default deliver=true when the request comes from a real channel
+	// (not CLI/system/subagent). Users chatting on Zalo/Telegram expect
+	// cron results delivered back to the same chat.
+	if !deliver {
+		if ctxChannel := ToolChannelFromCtx(ctx); ctxChannel != "" {
+			switch ctxChannel {
+			case "cli", "system", "subagent", "cron", "teammate":
+				// internal channels — don't auto-deliver
+			default:
+				deliver = true
+			}
 		}
-		if to == "" {
-			to = ToolChatIDFromCtx(ctx)
+	}
+
+	// Auto-fill channel and to from context when deliver is requested.
+	// Always prefer context values over LLM-provided values to prevent
+	// misrouted deliveries (e.g. LLM confusing guild ID with channel ID).
+	if deliver {
+		if ctxChannel := ToolChannelFromCtx(ctx); ctxChannel != "" {
+			channel = ctxChannel
+		}
+		if ctxChatID := ToolChatIDFromCtx(ctx); ctxChatID != "" {
+			to = ctxChatID
 		}
 	}
 
@@ -237,19 +266,27 @@ func (t *CronTool) handleAdd(ctx context.Context, args map[string]interface{}, a
 		return ErrorResult(fmt.Sprintf("failed to create cron job: %v", err))
 	}
 
-	data, _ := json.MarshalIndent(map[string]interface{}{"job": job}, "", "  ")
+	// Set wake_heartbeat if requested (triggers heartbeat after cron job completes)
+	if wh, _ := jobObj["wake_heartbeat"].(bool); wh {
+		wakeTrue := true
+		if updated, uErr := t.cronStore.UpdateJob(job.ID, store.CronJobPatch{WakeHeartbeat: &wakeTrue}); uErr == nil {
+			job = updated
+		}
+	}
+
+	data, _ := json.MarshalIndent(map[string]any{"job": job}, "", "  ")
 	return NewResult(string(data))
 }
 
 // checkJobOwnership validates that the job belongs to the current agent+user scope.
-// In standalone mode (empty agentID/userID), all jobs are accessible.
+// When agentID/userID is empty, all jobs are accessible.
 func (t *CronTool) checkJobOwnership(jobID, agentID, userID string) (*store.CronJob, *Result) {
 	job, ok := t.cronStore.GetJob(jobID)
 	if !ok {
 		return nil, ErrorResult(fmt.Sprintf("job %s not found", jobID))
 	}
 
-	// In managed mode, verify ownership
+	// Verify ownership
 	if agentID != "" && job.AgentID != agentID {
 		return nil, ErrorResult(fmt.Sprintf("job %s not found", jobID))
 	}
@@ -260,7 +297,7 @@ func (t *CronTool) checkJobOwnership(jobID, agentID, userID string) (*store.Cron
 	return job, nil
 }
 
-func (t *CronTool) handleUpdate(args map[string]interface{}, agentID, userID string) *Result {
+func (t *CronTool) handleUpdate(args map[string]any, agentID, userID string) *Result {
 	jobID := resolveJobID(args)
 	if jobID == "" {
 		return ErrorResult("jobId is required for update action")
@@ -270,7 +307,7 @@ func (t *CronTool) handleUpdate(args map[string]interface{}, agentID, userID str
 		return errResult
 	}
 
-	patchObj, ok := args["patch"].(map[string]interface{})
+	patchObj, ok := args["patch"].(map[string]any)
 	if !ok {
 		return ErrorResult("patch object is required for update action")
 	}
@@ -280,16 +317,23 @@ func (t *CronTool) handleUpdate(args map[string]interface{}, agentID, userID str
 	patchJSON, _ := json.Marshal(patchObj)
 	json.Unmarshal(patchJSON, &patch)
 
+	// Validate atMs not in the past when updating schedule
+	if patch.Schedule != nil && patch.Schedule.Kind == "at" && patch.Schedule.AtMS != nil {
+		if *patch.Schedule.AtMS <= time.Now().UnixMilli() {
+			return ErrorResult(fmt.Sprintf("schedule.atMs is in the past (%d). Use the datetime tool to get current time, then set a future timestamp. Current time is %d ms", *patch.Schedule.AtMS, time.Now().UnixMilli()))
+		}
+	}
+
 	job, err := t.cronStore.UpdateJob(jobID, patch)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("failed to update cron job: %v", err))
 	}
 
-	data, _ := json.MarshalIndent(map[string]interface{}{"job": job}, "", "  ")
+	data, _ := json.MarshalIndent(map[string]any{"job": job}, "", "  ")
 	return NewResult(string(data))
 }
 
-func (t *CronTool) handleRemove(args map[string]interface{}, agentID, userID string) *Result {
+func (t *CronTool) handleRemove(args map[string]any, agentID, userID string) *Result {
 	jobID := resolveJobID(args)
 	if jobID == "" {
 		return ErrorResult("jobId is required for remove action")
@@ -303,11 +347,11 @@ func (t *CronTool) handleRemove(args map[string]interface{}, agentID, userID str
 		return ErrorResult(fmt.Sprintf("failed to remove cron job: %v", err))
 	}
 
-	data, _ := json.MarshalIndent(map[string]interface{}{"deleted": true, "jobId": jobID}, "", "  ")
+	data, _ := json.MarshalIndent(map[string]any{"deleted": true, "jobId": jobID}, "", "  ")
 	return NewResult(string(data))
 }
 
-func (t *CronTool) handleRun(args map[string]interface{}, agentID, userID string) *Result {
+func (t *CronTool) handleRun(args map[string]any, agentID, userID string) *Result {
 	jobID := resolveJobID(args)
 	if jobID == "" {
 		return ErrorResult("jobId is required for run action")
@@ -325,7 +369,7 @@ func (t *CronTool) handleRun(args map[string]interface{}, agentID, userID string
 		return ErrorResult(fmt.Sprintf("failed to run cron job: %v", err))
 	}
 
-	result := map[string]interface{}{
+	result := map[string]any{
 		"ran":   ran,
 		"jobId": jobID,
 	}
@@ -336,7 +380,7 @@ func (t *CronTool) handleRun(args map[string]interface{}, agentID, userID string
 	return NewResult(string(data))
 }
 
-func (t *CronTool) handleRuns(args map[string]interface{}, agentID, userID string) *Result {
+func (t *CronTool) handleRuns(args map[string]any, agentID, userID string) *Result {
 	jobID := resolveJobID(args)
 
 	// Validate ownership if a specific job is requested
@@ -351,11 +395,12 @@ func (t *CronTool) handleRuns(args map[string]interface{}, agentID, userID strin
 		limit = int(v)
 	}
 
-	entries := t.cronStore.GetRunLog(jobID, limit)
+	entries, total := t.cronStore.GetRunLog(jobID, limit, 0)
 
-	result := map[string]interface{}{
+	result := map[string]any{
 		"entries": entries,
 		"count":   len(entries),
+		"total":   total,
 	}
 	data, _ := json.MarshalIndent(result, "", "  ")
 	return NewResult(string(data))
@@ -363,7 +408,7 @@ func (t *CronTool) handleRuns(args map[string]interface{}, agentID, userID strin
 
 // --- helpers ---
 
-func resolveJobID(args map[string]interface{}) string {
+func resolveJobID(args map[string]any) string {
 	if id, ok := args["jobId"].(string); ok && id != "" {
 		return id
 	}
@@ -373,12 +418,12 @@ func resolveJobID(args map[string]interface{}) string {
 	return ""
 }
 
-func stringFromMap(m map[string]interface{}, key string) string {
+func stringFromMap(m map[string]any, key string) string {
 	v, _ := m[key].(string)
 	return v
 }
 
-func numberFromMap(m map[string]interface{}, key string) (float64, bool) {
+func numberFromMap(m map[string]any, key string) (float64, bool) {
 	v, ok := m[key].(float64)
 	return v, ok
 }

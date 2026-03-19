@@ -3,10 +3,11 @@
 // --- Per-agent config types (matching Go config structs) ---
 
 export interface ToolPolicyConfig {
-  profile?: string; // "default", "strict", "permissive"
+  profile?: string; // "full", "coding", "messaging", "minimal"
   allow?: string[];
   deny?: string[];
   alsoAllow?: string[];
+  byProvider?: Record<string, { profile?: string; allow?: string[]; deny?: string[]; alsoAllow?: string[] }>;
 }
 
 export interface SubagentsConfig {
@@ -66,14 +67,11 @@ export interface MemoryConfig {
   text_weight?: number;
 }
 
-export interface QualityGateConfig {
-  event: string;
-  type: "agent" | "command";
-  agent?: string;
-  command?: string;
-  block_on_failure: boolean;
-  max_retries?: number;
-  timeout_seconds?: number;
+export interface WorkspaceSharingConfig {
+  shared_dm?: boolean;
+  shared_group?: boolean;
+  shared_users?: string[];
+  share_memory?: boolean;
 }
 
 export interface AgentData {
@@ -102,6 +100,7 @@ export interface AgentData {
   compaction_config?: CompactionConfig | null;
   context_pruning?: ContextPruningConfig | null;
   other_config?: Record<string, unknown> | null;
+  budget_monthly_cents?: number | null;
 }
 
 export interface AgentShareData {

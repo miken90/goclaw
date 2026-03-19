@@ -2,15 +2,18 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"path/filepath"
 
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/agent"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
-	"github.com/nextlevelbuilder/goclaw/internal/hooks"
-	httpapi "github.com/nextlevelbuilder/goclaw/internal/http"
+	kg "github.com/nextlevelbuilder/goclaw/internal/knowledgegraph"
+	mcpbridge "github.com/nextlevelbuilder/goclaw/internal/mcp"
+	"github.com/nextlevelbuilder/goclaw/internal/media"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/sandbox"
 	"github.com/nextlevelbuilder/goclaw/internal/skills"
@@ -21,13 +24,13 @@ import (
 	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
 )
 
-// wireManagedExtras wires managed-mode components that require PG stores:
+// wireExtras wires components that require PG stores:
 // agent resolver (lazy-creates Loops from DB), virtual FS interceptors, memory tools,
 // and cache invalidation event subscribers.
 // PG store creation and tracing are handled in gateway.go before this is called.
 // Returns the ContextFileInterceptor so callers can pass it to AgentsMethods
 // for immediate cache invalidation on agents.files.set.
-func wireManagedExtras(
+func wireExtras(
 	stores *store.Stores,
 	agentRouter *agent.Router,
 	providerReg *providers.Registry,
@@ -43,17 +46,51 @@ func wireManagedExtras(
 	appCfg *config.Config,
 	sandboxMgr sandbox.Manager,
 	dynamicLoader *tools.DynamicToolLoader,
-) *tools.ContextFileInterceptor {
-	// 1. Context file interceptor (created before resolver so callbacks can reference it)
+	redisClient any, // nil when built without -tags redis or when Redis is unconfigured
+) (*tools.ContextFileInterceptor, *mcpbridge.Pool, *media.Store, tools.PostTurnProcessor) {
+	// 1. Build cache instances (in-memory or Redis depending on build tags)
+	agentCtxCache, userCtxCache := makeCaches(redisClient)
+
+	// 1a. Context file interceptor (created before resolver so callbacks can reference it)
 	var contextFileInterceptor *tools.ContextFileInterceptor
 	if stores.Agents != nil {
-		contextFileInterceptor = tools.NewContextFileInterceptor(stores.Agents, workspace)
+		contextFileInterceptor = tools.NewContextFileInterceptor(stores.Agents, workspace, agentCtxCache, userCtxCache)
+	}
+
+	// 1c. Persistent media storage for cross-turn image/document access
+	mediaStore, err := media.NewStore(filepath.Join(workspace, ".media"))
+	if err != nil {
+		slog.Warn("media store creation failed, images will not persist across turns", "error", err)
+	}
+
+	// Wire media cleanup on session delete.
+	if mediaStore != nil {
+		if pgSess, ok := sessStore.(*pg.PGSessionStore); ok {
+			pgSess.OnDelete = func(sessionKey string) {
+				_ = mediaStore.DeleteSession(sessionKey)
+			}
+		}
+		// Register media analysis tools (need mediaStore for file access).
+		toolsReg.Register(tools.NewReadDocumentTool(providerReg, mediaStore))
+		toolsReg.Register(tools.NewReadAudioTool(providerReg, mediaStore))
+		toolsReg.Register(tools.NewReadVideoTool(providerReg, mediaStore))
+		toolsReg.Register(tools.NewCreateVideoTool(providerReg))
+		slog.Info("media tools registered", "tools", "read_document,read_audio,read_video,create_video")
+	}
+
+	// 1e. Wire secure CLI store into exec tool for credentialed exec
+	if stores.SecureCLI != nil {
+		if execTool, ok := toolsReg.Get("exec"); ok {
+			if et, ok := execTool.(*tools.ExecTool); ok {
+				et.SetSecureCLIStore(stores.SecureCLI)
+			}
+		}
 	}
 
 	// 2. User seeding callback: seeds per-user context files on first chat
 	var ensureUserFiles agent.EnsureUserFilesFunc
 	if stores.Agents != nil {
-		ensureUserFiles = buildEnsureUserFiles(stores.Agents)
+		ensureUserFiles = buildEnsureUserFiles(stores.Agents, stores.ConfigPermissions)
 	}
 
 	// 3. Context file loader callback: loads per-user context files dynamically
@@ -75,21 +112,33 @@ func wireManagedExtras(
 		}
 	}
 
-	// 5. Set up agent resolver: lazy-creates Loops from DB
+	// 5. Shared MCP connection pool (eliminates duplicate connections across agents)
+	var mcpPool *mcpbridge.Pool
+	if stores.MCP != nil {
+		mcpPool = mcpbridge.NewPool()
+	}
+
+	// 6. Set up agent resolver: lazy-creates Loops from DB
+	var skillAccessStore store.SkillAccessStore
+	if sas, ok := stores.Skills.(store.SkillAccessStore); ok {
+		skillAccessStore = sas
+	}
+
 	resolver := agent.NewManagedResolver(agent.ResolverDeps{
-		AgentStore:        stores.Agents,
-		ProviderReg:       providerReg,
-		Bus:               msgBus,
-		Sessions:          sessStore,
-		Tools:             toolsReg,
-		ToolPolicy:        toolPE,
-		Skills:            skillsLoader,
-		HasMemory:         hasMemory,
-		TraceCollector:    traceCollector,
-		EnsureUserFiles:   ensureUserFiles,
-		ContextFileLoader: contextFileLoader,
-		BootstrapCleanup:  buildBootstrapCleanup(stores.Agents),
-		InjectionAction:   injectionAction,
+		AgentStore:             stores.Agents,
+		ProviderReg:            providerReg,
+		Bus:                    msgBus,
+		Sessions:               sessStore,
+		Tools:                  toolsReg,
+		ToolPolicy:             toolPE,
+		Skills:                 skillsLoader,
+		SkillAccessStore:       skillAccessStore,
+		HasMemory:              hasMemory,
+		TraceCollector:         traceCollector,
+		EnsureUserFiles:        ensureUserFiles,
+		ContextFileLoader:      contextFileLoader,
+		BootstrapCleanup:       buildBootstrapCleanup(stores.Agents),
+		InjectionAction:        injectionAction,
 		MaxMessageChars:        appCfg.Gateway.MaxMessageChars,
 		CompactionCfg:          appCfg.Agents.Defaults.Compaction,
 		ContextPruningCfg:      appCfg.Agents.Defaults.ContextPruning,
@@ -99,7 +148,15 @@ func wireManagedExtras(
 		DynamicLoader:          dynamicLoader,
 		AgentLinkStore:         stores.AgentLinks,
 		TeamStore:              stores.Teams,
+		DataDir:                workspace,
+		SecureCLIStore:         stores.SecureCLI,
 		BuiltinToolStore:       stores.BuiltinTools,
+		MCPStore:               stores.MCP,
+		MCPPool:                mcpPool,
+		ConfigPermStore:        stores.ConfigPermissions,
+		MediaStore:             mediaStore,
+		ModelPricing:           appCfg.Telemetry.ModelPricing,
+		TracingStore:           stores.Tracing,
 		OnEvent: func(event agent.AgentEvent) {
 			msgBus.Broadcast(bus.Event{
 				Name:    protocol.EventAgent,
@@ -112,6 +169,15 @@ func wireManagedExtras(
 	// Wire virtual FS interceptors: route context + memory file reads/writes to DB.
 	// Share ONE ContextFileInterceptor instance between read_file and write_file
 	// so they share the same cache.
+	// Write-capable tools share a memory interceptor with optional KG extraction hook.
+	var writeMemIntc *tools.MemoryInterceptor
+	if stores.Memory != nil {
+		writeMemIntc = tools.NewMemoryInterceptor(stores.Memory, workspace)
+		// Hook KG extraction on memory writes if KG store is available
+		if stores.KnowledgeGraph != nil && stores.BuiltinTools != nil {
+			writeMemIntc.SetKGExtractFunc(buildKGExtractFunc(stores.KnowledgeGraph, stores.BuiltinTools, providerReg))
+		}
+	}
 	if readTool, ok := toolsReg.Get("read_file"); ok {
 		if ia, ok := readTool.(tools.InterceptorAware); ok {
 			if contextFileInterceptor != nil {
@@ -127,8 +193,8 @@ func wireManagedExtras(
 			if contextFileInterceptor != nil {
 				ia.SetContextFileInterceptor(contextFileInterceptor)
 			}
-			if stores.Memory != nil {
-				ia.SetMemoryInterceptor(tools.NewMemoryInterceptor(stores.Memory, workspace))
+			if writeMemIntc != nil {
+				ia.SetMemoryInterceptor(writeMemIntc)
 			}
 		}
 	}
@@ -137,9 +203,30 @@ func wireManagedExtras(
 			if contextFileInterceptor != nil {
 				ia.SetContextFileInterceptor(contextFileInterceptor)
 			}
+			if writeMemIntc != nil {
+				ia.SetMemoryInterceptor(writeMemIntc)
+			}
+		}
+	}
+	if listTool, ok := toolsReg.Get("list_files"); ok {
+		if ia, ok := listTool.(tools.InterceptorAware); ok {
 			if stores.Memory != nil {
 				ia.SetMemoryInterceptor(tools.NewMemoryInterceptor(stores.Memory, workspace))
 			}
+		}
+	}
+
+	// Wire config perm store for file writer permission checks
+	if stores.ConfigPermissions != nil {
+		for _, toolName := range []string{"read_file", "write_file", "edit", "cron"} {
+			if t, ok := toolsReg.Get(toolName); ok {
+				if cpa, ok := t.(tools.ConfigPermAware); ok {
+					cpa.SetConfigPermStore(stores.ConfigPermissions)
+				}
+			}
+		}
+		if contextFileInterceptor != nil {
+			contextFileInterceptor.SetConfigPermStore(stores.ConfigPermissions)
 		}
 	}
 
@@ -158,11 +245,27 @@ func wireManagedExtras(
 		slog.Info("memory layering enabled (Postgres)")
 	}
 
+	// Wire knowledge graph store on KG tool + hint in memory_search results
+	if stores.KnowledgeGraph != nil {
+		if kgTool, ok := toolsReg.Get("knowledge_graph_search"); ok {
+			if kgt, ok := kgTool.(*tools.KnowledgeGraphSearchTool); ok {
+				kgt.SetKGStore(stores.KnowledgeGraph)
+			}
+		}
+		// Enable KG hint in memory_search results
+		if searchTool, ok := toolsReg.Get("memory_search"); ok {
+			if mst, ok := searchTool.(*tools.MemorySearchTool); ok {
+				mst.SetHasKG(true)
+			}
+		}
+		slog.Info("knowledge graph tool wired (Postgres)")
+	}
+
 	// --- Cache invalidation event subscribers ---
 
 	// Context file cache: invalidate on agent/context data changes
 	if contextFileInterceptor != nil {
-		msgBus.Subscribe("cache:bootstrap", func(event bus.Event) {
+		msgBus.Subscribe(bus.TopicCacheBootstrap, func(event bus.Event) {
 			if event.Name != protocol.EventCacheInvalidate {
 				return
 			}
@@ -170,7 +273,7 @@ func wireManagedExtras(
 			if !ok {
 				return
 			}
-			if payload.Kind == "bootstrap" || payload.Kind == "agent" {
+			if payload.Kind == bus.CacheKindBootstrap || payload.Kind == bus.CacheKindAgent {
 				if payload.Key != "" {
 					agentID, err := uuid.Parse(payload.Key)
 					if err == nil {
@@ -184,12 +287,12 @@ func wireManagedExtras(
 	}
 
 	// Agent router: invalidate Loop cache on agent config changes
-	msgBus.Subscribe("cache:agent", func(event bus.Event) {
+	msgBus.Subscribe(bus.TopicCacheAgent, func(event bus.Event) {
 		if event.Name != protocol.EventCacheInvalidate {
 			return
 		}
 		payload, ok := event.Payload.(bus.CacheInvalidatePayload)
-		if !ok || payload.Kind != "agent" {
+		if !ok || payload.Kind != bus.CacheKindAgent {
 			return
 		}
 		if payload.Key != "" {
@@ -199,40 +302,92 @@ func wireManagedExtras(
 
 	// Skills cache: bump version on skill changes
 	if stores.Skills != nil {
-		msgBus.Subscribe("cache:skills", func(event bus.Event) {
+		msgBus.Subscribe(bus.TopicCacheSkills, func(event bus.Event) {
 			if event.Name != protocol.EventCacheInvalidate {
 				return
 			}
 			payload, ok := event.Payload.(bus.CacheInvalidatePayload)
-			if !ok || payload.Kind != "skills" {
+			if !ok || payload.Kind != bus.CacheKindSkills {
 				return
 			}
 			stores.Skills.BumpVersion()
 		})
 	}
 
+	// Skill grants cache: invalidate all agent caches when grants change
+	msgBus.Subscribe(bus.TopicCacheSkillGrants, func(event bus.Event) {
+		if event.Name != protocol.EventCacheInvalidate {
+			return
+		}
+		payload, ok := event.Payload.(bus.CacheInvalidatePayload)
+		if !ok || payload.Kind != bus.CacheKindSkillGrants {
+			return
+		}
+		agentRouter.InvalidateAll()
+	})
+
+	// MCP cache: invalidate all agent caches when MCP servers/grants change
+	msgBus.Subscribe(bus.TopicCacheMCP, func(event bus.Event) {
+		if event.Name != protocol.EventCacheInvalidate {
+			return
+		}
+		payload, ok := event.Payload.(bus.CacheInvalidatePayload)
+		if !ok || payload.Kind != bus.CacheKindMCP {
+			return
+		}
+		agentRouter.InvalidateAll()
+	})
+
 	// Cron cache: invalidate job cache on cron changes
 	if ci, ok := stores.Cron.(store.CacheInvalidatable); ok {
-		msgBus.Subscribe("cache:cron", func(event bus.Event) {
+		msgBus.Subscribe(bus.TopicCacheCron, func(event bus.Event) {
 			if event.Name != protocol.EventCacheInvalidate {
 				return
 			}
 			payload, ok := event.Payload.(bus.CacheInvalidatePayload)
-			if !ok || payload.Kind != "cron" {
+			if !ok || payload.Kind != bus.CacheKindCron {
 				return
 			}
 			ci.InvalidateCache()
 		})
 	}
 
-	// Custom tools cache: reload global tools on create/update/delete
-	if dynamicLoader != nil {
-		msgBus.Subscribe("cache:custom_tools", func(event bus.Event) {
+	// Heartbeat cache: invalidate due cache on config changes
+	if hi, ok := stores.Heartbeats.(store.CacheInvalidatable); ok {
+		msgBus.Subscribe(bus.TopicCacheHeartbeat, func(event bus.Event) {
 			if event.Name != protocol.EventCacheInvalidate {
 				return
 			}
 			payload, ok := event.Payload.(bus.CacheInvalidatePayload)
-			if !ok || payload.Kind != "custom_tools" {
+			if !ok || payload.Kind != bus.CacheKindHeartbeat {
+				return
+			}
+			hi.InvalidateCache()
+		})
+	}
+
+	// Config permissions cache: invalidate on grant/revoke changes
+	if pi, ok := stores.ConfigPermissions.(store.CacheInvalidatable); ok {
+		msgBus.Subscribe(bus.TopicCacheConfigPerms, func(event bus.Event) {
+			if event.Name != protocol.EventCacheInvalidate {
+				return
+			}
+			payload, ok := event.Payload.(bus.CacheInvalidatePayload)
+			if !ok || payload.Kind != bus.CacheKindConfigPerms {
+				return
+			}
+			pi.InvalidateCache()
+		})
+	}
+
+	// Custom tools cache: reload global tools on create/update/delete
+	if dynamicLoader != nil {
+		msgBus.Subscribe(bus.TopicCacheCustomTools, func(event bus.Event) {
+			if event.Name != protocol.EventCacheInvalidate {
+				return
+			}
+			payload, ok := event.Payload.(bus.CacheInvalidatePayload)
+			if !ok || payload.Kind != bus.CacheKindCustomTools {
 				return
 			}
 			dynamicLoader.ReloadGlobal(context.Background(), toolsReg)
@@ -243,7 +398,7 @@ func wireManagedExtras(
 
 	// Builtin tools cache: re-apply disables on settings/enabled changes
 	if stores.BuiltinTools != nil {
-		msgBus.Subscribe("cache:builtin_tools", func(event bus.Event) {
+		msgBus.Subscribe(bus.TopicCacheBuiltinTools, func(event bus.Event) {
 			if event.Name != protocol.EventCacheInvalidate {
 				return
 			}
@@ -256,165 +411,152 @@ func wireManagedExtras(
 		})
 	}
 
-	// Register delegate tool (inter-agent delegation) if link store is available.
-	// Uses a callback to bridge tools.DelegateRunRequest → agent.RunRequest,
-	// avoiding import cycle between tools and agent packages.
-	if stores.AgentLinks != nil && stores.Agents != nil {
-		runAgentFn := func(ctx context.Context, agentKey string, req tools.DelegateRunRequest) (*tools.DelegateRunResult, error) {
-			loop, err := agentRouter.Get(agentKey)
-			if err != nil {
-				return nil, err
-			}
-			result, err := loop.Run(ctx, agent.RunRequest{
-				SessionKey:        req.SessionKey,
-				Message:           req.Message,
-				UserID:            req.UserID,
-				Channel:           req.Channel,
-				ChatID:            req.ChatID,
-				PeerKind:          req.PeerKind,
-				RunID:             req.RunID,
-				Stream:            req.Stream,
-				ExtraSystemPrompt: req.ExtraSystemPrompt,
-			})
-			if err != nil {
-				return nil, err
-			}
-			dr := &tools.DelegateRunResult{
-				Content:    result.Content,
-				Iterations: result.Iterations,
-			}
-			for _, m := range result.Media {
-				dr.MediaPaths = append(dr.MediaPaths, m.Path)
-			}
-			return dr, nil
-		}
-		delegateMgr := tools.NewDelegateManager(runAgentFn, stores.AgentLinks, stores.Agents, msgBus)
-		if stores.Teams != nil {
-			delegateMgr.SetTeamStore(stores.Teams)
-		}
-		delegateMgr.SetSessionStore(stores.Sessions)
-
-		// Hook engine (quality gates)
-		hookEngine := hooks.NewEngine()
-		hookEngine.RegisterEvaluator(hooks.HookTypeCommand, hooks.NewCommandEvaluator(workspace))
-		agentEvalFn := func(ctx context.Context, agentKey, task string) (string, error) {
-			result, err := delegateMgr.Delegate(hooks.WithSkipHooks(ctx, true), tools.DelegateOpts{
-				TargetAgentKey: agentKey, Task: task, Mode: "sync",
-			})
-			if err != nil {
-				return "", err
-			}
-			return result.Content, nil
-		}
-		hookEngine.RegisterEvaluator(hooks.HookTypeAgent, hooks.NewAgentEvaluator(agentEvalFn))
-		delegateMgr.SetHookEngine(hookEngine)
-
-		// Evaluate-optimize loop tool
-		toolsReg.Register(tools.NewEvaluateLoopTool(delegateMgr))
-
-		// Handoff tool (agent-to-agent conversation transfer)
-		toolsReg.Register(tools.NewHandoffTool(delegateMgr, stores.Teams, stores.Sessions, msgBus))
-
-		// Inject delegation capability into existing SpawnTool
-		if st, ok := toolsReg.Get("spawn"); ok {
-			if spawnTool, ok := st.(*tools.SpawnTool); ok {
-				spawnTool.SetDelegateManager(delegateMgr)
-				slog.Info("spawn tool: delegation enabled")
-			}
-		}
-
-		// Register delegate_search tool (hybrid FTS + semantic agent discovery)
-		var delegateEmbProvider store.EmbeddingProvider
-		if agentStore, ok := stores.Agents.(*pg.PGAgentStore); ok {
-			memCfg := appCfg.Agents.Defaults.Memory
-			if embProvider := resolveEmbeddingProvider(appCfg, memCfg); embProvider != nil {
-				agentStore.SetEmbeddingProvider(embProvider)
-				delegateEmbProvider = embProvider
-				slog.Info("managed mode: agent embeddings enabled")
-
-				// Backfill embeddings for existing agents with frontmatter
-				go func() {
-					count, err := agentStore.BackfillAgentEmbeddings(context.Background())
-					if err != nil {
-						slog.Warn("agent embeddings backfill failed", "error", err)
-					} else if count > 0 {
-						slog.Info("agent embeddings backfill complete", "updated", count)
-					}
-				}()
-			}
-		}
-		toolsReg.Register(tools.NewDelegateSearchTool(stores.AgentLinks, delegateEmbProvider))
-		slog.Info("managed mode: delegate + delegate_search tools registered")
-	}
-
-	// Register team tools (team_tasks + team_message) if team store is available.
+	// Register team tools (team_tasks + team_message + workspace) if team store is available.
+	var postTurn tools.PostTurnProcessor
 	if stores.Teams != nil && stores.Agents != nil {
-		teamMgr := tools.NewTeamToolManager(stores.Teams, stores.Agents, msgBus)
+		teamMgr := tools.NewTeamToolManager(stores.Teams, stores.Agents, msgBus, workspace)
+		postTurn = teamMgr
 		toolsReg.Register(tools.NewTeamTasksTool(teamMgr))
 		toolsReg.Register(tools.NewTeamMessageTool(teamMgr))
-		slog.Info("managed mode: team tools registered")
-	}
-
-	slog.Info("managed mode: resolver + interceptors + cache subscribers wired")
-	return contextFileInterceptor
-}
-
-// wireManagedHTTP creates managed-mode HTTP handlers (agents + skills + traces + MCP + custom tools + channel instances + providers + delegations + builtin tools).
-func wireManagedHTTP(stores *store.Stores, token string, msgBus *bus.MessageBus, toolsReg *tools.Registry, providerReg *providers.Registry, isOwner func(string) bool) (*httpapi.AgentsHandler, *httpapi.SkillsHandler, *httpapi.TracesHandler, *httpapi.MCPHandler, *httpapi.CustomToolsHandler, *httpapi.ChannelInstancesHandler, *httpapi.ProvidersHandler, *httpapi.DelegationsHandler, *httpapi.BuiltinToolsHandler) {
-	var agentsH *httpapi.AgentsHandler
-	var skillsH *httpapi.SkillsHandler
-	var tracesH *httpapi.TracesHandler
-	var mcpH *httpapi.MCPHandler
-	var customToolsH *httpapi.CustomToolsHandler
-	var channelInstancesH *httpapi.ChannelInstancesHandler
-	var providersH *httpapi.ProvidersHandler
-	var delegationsH *httpapi.DelegationsHandler
-	var builtinToolsH *httpapi.BuiltinToolsHandler
-
-	if stores != nil && stores.Agents != nil {
-		var summoner *httpapi.AgentSummoner
-		if providerReg != nil {
-			summoner = httpapi.NewAgentSummoner(stores.Agents, providerReg, msgBus)
-		}
-		agentsH = httpapi.NewAgentsHandler(stores.Agents, token, msgBus, summoner, isOwner)
-	}
-
-	if stores != nil && stores.Skills != nil {
-		if pgSkills, ok := stores.Skills.(*pg.PGSkillStore); ok {
-			dirs := pgSkills.Dirs()
-			if len(dirs) > 0 {
-				skillsH = httpapi.NewSkillsHandler(pgSkills, dirs[0], token)
+		// Wire workspace interceptor into write_file so team workspace validation
+		// and event broadcasting happen transparently via existing file tools.
+		wsInterceptor := tools.NewWorkspaceInterceptor(teamMgr)
+		if writeTool, ok := toolsReg.Get("write_file"); ok {
+			if wia, ok := writeTool.(tools.WorkspaceInterceptorAware); ok {
+				wia.SetWorkspaceInterceptor(wsInterceptor)
 			}
 		}
+		slog.Info("team tools registered", "workspace", workspace)
+
+		// Team cache invalidation via pub/sub
+		msgBus.Subscribe(bus.TopicCacheTeam, func(event bus.Event) {
+			if event.Name != protocol.EventCacheInvalidate {
+				return
+			}
+			payload, ok := event.Payload.(bus.CacheInvalidatePayload)
+			if !ok || payload.Kind != bus.CacheKindTeam {
+				return
+			}
+			teamMgr.InvalidateTeam()
+		})
+
+		// Agent cache invalidation: clear TeamToolManager's agent lookup cache
+		// when agent data changes (update/delete via WS or HTTP).
+		msgBus.Subscribe("cache.agent.team_mgr", func(event bus.Event) {
+			if event.Name != protocol.EventCacheInvalidate {
+				return
+			}
+			payload, ok := event.Payload.(bus.CacheInvalidatePayload)
+			if !ok || payload.Kind != bus.CacheKindAgent {
+				return
+			}
+			teamMgr.InvalidateAgentCache()
+		})
+		slog.Info("team tools registered")
 	}
 
-	if stores != nil && stores.Tracing != nil {
-		tracesH = httpapi.NewTracesHandler(stores.Tracing, token)
-	}
+	// User workspace cache: invalidate per-user workspace path on profile changes
+	msgBus.Subscribe(bus.TopicCacheUserWorkspace, func(event bus.Event) {
+		if event.Name != protocol.EventCacheInvalidate {
+			return
+		}
+		payload, ok := event.Payload.(bus.CacheInvalidatePayload)
+		if !ok || payload.Kind != bus.CacheKindUserWorkspace {
+			return
+		}
+		if payload.Key != "" {
+			agentRouter.InvalidateUserWorkspace(payload.Key)
+		}
+	})
 
-	if stores != nil && stores.MCP != nil {
-		mcpH = httpapi.NewMCPHandler(stores.MCP, token)
-	}
+	// Provider cache: re-register ACP providers on create/update/delete
+	msgBus.Subscribe(bus.TopicCacheProvider, func(event bus.Event) {
+		if event.Name != protocol.EventCacheInvalidate {
+			return
+		}
+		payload, ok := event.Payload.(bus.CacheInvalidatePayload)
+		if !ok || payload.Kind != bus.CacheKindProvider {
+			return
+		}
+		if payload.Key == "" {
+			return
+		}
+		// Re-register from DB if provider still exists and is ACP type
+		p, err := stores.Providers.GetProviderByName(context.Background(), payload.Key)
+		if err != nil {
+			// Provider was deleted or not found — already unregistered by handler
+			return
+		}
+		if p.ProviderType != store.ProviderACP {
+			return
+		}
+		// Unregister old instance (closes ProcessPool) then re-register
+		providerReg.Unregister(p.Name)
+		if p.Enabled {
+			registerACPFromDB(providerReg, *p)
+		}
+	})
 
-	if stores != nil && stores.CustomTools != nil {
-		customToolsH = httpapi.NewCustomToolsHandler(stores.CustomTools, token, msgBus, toolsReg)
-	}
-
-	if stores != nil && stores.ChannelInstances != nil {
-		channelInstancesH = httpapi.NewChannelInstancesHandler(stores.ChannelInstances, token, msgBus)
-	}
-
-	if stores != nil && stores.Providers != nil {
-		providersH = httpapi.NewProvidersHandler(stores.Providers, token, providerReg)
-	}
-
-	if stores != nil && stores.Teams != nil {
-		delegationsH = httpapi.NewDelegationsHandler(stores.Teams, token)
-	}
-
-	if stores != nil && stores.BuiltinTools != nil {
-		builtinToolsH = httpapi.NewBuiltinToolsHandler(stores.BuiltinTools, token, msgBus)
-	}
-
-	return agentsH, skillsH, tracesH, mcpH, customToolsH, channelInstancesH, providersH, delegationsH, builtinToolsH
+	slog.Info("resolver + interceptors + cache subscribers wired")
+	return contextFileInterceptor, mcpPool, mediaStore, postTurn
 }
+
+// kgSettings holds KG extraction settings from the builtin_tools table.
+type kgSettings struct {
+	ExtractOnMemoryWrite bool    `json:"extract_on_memory_write"`
+	ExtractionProvider   string  `json:"extraction_provider"`
+	ExtractionModel      string  `json:"extraction_model"`
+	MinConfidence        float64 `json:"min_confidence"`
+}
+
+// buildKGExtractFunc returns a callback that extracts entities from memory content.
+// Settings are read from the builtin_tools table on each invocation (not cached),
+// so changes take effect immediately without restart.
+func buildKGExtractFunc(kgStore store.KnowledgeGraphStore, bts store.BuiltinToolStore, providerReg *providers.Registry) tools.KGExtractFunc {
+	return func(ctx context.Context, agentID, userID, content string) {
+		slog.Info("kg extract: triggered", "agent", agentID, "user", userID, "content_len", len(content))
+		// Read settings from DB on each call so admin changes take effect immediately
+		raw, err := bts.GetSettings(ctx, "knowledge_graph_search")
+		if err != nil || raw == nil {
+			slog.Warn("kg extract: no settings found", "error", err)
+			return
+		}
+		var settings kgSettings
+		if err := json.Unmarshal(raw, &settings); err != nil {
+			slog.Warn("kg extract: invalid settings", "error", err)
+			return
+		}
+		if !settings.ExtractOnMemoryWrite || settings.ExtractionProvider == "" || settings.ExtractionModel == "" {
+			return
+		}
+
+		p, err := providerReg.Get(settings.ExtractionProvider)
+		if err != nil {
+			slog.Warn("kg extract: provider not found", "provider", settings.ExtractionProvider, "error", err)
+			return
+		}
+		extractor := kg.NewExtractor(p, settings.ExtractionModel, settings.MinConfidence)
+		result, err := extractor.Extract(ctx, content)
+		if err != nil {
+			slog.Warn("kg extract: extraction failed", "agent", agentID, "error", err)
+			return
+		}
+		if len(result.Entities) == 0 && len(result.Relations) == 0 {
+			return
+		}
+		for i := range result.Entities {
+			result.Entities[i].AgentID = agentID
+			result.Entities[i].UserID = userID
+		}
+		for i := range result.Relations {
+			result.Relations[i].AgentID = agentID
+			result.Relations[i].UserID = userID
+		}
+		if err := kgStore.IngestExtraction(ctx, agentID, userID, result.Entities, result.Relations); err != nil {
+			slog.Warn("kg extract: ingest failed", "agent", agentID, "error", err)
+			return
+		}
+		slog.Info("kg extract: ingested from memory write", "agent", agentID, "entities", len(result.Entities), "relations", len(result.Relations))
+	}
+}
+

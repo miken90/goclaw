@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
@@ -28,6 +29,7 @@ func (sm *SubagentManager) runTask(ctx context.Context, task *SubagentTask, call
 			Label:      task.Label,
 			Status:     task.Status,
 			Result:     task.Result,
+			Media:      task.Media,
 			Runtime:    elapsed,
 			Iterations: iterations,
 		}
@@ -35,7 +37,9 @@ func (sm *SubagentManager) runTask(ctx context.Context, task *SubagentTask, call
 			OriginChannel:    task.OriginChannel,
 			OriginChatID:     task.OriginChatID,
 			OriginPeerKind:   task.OriginPeerKind,
+			OriginLocalKey:   task.OriginLocalKey,
 			OriginUserID:     task.OriginUserID,
+			OriginSessionKey: task.OriginSessionKey,
 			ParentAgent:      task.ParentID,
 			OriginTraceID:    task.OriginTraceID.String(),
 			OriginRootSpanID: task.OriginRootSpanID.String(),
@@ -47,24 +51,32 @@ func (sm *SubagentManager) runTask(ctx context.Context, task *SubagentTask, call
 			sm.announceQueue.Enqueue(sessionKey, item, meta)
 		} else {
 			// Direct publish (no batching)
-			remainingActive := sm.CountRunningForParent(task.ParentID)
-			announceContent := FormatBatchedAnnounce([]AnnounceQueueItem{item}, remainingActive)
+			roster := sm.RosterForParent(task.ParentID)
+			announceContent := FormatBatchedAnnounce([]AnnounceQueueItem{item}, roster)
 
+			announceMeta := map[string]string{
+				"origin_channel":      task.OriginChannel,
+				"origin_peer_kind":    task.OriginPeerKind,
+				"parent_agent":        task.ParentID,
+				"subagent_id":         task.ID,
+				"subagent_label":      task.Label,
+				"origin_trace_id":     task.OriginTraceID.String(),
+				"origin_root_span_id": task.OriginRootSpanID.String(),
+			}
+			if task.OriginLocalKey != "" {
+				announceMeta["origin_local_key"] = task.OriginLocalKey
+			}
+			if task.OriginSessionKey != "" {
+				announceMeta["origin_session_key"] = task.OriginSessionKey
+			}
 			sm.msgBus.PublishInbound(bus.InboundMessage{
 				Channel:  "system",
 				SenderID: fmt.Sprintf("subagent:%s", task.ID),
 				ChatID:   task.OriginChatID,
 				Content:  announceContent,
 				UserID:   task.OriginUserID,
-				Metadata: map[string]string{
-					"origin_channel":      task.OriginChannel,
-					"origin_peer_kind":    task.OriginPeerKind,
-					"parent_agent":        task.ParentID,
-					"subagent_id":         task.ID,
-					"subagent_label":      task.Label,
-					"origin_trace_id":     task.OriginTraceID.String(),
-					"origin_root_span_id": task.OriginRootSpanID.String(),
-				},
+				Metadata: announceMeta,
+				Media:    task.Media,
 			})
 		}
 	}
@@ -108,16 +120,16 @@ func (sm *SubagentManager) executeTask(ctx context.Context, task *SubagentTask) 
 		task.CompletedAt = time.Now().UnixMilli()
 		sm.mu.Unlock()
 
-		// Always emit root subagent span on exit (uses traceCtx which is never cancelled).
-		sm.emitSubagentSpan(traceCtx, subRootSpanID, taskStart, task, model, finalContent)
-		slog.Debug("subagent tracing: root span emitted",
+		// Finalize root subagent span on exit (uses traceCtx which is never cancelled).
+		sm.emitSubagentSpanEnd(traceCtx, subRootSpanID, taskStart, task, finalContent)
+		slog.Debug("subagent tracing: root span finalized",
 			"id", task.ID, "span_id", subRootSpanID,
 			"trace_id", tracing.TraceIDFromContext(traceCtx),
 			"status", task.Status, "iterations", iteration)
 
 		// Schedule auto-archive
-		if sm.config.ArchiveAfterMinutes > 0 {
-			go sm.scheduleArchive(task.ID, time.Duration(sm.config.ArchiveAfterMinutes)*time.Minute)
+		if task.spawnConfig.ArchiveAfterMinutes > 0 {
+			go sm.scheduleArchive(task.ID, time.Duration(task.spawnConfig.ArchiveAfterMinutes)*time.Minute)
 		}
 	}()
 
@@ -131,22 +143,42 @@ func (sm *SubagentManager) executeTask(ctx context.Context, task *SubagentTask) 
 
 	// Build tools for subagent (no spawn/subagent tools to prevent recursion)
 	toolsReg := sm.createTools()
-	sm.applyDenyList(toolsReg, task.Depth)
+	sm.applyDenyList(toolsReg, task.Depth, task.spawnConfig)
 
-	// Determine model (cascading priority matching TS sessions-spawn-tool.ts):
-	// 1. Per-task model override (highest)
-	// 2. SubagentConfig.Model (global subagent override)
-	// 3. SubagentManager default model (inherited from parent)
+	// Determine model (cascading priority):
+	// 1. Per-task model override (highest — LLM specified model in spawn call)
+	// 2. SubagentConfig.Model (agent-level subagent override)
+	// 3. Parent agent's model (inherit from the agent that spawned us)
+	// 4. SubagentManager default model (system-wide fallback)
 	model = sm.model
-	if sm.config.Model != "" {
-		model = sm.config.Model
+	if parentModel := ParentModelFromCtx(ctx); parentModel != "" {
+		model = parentModel
+	}
+	if task.spawnConfig.Model != "" {
+		model = task.spawnConfig.Model
 	}
 	if task.Model != "" {
 		model = task.Model
 	}
 
+	// Determine provider (cascading priority):
+	// 1. Parent agent's provider (inherit so model/provider combo stays valid)
+	// 2. SubagentManager default provider (system-wide fallback)
+	activeProvider := sm.provider
+	if sm.providerReg != nil {
+		if parentProviderName := ParentProviderFromCtx(ctx); parentProviderName != "" {
+			if p, err := sm.providerReg.Get(parentProviderName); err == nil {
+				activeProvider = p
+			}
+		}
+	}
+
+	// Emit running subagent root span (after model resolution so span has correct model).
+	sm.emitSubagentSpanStart(traceCtx, subRootSpanID, taskStart, task, model, activeProvider.Name())
+
 	// Build subagent system prompt (matching TS buildSubagentSystemPrompt pattern).
-	systemPrompt := sm.buildSubagentSystemPrompt(task)
+	workspace := ToolWorkspaceFromCtx(ctx)
+	systemPrompt := sm.buildSubagentSystemPrompt(task, task.spawnConfig, workspace)
 
 	messages := []providers.Message{
 		{Role: "system", Content: systemPrompt},
@@ -154,6 +186,7 @@ func (sm *SubagentManager) executeTask(ctx context.Context, task *SubagentTask) 
 	}
 
 	// Run LLM iteration loop (similar to agent loop but simplified)
+	var mediaFiles []bus.MediaFile
 	maxIterations := 20
 
 	for iteration < maxIterations {
@@ -171,15 +204,16 @@ func (sm *SubagentManager) executeTask(ctx context.Context, task *SubagentTask) 
 			Messages: messages,
 			Tools:    toolsReg.ProviderDefs(),
 			Model:    model,
-			Options: map[string]interface{}{
+			Options: map[string]any{
 				"max_tokens":  4096,
 				"temperature": 0.5,
 			},
 		}
 
 		llmStart := time.Now().UTC()
-		resp, err := sm.provider.Chat(ctx, chatReq)
-		sm.emitLLMSpan(subTraceCtx, llmStart, iteration, model, messages, resp, err)
+		llmSpanID := sm.emitLLMSpanStart(subTraceCtx, llmStart, iteration, model, activeProvider.Name(), messages)
+		resp, err := activeProvider.Chat(ctx, chatReq)
+		sm.emitLLMSpanEnd(subTraceCtx, llmSpanID, llmStart, resp, err)
 
 		if err != nil {
 			sm.mu.Lock()
@@ -208,11 +242,25 @@ func (sm *SubagentManager) executeTask(ctx context.Context, task *SubagentTask) 
 		for _, tc := range resp.ToolCalls {
 			slog.Debug("subagent tool call", "id", task.ID, "tool", tc.Name)
 
-			toolStart := time.Now().UTC()
-			result := toolsReg.Execute(ctx, tc.Name, tc.Arguments)
-
 			argsJSON, _ := json.Marshal(tc.Arguments)
-			sm.emitToolSpan(subTraceCtx, toolStart, tc.Name, tc.ID, string(argsJSON), result.ForLLM, result.IsError)
+			toolStart := time.Now().UTC()
+			toolSpanID := sm.emitToolSpanStart(subTraceCtx, toolStart, tc.Name, tc.ID, string(argsJSON))
+			result := toolsReg.Execute(ctx, tc.Name, tc.Arguments)
+			sm.emitToolSpanEnd(subTraceCtx, toolSpanID, toolStart, result.ForLLM, result.IsError)
+
+			// Capture media file paths from tool results (e.g. image generation).
+			if len(result.Media) > 0 {
+				mediaFiles = append(mediaFiles, result.Media...)
+			} else if strings.HasPrefix(strings.TrimSpace(result.ForLLM), "MEDIA:") {
+				// Fallback: parse MEDIA: prefix from ForLLM (same as agent loop's parseMediaResult)
+				p := strings.TrimSpace(strings.TrimSpace(result.ForLLM)[6:])
+				if nl := strings.IndexByte(p, '\n'); nl >= 0 {
+					p = strings.TrimSpace(p[:nl])
+				}
+				if p != "" {
+					mediaFiles = append(mediaFiles, bus.MediaFile{Path: p})
+				}
+			}
 
 			messages = append(messages, providers.Message{
 				Role:       "tool",
@@ -228,6 +276,7 @@ func (sm *SubagentManager) executeTask(ctx context.Context, task *SubagentTask) 
 	}
 	task.Status = TaskStatusCompleted
 	task.Result = finalContent
+	task.Media = mediaFiles
 	sm.mu.Unlock()
 
 	slog.Info("subagent completed", "id", task.ID, "iterations", iteration)

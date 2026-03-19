@@ -23,13 +23,14 @@ type Channel struct {
 	*channels.BaseChannel
 	bot              *telego.Bot
 	config           config.TelegramConfig
+	httpClient       *http.Client
 	pairingService   store.PairingStore
-	agentStore       store.AgentStore // for group file writer management (nil in standalone)
-	teamStore        store.TeamStore  // for /tasks, /task_detail commands (nil in standalone)
+	agentStore      store.AgentStore              // for agent key lookup (nil if not configured)
+	configPermStore store.ConfigPermissionStore   // for group file writer management (nil if not configured)
+	teamStore       store.TeamStore               // for /tasks, /task_detail commands (nil if not configured)
 	placeholders     sync.Map         // localKey string → messageID int
 	stopThinking     sync.Map         // localKey string → *thinkingCancel
 	typingCtrls      sync.Map         // localKey string → *typing.Controller
-	streams          sync.Map         // localKey string → *DraftStream (streaming preview)
 	reactions        sync.Map         // localKey string → *StatusReactionController
 	pairingReplySent sync.Map         // userID string → time.Time (debounce pairing replies)
 	threadIDs        sync.Map         // localKey string → messageThreadID int (for forum topic routing)
@@ -54,28 +55,36 @@ func (c *thinkingCancel) Cancel() {
 // New creates a new Telegram channel from config.
 // pairingSvc is optional (nil = fall back to allowlist only).
 // agentStore is optional (nil = group file writer commands disabled).
+// configPermStore is optional (nil = group file writer commands disabled).
 // teamStore is optional (nil = /tasks, /task_detail commands disabled).
-func New(cfg config.TelegramConfig, msgBus *bus.MessageBus, pairingSvc store.PairingStore, agentStore store.AgentStore, teamStore store.TeamStore) (*Channel, error) {
+func New(cfg config.TelegramConfig, msgBus *bus.MessageBus, pairingSvc store.PairingStore, agentStore store.AgentStore, configPermStore store.ConfigPermissionStore, teamStore store.TeamStore, pendingStore store.PendingMessageStore) (*Channel, error) {
 	var opts []telego.BotOption
+
+	if cfg.APIServer != "" {
+		opts = append(opts, telego.WithAPIServer(cfg.APIServer))
+	}
+
+	httpClient := &http.Client{
+		Timeout: 30 * time.Second,
+	}
 
 	if cfg.Proxy != "" {
 		proxyURL, parseErr := url.Parse(cfg.Proxy)
 		if parseErr != nil {
 			return nil, fmt.Errorf("invalid proxy URL %q: %w", cfg.Proxy, parseErr)
 		}
-		opts = append(opts, telego.WithHTTPClient(&http.Client{
-			Transport: &http.Transport{
-				Proxy: http.ProxyURL(proxyURL),
-			},
-		}))
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.Proxy = http.ProxyURL(proxyURL)
+		httpClient.Transport = transport
 	}
+	opts = append(opts, telego.WithHTTPClient(httpClient))
 
 	bot, err := telego.NewBot(cfg.Token, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("create telegram bot: %w", err)
 	}
 
-	base := channels.NewBaseChannel("telegram", msgBus, cfg.AllowFrom)
+	base := channels.NewBaseChannel(channels.TypeTelegram, msgBus, cfg.AllowFrom)
 	base.ValidatePolicy(cfg.DMPolicy, cfg.GroupPolicy)
 
 	requireMention := true
@@ -89,15 +98,17 @@ func New(cfg config.TelegramConfig, msgBus *bus.MessageBus, pairingSvc store.Pai
 	}
 
 	return &Channel{
-		BaseChannel:    base,
-		bot:            bot,
-		config:         cfg,
-		pairingService: pairingSvc,
-		agentStore:     agentStore,
-		teamStore:      teamStore,
-		groupHistory:   channels.NewPendingHistory(),
-		historyLimit:   historyLimit,
-		requireMention: requireMention,
+		BaseChannel:     base,
+		bot:             bot,
+		config:          cfg,
+		httpClient:      httpClient,
+		pairingService:  pairingSvc,
+		agentStore:      agentStore,
+		configPermStore: configPermStore,
+		teamStore:       teamStore,
+		groupHistory:    channels.MakeHistory(channels.TypeTelegram, pendingStore),
+		historyLimit:    historyLimit,
+		requireMention:  requireMention,
 	}, nil
 }
 
@@ -126,6 +137,7 @@ func (c *Channel) Start(ctx context.Context) error {
 	}
 
 	c.SetRunning(true)
+	c.groupHistory.StartFlusher()
 	slog.Info("telegram bot connected", "username", c.bot.Username())
 
 	// Register bot menu commands with retry.
@@ -185,10 +197,44 @@ func (c *Channel) Start(ctx context.Context) error {
 	return nil
 }
 
-// StreamEnabled reports whether streaming is active for this channel.
-// Returns true only when stream_mode is "partial".
-func (c *Channel) StreamEnabled() bool {
-	return c.config.StreamMode == "partial"
+// StreamEnabled reports whether streaming is active for the given chat type.
+// Controlled by separate dm_stream / group_stream config flags (both default false).
+//
+// DM streaming: uses sendMessageDraft (stealth preview) by default, falls back to
+// sendMessage+editMessageText if draft API is unavailable. Controlled by draft_transport config.
+// Group streaming: sends a new message, edits progressively, hands off to Send().
+func (c *Channel) StreamEnabled(isGroup bool) bool {
+	if isGroup {
+		return c.config.GroupStream != nil && *c.config.GroupStream
+	}
+	return c.config.DMStream != nil && *c.config.DMStream
+}
+
+// draftTransportEnabled returns whether sendMessageDraft should be used for DM streaming.
+// Default: false (disabled). When enabled, uses stealth preview with no per-edit notifications,
+// but may cause "reply to deleted message" artifacts on some Telegram clients (tdesktop#10315).
+func (c *Channel) draftTransportEnabled() bool {
+	if c.config.DraftTransport == nil {
+		return false
+	}
+	return *c.config.DraftTransport
+}
+
+// ReasoningStreamEnabled returns whether reasoning should be shown as a separate message.
+// Default: true. Set "reasoning_stream": false to hide reasoning (only show answer).
+func (c *Channel) ReasoningStreamEnabled() bool {
+	if c.config.ReasoningStream == nil {
+		return true
+	}
+	return *c.config.ReasoningStream
+}
+
+// BlockReplyEnabled returns the per-channel block_reply override (nil = inherit gateway default).
+func (c *Channel) BlockReplyEnabled() *bool { return c.config.BlockReply }
+
+// SetPendingCompaction configures LLM-based auto-compaction for pending messages.
+func (c *Channel) SetPendingCompaction(cfg *channels.CompactionConfig) {
+	c.groupHistory.SetCompactionConfig(cfg)
 }
 
 // Stop shuts down the Telegram bot by cancelling the long polling context
@@ -196,6 +242,7 @@ func (c *Channel) StreamEnabled() bool {
 func (c *Channel) Stop(_ context.Context) error {
 	slog.Info("stopping telegram bot")
 	c.SetRunning(false)
+	c.groupHistory.StopFlusher()
 
 	if c.pollCancel != nil {
 		c.pollCancel()
@@ -229,8 +276,31 @@ func parseRawChatID(key string) (int64, error) {
 	raw := key
 	if idx := strings.Index(key, ":topic:"); idx > 0 {
 		raw = key[:idx]
+	} else if idx := strings.Index(key, ":thread:"); idx > 0 {
+		raw = key[:idx]
 	}
 	return parseChatID(raw)
+}
+
+// CreateForumTopic creates a new forum topic in a supergroup.
+// Implements tools.ForumTopicCreator interface.
+func (c *Channel) CreateForumTopic(ctx context.Context, chatID int64, name string, iconColor int, iconEmojiID string) (int, string, error) {
+	params := &telego.CreateForumTopicParams{
+		ChatID: telego.ChatID{ID: chatID},
+		Name:   name,
+	}
+	if iconColor > 0 {
+		params.IconColor = iconColor
+	}
+	if iconEmojiID != "" {
+		params.IconCustomEmojiID = iconEmojiID
+	}
+
+	topic, err := c.bot.CreateForumTopic(ctx, params)
+	if err != nil {
+		return 0, "", fmt.Errorf("telegram API: %w", err)
+	}
+	return topic.MessageThreadID, topic.Name, nil
 }
 
 // telegramGeneralTopicID is the fixed topic ID for the "General" topic in forum supergroups.

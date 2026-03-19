@@ -54,6 +54,7 @@ type TraceData struct {
 	OutputPreview     string          `json:"output_preview,omitempty"`
 	TotalInputTokens  int             `json:"total_input_tokens"`
 	TotalOutputTokens int             `json:"total_output_tokens"`
+	TotalCost         float64         `json:"total_cost"`
 	SpanCount         int             `json:"span_count"`
 	LLMCallCount      int             `json:"llm_call_count"`
 	ToolCallCount     int             `json:"tool_call_count"`
@@ -61,6 +62,7 @@ type TraceData struct {
 	Error             string          `json:"error,omitempty"`
 	Metadata          json.RawMessage `json:"metadata,omitempty"`
 	Tags              []string        `json:"tags,omitempty"`
+	TeamID            *uuid.UUID      `json:"team_id,omitempty"`
 	CreatedAt         time.Time       `json:"created_at"`
 }
 
@@ -82,6 +84,7 @@ type SpanData struct {
 	Provider      string          `json:"provider,omitempty"`
 	InputTokens   int             `json:"input_tokens,omitempty"`
 	OutputTokens  int             `json:"output_tokens,omitempty"`
+	TotalCost     *float64        `json:"total_cost,omitempty"`
 	FinishReason  string          `json:"finish_reason,omitempty"`
 	ModelParams   json.RawMessage `json:"model_params,omitempty"`
 	ToolName      string          `json:"tool_name,omitempty"`
@@ -89,20 +92,38 @@ type SpanData struct {
 	InputPreview  string          `json:"input_preview,omitempty"`
 	OutputPreview string          `json:"output_preview,omitempty"`
 	Metadata      json.RawMessage `json:"metadata,omitempty"`
+	TeamID        *uuid.UUID      `json:"team_id,omitempty"`
 	CreatedAt     time.Time       `json:"created_at"`
 }
 
 // TraceListOpts configures trace listing.
 type TraceListOpts struct {
-	AgentID       *uuid.UUID
-	UserID        string
-	SessionKey    string
-	Status        string
-	Limit int
-	Offset        int
+	AgentID    *uuid.UUID
+	UserID     string
+	SessionKey string
+	Status     string
+	Channel    string
+	Limit      int
+	Offset     int
 }
 
-// TracingStore manages LLM traces and spans (managed mode only).
+// CostSummaryOpts configures cost aggregation queries.
+type CostSummaryOpts struct {
+	AgentID *uuid.UUID
+	From    *time.Time
+	To      *time.Time
+}
+
+// CostSummaryRow is a single row of aggregated cost data.
+type CostSummaryRow struct {
+	AgentID           *uuid.UUID `json:"agent_id,omitempty"`
+	TotalCost         float64    `json:"total_cost"`
+	TotalInputTokens  int        `json:"total_input_tokens"`
+	TotalOutputTokens int        `json:"total_output_tokens"`
+	TraceCount        int        `json:"trace_count"`
+}
+
+// TracingStore manages LLM traces and spans.
 type TracingStore interface {
 	CreateTrace(ctx context.Context, trace *TraceData) error
 	UpdateTrace(ctx context.Context, traceID uuid.UUID, updates map[string]any) error
@@ -113,8 +134,13 @@ type TracingStore interface {
 	CreateSpan(ctx context.Context, span *SpanData) error
 	UpdateSpan(ctx context.Context, spanID uuid.UUID, updates map[string]any) error
 	GetTraceSpans(ctx context.Context, traceID uuid.UUID) ([]SpanData, error)
+	ListChildTraces(ctx context.Context, parentTraceID uuid.UUID) ([]TraceData, error)
 
 	// Batch operations (async flush)
 	BatchCreateSpans(ctx context.Context, spans []SpanData) error
 	BatchUpdateTraceAggregates(ctx context.Context, traceID uuid.UUID) error
+
+	// Cost aggregation
+	GetMonthlyAgentCost(ctx context.Context, agentID uuid.UUID, year int, month time.Month) (float64, error)
+	GetCostSummary(ctx context.Context, opts CostSummaryOpts) ([]CostSummaryRow, error)
 }

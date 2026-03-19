@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -175,7 +176,12 @@ func (s *PGMemoryStore) IndexDocument(ctx context.Context, agentID, userID, path
 		for i, c := range chunks {
 			texts[i] = c.Text
 		}
-		embeddings, _ = s.provider.Embed(ctx, texts)
+		var embErr error
+		embeddings, embErr = s.provider.Embed(ctx, texts)
+		if embErr != nil {
+			slog.Warn("memory embedding failed, storing chunks without vectors",
+				"path", path, "chunks", len(chunks), "error", embErr)
+		}
 	}
 
 	// Insert chunks
@@ -314,7 +320,7 @@ func vectorToString(v []float32) string {
 		if i > 0 {
 			buf = append(buf, ',')
 		}
-		buf = append(buf, []byte(fmt.Sprintf("%g", f))...)
+		buf = append(buf, fmt.Appendf(nil, "%g", f)...)
 	}
 	buf = append(buf, ']')
 	return string(buf)

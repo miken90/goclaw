@@ -18,7 +18,7 @@ func TestLane_ConcurrencyLimit(t *testing.T) {
 	var maxActive atomic.Int32
 	var wg sync.WaitGroup
 
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		wg.Add(1)
 		err := lane.Submit(context.Background(), func() {
 			defer wg.Done()
@@ -139,7 +139,7 @@ func TestScheduler_SessionSerialization(t *testing.T) {
 	sessionKey := "agent:default:test-session"
 
 	var outcomes []<-chan RunOutcome
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		ch := sched.Schedule(ctx, "main", agent.RunRequest{
 			SessionKey: sessionKey,
 			Message:    "hello",

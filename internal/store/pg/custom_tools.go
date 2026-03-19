@@ -193,9 +193,9 @@ func (s *PGCustomToolStore) ListAll(ctx context.Context) ([]store.CustomToolDef,
 	return s.scanTools(rows)
 }
 
-func buildCustomToolWhere(opts store.CustomToolListOpts) (string, []interface{}) {
+func buildCustomToolWhere(opts store.CustomToolListOpts) (string, []any) {
 	conditions := []string{"enabled = true"}
-	var args []interface{}
+	var args []any
 	argIdx := 1
 
 	if opts.AgentID != nil {
@@ -204,8 +204,9 @@ func buildCustomToolWhere(opts store.CustomToolListOpts) (string, []interface{})
 		argIdx++
 	}
 	if opts.Search != "" {
-		conditions = append(conditions, fmt.Sprintf("(name ILIKE $%d OR description ILIKE $%d)", argIdx, argIdx))
-		args = append(args, "%"+opts.Search+"%")
+		conditions = append(conditions, fmt.Sprintf("(name ILIKE $%d ESCAPE '\\' OR description ILIKE $%d ESCAPE '\\')", argIdx, argIdx))
+		escaped := strings.NewReplacer("%", "\\%", "_", "\\_").Replace(opts.Search)
+		args = append(args, "%"+escaped+"%")
 	}
 
 	return " WHERE " + strings.Join(conditions, " AND "), args

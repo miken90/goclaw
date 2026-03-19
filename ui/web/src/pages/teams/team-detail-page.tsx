@@ -1,14 +1,15 @@
 import { useState, useEffect, useCallback } from "react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Users } from "lucide-react";
-import { DeferredSpinner } from "@/components/shared/loading-skeleton";
+import { DetailPageSkeleton } from "@/components/shared/loading-skeleton";
+import { ConfirmDeleteDialog } from "@/components/shared/confirm-delete-dialog";
+import { useTranslation } from "react-i18next";
 import { useTeams } from "./hooks/use-teams";
-import { TeamMembersTab } from "./team-members-tab";
-import { TeamTasksTab } from "./team-tasks-tab";
-import { TeamDelegationsTab } from "./team-delegations-tab";
-import type { TeamData, TeamMemberData } from "@/types/team";
+import { BoardHeader } from "./board/board-header";
+import { BoardContainer } from "./board/board-container";
+import { TeamInfoDialog } from "./board/team-info-dialog";
+import { TeamMembersDialog } from "./board/team-members-dialog";
+import { TeamWorkspaceDialog } from "./board/team-workspace-dialog";
+import { TeamVersionModal } from "./team-version-modal";
+import type { TeamData, TeamMemberData, TeamAccessSettings, ScopeEntry } from "@/types/team";
 
 interface TeamDetailPageProps {
   teamId: string;
@@ -16,19 +17,30 @@ interface TeamDetailPageProps {
 }
 
 export function TeamDetailPage({ teamId, onBack }: TeamDetailPageProps) {
-  const { getTeam, getTeamTasks, addMember, removeMember } = useTeams();
+  const { t } = useTranslation("teams");
+  const {
+    getTeam, getTeamTasks, getTeamScopes, addMember, removeMember, deleteTeam,
+    getTaskDetail, getTaskLight, deleteTask, deleteTasksBulk,
+  } = useTeams();
+
   const [team, setTeam] = useState<TeamData | null>(null);
   const [members, setMembers] = useState<TeamMemberData[]>([]);
+  const [scopes, setScopes] = useState<ScopeEntry[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Dialog states
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
+  const [membersOpen, setMembersOpen] = useState(false);
+  const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [versionModalOpen, setVersionModalOpen] = useState(false);
 
   const reload = useCallback(async () => {
     try {
       const res = await getTeam(teamId);
       setTeam(res.team);
       setMembers(res.members ?? []);
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
   }, [teamId, getTeam]);
 
   useEffect(() => {
@@ -36,22 +48,23 @@ export function TeamDetailPage({ teamId, onBack }: TeamDetailPageProps) {
     (async () => {
       setLoading(true);
       try {
-        const res = await getTeam(teamId);
+        const [res, scopeList] = await Promise.all([
+          getTeam(teamId),
+          getTeamScopes(teamId).catch(() => [] as ScopeEntry[]),
+        ]);
         if (!cancelled) {
           setTeam(res.team);
           setMembers(res.members ?? []);
+          setScopes(scopeList.filter((s) => s.chat_id));
         }
-      } catch {
-        // ignore
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      } catch { /* ignore */ }
+      finally { if (!cancelled) setLoading(false); }
     })();
     return () => { cancelled = true; };
-  }, [teamId, getTeam]);
+  }, [teamId, getTeam, getTeamScopes]);
 
-  const handleAddMember = useCallback(async (agentId: string) => {
-    await addMember(teamId, agentId);
+  const handleAddMember = useCallback(async (agentId: string, role?: string) => {
+    await addMember(teamId, agentId, role);
     await reload();
   }, [teamId, addMember, reload]);
 
@@ -61,75 +74,81 @@ export function TeamDetailPage({ teamId, onBack }: TeamDetailPageProps) {
   }, [teamId, removeMember, reload]);
 
   if (loading || !team) {
-    return (
-      <div className="p-6">
-        <Button variant="ghost" onClick={onBack} className="mb-4 gap-1">
-          <ArrowLeft className="h-4 w-4" /> Back
-        </Button>
-        <DeferredSpinner />
-      </div>
-    );
+    return <DetailPageSkeleton tabs={3} />;
   }
 
+  const settings = (team.settings ?? {}) as TeamAccessSettings;
+  const isTeamV2 = (settings.version ?? 1) >= 2;
+
   return (
-    <div className="p-6">
-      {/* Header */}
-      <div className="mb-6 flex items-start gap-4">
-        <Button variant="ghost" size="icon" onClick={onBack} className="mt-0.5 shrink-0">
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-          <Users className="h-6 w-6" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <h2 className="truncate text-xl font-semibold">{team.name}</h2>
-            <Badge variant={team.status === "active" ? "success" : "secondary"}>
-              {team.status}
-            </Badge>
-          </div>
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
-            {team.lead_agent_key && (
-              <>
-                <span>Lead: {team.lead_agent_key}</span>
-                <span className="text-border">|</span>
-              </>
-            )}
-            <span>{members.length} member{members.length !== 1 ? "s" : ""}</span>
-          </div>
-          {team.description && (
-            <p className="mt-1 text-sm text-muted-foreground/70">{team.description}</p>
-          )}
-        </div>
-      </div>
+    <div className="flex h-full flex-col">
+      <BoardHeader
+        team={team}
+        members={members}
+        onBack={onBack}
+        onDelete={() => setDeleteOpen(true)}
+        onSettings={() => setInfoOpen(true)}
+        onMembers={() => setMembersOpen(true)}
+        onV2Click={() => setVersionModalOpen(true)}
+      />
 
-      {/* Tabs */}
-      <div className="rounded-xl border bg-card p-4 shadow-sm">
-        <Tabs defaultValue="members">
-          <TabsList>
-            <TabsTrigger value="members">Members</TabsTrigger>
-            <TabsTrigger value="tasks">Tasks</TabsTrigger>
-            <TabsTrigger value="delegations">Delegations</TabsTrigger>
-          </TabsList>
+      <BoardContainer
+        teamId={teamId}
+        members={members}
+        scopes={scopes}
+        isTeamV2={isTeamV2}
+        getTeamTasks={getTeamTasks}
+        getTaskDetail={getTaskDetail}
+        getTaskLight={getTaskLight}
+        deleteTask={deleteTask}
+        deleteTasksBulk={deleteTasksBulk}
+        onWorkspace={() => setWorkspaceOpen(true)}
+      />
 
-          <TabsContent value="members" className="mt-4">
-            <TeamMembersTab
-              teamId={teamId}
-              members={members}
-              onAddMember={handleAddMember}
-              onRemoveMember={handleRemoveMember}
-            />
-          </TabsContent>
+      {/* Team info + settings + members dialog */}
+      <TeamInfoDialog
+        open={infoOpen}
+        onOpenChange={setInfoOpen}
+        team={team}
+        teamId={teamId}
+        members={members}
+        onSaved={reload}
+      />
 
-          <TabsContent value="tasks" className="mt-4">
-            <TeamTasksTab teamId={teamId} getTeamTasks={getTeamTasks} />
-          </TabsContent>
+      {/* Members dialog */}
+      <TeamMembersDialog
+        open={membersOpen}
+        onOpenChange={setMembersOpen}
+        members={members}
+        onAddMember={handleAddMember}
+        onRemoveMember={handleRemoveMember}
+      />
 
-          <TabsContent value="delegations" className="mt-4">
-            <TeamDelegationsTab teamId={teamId} />
-          </TabsContent>
-        </Tabs>
-      </div>
+      {/* Workspace dialog */}
+      <TeamWorkspaceDialog
+        open={workspaceOpen}
+        onOpenChange={setWorkspaceOpen}
+        teamId={teamId}
+        scopes={scopes}
+      />
+
+      {/* V2 version comparison modal */}
+      <TeamVersionModal open={versionModalOpen} onOpenChange={setVersionModalOpen} />
+
+      {/* Delete confirmation */}
+      <ConfirmDeleteDialog
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        title={t("delete.title")}
+        description={t("detail.deleteDescription", { name: team.name })}
+        confirmValue={team.name}
+        confirmLabel={t("delete.confirmLabel")}
+        onConfirm={async () => {
+          await deleteTeam(teamId);
+          setDeleteOpen(false);
+          onBack();
+        }}
+      />
     </div>
   );
 }

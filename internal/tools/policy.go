@@ -3,61 +3,75 @@ package tools
 import (
 	"log/slog"
 	"strings"
+	"sync"
 
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 )
 
-// Tool groups map group names to tool names (matching TS tool-policy.ts TOOL_GROUPS).
+// toolGroupsMu protects toolGroups from concurrent access.
+var toolGroupsMu sync.RWMutex
+
+// Tool groups map group names to tool names.
 var toolGroups = map[string][]string{
 	"memory":     {"memory_search", "memory_get"},
 	"web":        {"web_search", "web_fetch"},
-	"fs":         {"read_file", "write_file", "list_files", "edit_file", "search", "glob"},
-	"runtime":    {"exec", "process"},
-	"sessions":   {"sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "session_status"},
-	"ui":         {"browser", "canvas"},
-	"automation": {"cron", "gateway"},
-	"messaging":  {"message"},
-	"nodes":      {"nodes"},
-	// Composite group: all goclaw native tools (excludes provider plugins).
-	// Matching TS group:goclaw.
+	"fs":         {"read_file", "write_file", "list_files", "edit"},
+	"runtime":    {"exec"},
+	"sessions":   {"sessions_list", "sessions_history", "sessions_send", "spawn", "session_status"},
+	"ui":         {"browser"},
+	"automation": {"cron"},
+	"messaging":  {"message", "create_forum_topic", "list_group_members"},
+	"team": {"team_tasks", "team_message"},
+	// Composite group: all goclaw native tools (excludes MCP/custom plugins).
 	"goclaw": {
-		"browser", "canvas", "nodes", "cron", "message", "gateway",
-		"agents_list", "sessions_list", "sessions_history", "sessions_send",
-		"sessions_spawn", "session_status",
-		"memory_search", "memory_get", "web_search", "web_fetch", "read_image", "create_image",
+		"read_file", "write_file", "list_files", "edit", "exec",
+		"web_search", "web_fetch", "browser",
+		"memory_search", "memory_get",
+		"sessions_list", "sessions_history", "sessions_send", "spawn", "session_status",
+		"cron", "message", "create_forum_topic", "list_group_members",
+		"read_image", "read_document", "read_audio", "read_video",
+		"create_image", "create_video",
+		"skill_search", "mcp_tool_search", "tts",
+		"team_tasks", "team_message",
 	},
-}
-
-// ownerOnlyTools are tools that only the instance owner can execute.
-// Matching TS OWNER_ONLY_TOOL_NAMES.
-var ownerOnlyTools = map[string]bool{
-	"whatsapp_login": true,
 }
 
 // RegisterToolGroup adds or replaces a dynamic tool group.
 // Used by the MCP manager to register "mcp" and "mcp:{serverName}" groups.
 func RegisterToolGroup(name string, members []string) {
+	toolGroupsMu.Lock()
 	toolGroups[name] = members
+	toolGroupsMu.Unlock()
 }
 
 // UnregisterToolGroup removes a dynamic tool group.
 func UnregisterToolGroup(name string) {
+	toolGroupsMu.Lock()
 	delete(toolGroups, name)
+	toolGroupsMu.Unlock()
 }
 
 // Tool profiles define preset allow sets.
 var toolProfiles = map[string][]string{
 	"minimal":   {"session_status"},
-	"coding":    {"group:fs", "group:runtime", "group:sessions", "group:memory", "read_image", "create_image"},
-	"messaging": {"group:messaging", "sessions_list", "sessions_history", "sessions_send", "session_status"},
+	"coding":    {"group:fs", "group:runtime", "group:sessions", "group:memory", "group:web", "read_image", "create_image", "skill_search"},
+	"messaging": {"group:messaging", "group:web", "sessions_list", "sessions_history", "sessions_send", "session_status", "read_image", "skill_search"},
 	"full":      {}, // empty = no restrictions
 }
 
-// Tool aliases map alternative names to canonical names.
-var toolAliases = map[string]string{
-	"bash":        "exec",
-	"apply-patch": "apply_patch",
+// Legacy tool aliases — migrated to Registry.RegisterAlias() at startup.
+// Kept as seed data only; resolveAlias() is no longer used.
+var legacyToolAliases = map[string]string{
+	"bash":           "exec",
+	"apply-patch":    "apply_patch",
+	"edit_file":      "edit",
+	"sessions_spawn": "spawn",
+}
+
+// LegacyToolAliases returns legacy aliases for registration into the Registry.
+func LegacyToolAliases() map[string]string {
+	return legacyToolAliases
 }
 
 // Subagent deny lists — tools subagents cannot use.
@@ -69,7 +83,7 @@ var subagentDenyList = []string{
 
 // Leaf subagent deny — additional restrictions at max spawn depth.
 var leafSubagentDenyList = []string{
-	"sessions_list", "sessions_history", "sessions_spawn",
+	"sessions_list", "sessions_history", "spawn",
 }
 
 // PolicyEngine evaluates tool access based on layered config policies.
@@ -105,11 +119,30 @@ func (pe *PolicyEngine) FilterTools(
 	}
 
 	// Resolve aliases and build definitions
+	allowedSet := make(map[string]bool, len(allowed))
 	var defs []providers.ToolDefinition
 	for _, name := range allowed {
 		canonical := resolveAlias(name)
 		if tool, ok := registry.Get(canonical); ok {
 			defs = append(defs, ToProviderDef(tool))
+			allowedSet[canonical] = true
+		}
+	}
+
+	// Add registry aliases for allowed canonical tools
+	for alias, canonical := range registry.Aliases() {
+		if !allowedSet[canonical] {
+			continue
+		}
+		if tool, ok := registry.Get(canonical); ok {
+			defs = append(defs, providers.ToolDefinition{
+				Type: "function",
+				Function: providers.ToolFunctionSchema{
+					Name:        alias,
+					Description: tool.Description(),
+					Parameters:  tool.Parameters(),
+				},
+			})
 		}
 	}
 
@@ -214,10 +247,13 @@ func (pe *PolicyEngine) applyProfile(allTools []string, profile string) []string
 // expandSpec expands a spec list (which may contain "group:xxx") into concrete tool names,
 // filtered against available tools.
 func expandSpec(available []string, spec []string) []string {
+	toolGroupsMu.RLock()
+	defer toolGroupsMu.RUnlock()
+
 	expanded := make(map[string]bool)
 	for _, s := range spec {
-		if strings.HasPrefix(s, "group:") {
-			groupName := strings.TrimPrefix(s, "group:")
+		if after, ok := strings.CutPrefix(s, "group:"); ok {
+			groupName := after
 			if members, ok := toolGroups[groupName]; ok {
 				for _, m := range members {
 					expanded[m] = true
@@ -239,10 +275,13 @@ func expandSpec(available []string, spec []string) []string {
 
 // intersectWithSpec keeps only tools in `current` that match the spec (with group expansion).
 func intersectWithSpec(current []string, spec []string) []string {
+	toolGroupsMu.RLock()
+	defer toolGroupsMu.RUnlock()
+
 	expanded := make(map[string]bool)
 	for _, s := range spec {
-		if strings.HasPrefix(s, "group:") {
-			groupName := strings.TrimPrefix(s, "group:")
+		if after, ok := strings.CutPrefix(s, "group:"); ok {
+			groupName := after
 			if members, ok := toolGroups[groupName]; ok {
 				for _, m := range members {
 					expanded[m] = true
@@ -264,10 +303,13 @@ func intersectWithSpec(current []string, spec []string) []string {
 
 // subtractSpec removes tools matching the spec (with group expansion) from current.
 func subtractSpec(current []string, spec []string) []string {
+	toolGroupsMu.RLock()
+	defer toolGroupsMu.RUnlock()
+
 	denied := make(map[string]bool)
 	for _, s := range spec {
-		if strings.HasPrefix(s, "group:") {
-			groupName := strings.TrimPrefix(s, "group:")
+		if after, ok := strings.CutPrefix(s, "group:"); ok {
+			groupName := after
 			if members, ok := toolGroups[groupName]; ok {
 				for _, m := range members {
 					denied[m] = true
@@ -319,8 +361,45 @@ func unionWithSpec(current []string, allTools []string, spec []string) []string 
 	return current
 }
 
+// IsDenied checks if a tool name is explicitly denied by global or agent policy.
+// Used to prevent lazy-activated deferred tools from bypassing the deny list.
+func (pe *PolicyEngine) IsDenied(name string, agentPolicy *config.ToolPolicySpec) bool {
+	if pe.globalPolicy != nil {
+		if matchDenySpec(name, pe.globalPolicy.Deny) {
+			return true
+		}
+	}
+	if agentPolicy != nil {
+		if matchDenySpec(name, agentPolicy.Deny) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchDenySpec returns true if name matches any entry in the deny spec (with group expansion).
+func matchDenySpec(name string, spec []string) bool {
+	toolGroupsMu.RLock()
+	defer toolGroupsMu.RUnlock()
+
+	for _, s := range spec {
+		if after, ok := strings.CutPrefix(s, "group:"); ok {
+			if members, ok := toolGroups[after]; ok {
+				for _, m := range members {
+					if m == name {
+						return true
+					}
+				}
+			}
+		} else if s == name {
+			return true
+		}
+	}
+	return false
+}
+
 func resolveAlias(name string) string {
-	if canonical, ok := toolAliases[name]; ok {
+	if canonical, ok := legacyToolAliases[name]; ok {
 		return canonical
 	}
 	return name

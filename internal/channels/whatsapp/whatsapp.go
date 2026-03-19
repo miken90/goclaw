@@ -32,6 +32,7 @@ type Channel struct {
 	cancel          context.CancelFunc
 	pairingService  store.PairingStore
 	pairingDebounce sync.Map // senderID → time.Time
+	approvedGroups  sync.Map // chatID → true (in-memory cache for paired groups)
 }
 
 // New creates a new WhatsApp channel from config.
@@ -40,7 +41,7 @@ func New(cfg config.WhatsAppConfig, msgBus *bus.MessageBus, pairingSvc store.Pai
 		return nil, fmt.Errorf("whatsapp bridge_url is required")
 	}
 
-	base := channels.NewBaseChannel("whatsapp", msgBus, cfg.AllowFrom)
+	base := channels.NewBaseChannel(channels.TypeWhatsApp, msgBus, cfg.AllowFrom)
 	base.ValidatePolicy(cfg.DMPolicy, cfg.GroupPolicy)
 
 	return &Channel{
@@ -66,6 +67,9 @@ func (c *Channel) Start(ctx context.Context) error {
 	c.SetRunning(true)
 	return nil
 }
+
+// BlockReplyEnabled returns the per-channel block_reply override (nil = inherit gateway default).
+func (c *Channel) BlockReplyEnabled() *bool { return c.config.BlockReply }
 
 // Stop gracefully shuts down the WhatsApp channel.
 func (c *Channel) Stop(_ context.Context) error {
@@ -97,7 +101,7 @@ func (c *Channel) Send(_ context.Context, msg bus.OutboundMessage) error {
 		return fmt.Errorf("whatsapp bridge not connected")
 	}
 
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"type":    "message",
 		"to":      msg.ChatID,
 		"content": msg.Content,
@@ -184,7 +188,7 @@ func (c *Channel) listenLoop() {
 			continue
 		}
 
-		var msg map[string]interface{}
+		var msg map[string]any
 		if err := json.Unmarshal(message, &msg); err != nil {
 			slog.Warn("invalid whatsapp message JSON", "error", err)
 			continue
@@ -199,7 +203,7 @@ func (c *Channel) listenLoop() {
 
 // handleIncomingMessage processes a message received from the bridge.
 // Expected format: {"type":"message","from":"...","chat":"...","content":"...","id":"...","from_name":"...","media":[...]}
-func (c *Channel) handleIncomingMessage(msg map[string]interface{}) {
+func (c *Channel) handleIncomingMessage(msg map[string]any) {
 	senderID, ok := msg["from"].(string)
 	if !ok || senderID == "" {
 		return
@@ -222,7 +226,7 @@ func (c *Channel) handleIncomingMessage(msg map[string]interface{}) {
 			return
 		}
 	} else {
-		if !c.CheckPolicy("group", "", c.config.GroupPolicy, senderID) {
+		if !c.checkGroupPolicy(senderID, chatID) {
 			slog.Debug("whatsapp group message rejected by policy", "sender_id", senderID)
 			return
 		}
@@ -240,7 +244,7 @@ func (c *Channel) handleIncomingMessage(msg map[string]interface{}) {
 	}
 
 	var media []string
-	if mediaData, ok := msg["media"].([]interface{}); ok {
+	if mediaData, ok := msg["media"].([]any); ok {
 		media = make([]string, 0, len(mediaData))
 		for _, m := range mediaData {
 			if path, ok := m.(string); ok {
@@ -263,7 +267,51 @@ func (c *Channel) handleIncomingMessage(msg map[string]interface{}) {
 		"preview", channels.Truncate(content, 50),
 	)
 
+	// Collect contact for processed messages.
+	if cc := c.ContactCollector(); cc != nil {
+		cc.EnsureContact(context.Background(), c.Type(), c.Name(), senderID, senderID, metadata["user_name"], "", peerKind)
+	}
+
 	c.HandleMessage(senderID, chatID, content, media, metadata, peerKind)
+}
+
+// checkGroupPolicy evaluates the group policy for a sender, with pairing support.
+func (c *Channel) checkGroupPolicy(senderID, chatID string) bool {
+	groupPolicy := c.config.GroupPolicy
+	if groupPolicy == "" {
+		groupPolicy = "open"
+	}
+
+	switch groupPolicy {
+	case "disabled":
+		return false
+	case "allowlist":
+		return c.IsAllowed(senderID)
+	case "pairing":
+		if c.IsAllowed(senderID) {
+			return true
+		}
+		if _, cached := c.approvedGroups.Load(chatID); cached {
+			return true
+		}
+		groupSenderID := fmt.Sprintf("group:%s", chatID)
+		if c.pairingService != nil {
+			paired, err := c.pairingService.IsPaired(groupSenderID, c.Name())
+			if err != nil {
+				slog.Warn("security.pairing_check_failed, assuming paired (fail-open)",
+					"group_sender", groupSenderID, "channel", c.Name(), "error", err)
+				paired = true
+			}
+			if paired {
+				c.approvedGroups.Store(chatID, true)
+				return true
+			}
+		}
+		c.sendPairingReply(groupSenderID, chatID)
+		return false
+	default: // "open"
+		return true
+	}
 }
 
 // checkDMPolicy evaluates the DM policy for a sender, handling pairing flow.
@@ -288,7 +336,14 @@ func (c *Channel) checkDMPolicy(senderID, chatID string) bool {
 	default: // "pairing"
 		paired := false
 		if c.pairingService != nil {
-			paired = c.pairingService.IsPaired(senderID, c.Name())
+			p, err := c.pairingService.IsPaired(senderID, c.Name())
+			if err != nil {
+				slog.Warn("security.pairing_check_failed, assuming paired (fail-open)",
+					"sender_id", senderID, "channel", c.Name(), "error", err)
+				paired = true
+			} else {
+				paired = p
+			}
 		}
 		inAllowList := c.HasAllowList() && c.IsAllowed(senderID)
 
@@ -314,7 +369,7 @@ func (c *Channel) sendPairingReply(senderID, chatID string) {
 		}
 	}
 
-	code, err := c.pairingService.RequestPairing(senderID, c.Name(), chatID, "default")
+	code, err := c.pairingService.RequestPairing(senderID, c.Name(), chatID, "default", nil)
 	if err != nil {
 		slog.Debug("whatsapp pairing request failed", "sender_id", senderID, "error", err)
 		return
@@ -333,7 +388,7 @@ func (c *Channel) sendPairingReply(senderID, chatID string) {
 		return
 	}
 
-	payload, _ := json.Marshal(map[string]interface{}{
+	payload, _ := json.Marshal(map[string]any{
 		"type":    "message",
 		"to":      chatID,
 		"content": replyText,

@@ -1,5 +1,7 @@
 import { Bot, User } from "lucide-react";
 import { MessageContent } from "./message-content";
+import { ThinkingBlock } from "./thinking-block";
+import { ToolCallCard } from "./tool-call-card";
 import type { ChatMessage } from "@/types/chat";
 
 interface MessageBubbleProps {
@@ -12,6 +14,17 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
   if (isTool) {
     return null; // Tool messages are shown inline with assistant messages
+  }
+
+  const isAssistant = message.role === "assistant";
+  const hasThinking = isAssistant && !!message.thinking;
+  const hasToolDetails = isAssistant && message.toolDetails && message.toolDetails.length > 0;
+  const hasToolCalls = isAssistant && message.tool_calls && message.tool_calls.length > 0;
+  const hasContent = !!message.content?.trim();
+
+  // Skip assistant messages with no content at all
+  if (isAssistant && !hasContent && !hasToolCalls && !hasToolDetails) {
+    return null;
   }
 
   return (
@@ -28,9 +41,21 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         className={`max-w-[80%] rounded-lg px-4 py-2 ${
           isUser
             ? "bg-primary text-primary-foreground"
-            : "bg-muted"
+            : "bg-card text-card-foreground border border-border shadow-sm"
         }`}
       >
+        {hasThinking && (
+          <div className="mb-2">
+            <ThinkingBlock text={message.thinking!} />
+          </div>
+        )}
+        {hasToolDetails && (
+          <div className="mb-2">
+            {message.toolDetails!.map((entry) => (
+              <ToolCallCard key={entry.toolCallId} entry={entry} />
+            ))}
+          </div>
+        )}
         <MessageContent content={message.content} role={message.role} />
         {message.timestamp && (
           <div className={`mt-1 text-[10px] ${isUser ? "text-primary-foreground/60" : "text-muted-foreground"}`}>

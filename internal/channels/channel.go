@@ -11,16 +11,20 @@ package channels
 import (
 	"context"
 	"log/slog"
+	"net/http"
 	"strings"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
+	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
 // InternalChannels are system channels excluded from outbound dispatch.
+// "browser" uses WebSocket directly — no outbound channel routing needed.
 var InternalChannels = map[string]bool{
 	"cli":      true,
 	"system":   true,
 	"subagent": true,
+	"browser":  true,
 }
 
 // IsInternalChannel checks if a channel name is internal.
@@ -47,10 +51,25 @@ const (
 	GroupPolicyDisabled  GroupPolicy = "disabled"   // No group messages
 )
 
+// Channel type constants used across channel packages and gateway wiring.
+const (
+	TypeTelegram     = "telegram"
+	TypeDiscord      = "discord"
+	TypeSlack        = "slack"
+	TypeFeishu       = "feishu"
+	TypeWhatsApp     = "whatsapp"
+	TypeZaloOA       = "zalo_oa"
+	TypeZaloPersonal = "zalo_personal"
+)
+
 // Channel defines the interface that all channel implementations must satisfy.
 type Channel interface {
-	// Name returns the channel identifier (e.g., "telegram", "discord", "slack").
+	// Name returns the channel instance name (e.g., "telegram", "discord", "slack").
 	Name() string
+
+	// Type returns the platform type (e.g., "telegram", "zalo_personal").
+	// For config-based channels this equals Name(); for DB instances it may differ.
+	Type() string
 
 	// Start begins listening for messages. Should be non-blocking after setup.
 	Start(ctx context.Context) error
@@ -78,29 +97,65 @@ type StreamingChannel interface {
 	// which gives more accurate token usage from providers that don't support
 	// stream_options (e.g. MiniMax). The channel still implements the interface
 	// so it can be toggled at runtime via config.
-	StreamEnabled() bool
-	OnStreamStart(ctx context.Context, chatID string) error
-	OnChunkEvent(ctx context.Context, chatID string, fullText string) error
-	OnStreamEnd(ctx context.Context, chatID string, finalText string) error
+	//
+	// isGroup indicates whether this is a group chat (true) or DM (false).
+	// Channels may choose to always stream for DMs while gating group streaming
+	// behind config (e.g. Telegram uses sendMessageDraft for DMs).
+	StreamEnabled(isGroup bool) bool
+	// CreateStream creates a new per-run streaming handle for the given chatID.
+	// The returned ChannelStream is stored on RunContext so each concurrent run
+	// gets its own stream — eliminates the chatID-keyed sync.Map collision bug.
+	// firstStream: true for the first stream in a run (may become reasoning lane —
+	// must use message transport so it persists as a real message). false for
+	// subsequent streams (answer lane — may use draft transport for stealth preview).
+	CreateStream(ctx context.Context, chatID string, firstStream bool) (ChannelStream, error)
+	// FinalizeStream is called after the stream has been stopped to hand off
+	// the stream's messageID (if any) back to the channel's placeholder map
+	// so that Send() can edit it with the final formatted response.
+	FinalizeStream(ctx context.Context, chatID string, stream ChannelStream)
+	// ReasoningStreamEnabled returns whether reasoning should be shown as a
+	// separate message. Default: true. Channels that don't support lanes can
+	// return false to skip reasoning routing.
+	ReasoningStreamEnabled() bool
+}
+
+// BlockReplyChannel is optionally implemented by channels that override
+// the gateway-level block_reply setting. Returns nil to inherit the gateway default.
+type BlockReplyChannel interface {
+	BlockReplyEnabled() *bool
+}
+
+// WebhookChannel extends Channel with an HTTP handler that can be mounted
+// on the main gateway mux instead of starting a separate HTTP server.
+// This allows webhook-based channels (e.g. Feishu/Lark) to share the main
+// server port, avoiding the need to expose additional ports in Docker.
+type WebhookChannel interface {
+	Channel
+	// WebhookHandler returns the HTTP handler and the path it should be mounted on.
+	// Returns ("", nil) if the channel doesn't use webhook mode.
+	WebhookHandler() (path string, handler http.Handler)
 }
 
 // ReactionChannel extends Channel with status reaction support.
 // Channels that implement this interface can show emoji reactions on user messages
 // to indicate agent status (thinking, tool call, done, error, stall).
+// messageID is a string to support platforms with non-integer IDs (e.g., Feishu "om_xxx").
 type ReactionChannel interface {
 	Channel
-	OnReactionEvent(ctx context.Context, chatID string, messageID int, status string) error
-	ClearReaction(ctx context.Context, chatID string, messageID int) error
+	OnReactionEvent(ctx context.Context, chatID string, messageID string, status string) error
+	ClearReaction(ctx context.Context, chatID string, messageID string) error
 }
 
 // BaseChannel provides shared functionality for all channel implementations.
 // Channel implementations should embed this struct.
 type BaseChannel struct {
-	name      string
-	bus       *bus.MessageBus
-	running   bool
-	allowList []string
-	agentID   string // for DB instances: routes to specific agent (empty = use resolveAgentRoute)
+	name             string
+	channelType      string // platform type; defaults to name if unset
+	bus              *bus.MessageBus
+	running          bool
+	allowList        []string
+	agentID          string                 // for DB instances: routes to specific agent (empty = use resolveAgentRoute)
+	contactCollector *store.ContactCollector // optional: auto-collect contacts from channel messages
 }
 
 // NewBaseChannel creates a new BaseChannel with the given parameters.
@@ -112,17 +167,34 @@ func NewBaseChannel(name string, msgBus *bus.MessageBus, allowList []string) *Ba
 	}
 }
 
-// Name returns the channel name.
+// Name returns the channel instance name.
 func (c *BaseChannel) Name() string { return c.name }
+
+// Type returns the platform type. Falls back to name if unset (config-based channels).
+func (c *BaseChannel) Type() string {
+	if c.channelType != "" {
+		return c.channelType
+	}
+	return c.name
+}
 
 // SetName overrides the channel name (used by InstanceLoader for DB instances).
 func (c *BaseChannel) SetName(name string) { c.name = name }
+
+// SetType sets the platform type (used by InstanceLoader for DB instances).
+func (c *BaseChannel) SetType(t string) { c.channelType = t }
 
 // AgentID returns the explicit agent ID for this channel (empty = use resolveAgentRoute).
 func (c *BaseChannel) AgentID() string { return c.agentID }
 
 // SetAgentID sets the explicit agent ID for routing (used by InstanceLoader for DB instances).
 func (c *BaseChannel) SetAgentID(id string) { c.agentID = id }
+
+// SetContactCollector sets the contact collector for auto-collecting contacts from messages.
+func (c *BaseChannel) SetContactCollector(cc *store.ContactCollector) { c.contactCollector = cc }
+
+// ContactCollector returns the contact collector (may be nil).
+func (c *BaseChannel) ContactCollector() *store.ContactCollector { return c.contactCollector }
 
 // IsRunning returns whether the channel is running.
 func (c *BaseChannel) IsRunning() bool { return c.running }
@@ -221,7 +293,12 @@ func (c *BaseChannel) ValidatePolicy(dmPolicy, groupPolicy string) {
 // This is the standard way for channels to forward received messages.
 // peerKind should be "direct" or "group" (see sessions.PeerDirect, sessions.PeerGroup).
 func (c *BaseChannel) HandleMessage(senderID, chatID, content string, media []string, metadata map[string]string, peerKind string) {
-	if !c.IsAllowed(senderID) {
+	// For DMs, enforce the allowlist as a safety net.
+	// For group messages, skip this check — group access is already enforced
+	// by the channel-specific group policy (checkGroupPolicy / CheckPolicy).
+	// Re-checking the sender here would incorrectly block users who are not
+	// individually listed but are in an allowed (or open-policy) group.
+	if peerKind != "group" && !c.IsAllowed(senderID) {
 		return
 	}
 
@@ -232,12 +309,18 @@ func (c *BaseChannel) HandleMessage(senderID, chatID, content string, media []st
 		userID = senderID[:idx]
 	}
 
+	// Convert string paths to MediaFile (for channels that haven't been updated yet).
+	var mediaFiles []bus.MediaFile
+	for _, p := range media {
+		mediaFiles = append(mediaFiles, bus.MediaFile{Path: p})
+	}
+
 	msg := bus.InboundMessage{
 		Channel:  c.name,
 		SenderID: senderID,
 		ChatID:   chatID,
 		Content:  content,
-		Media:    media,
+		Media:    mediaFiles,
 		PeerKind: peerKind,
 		UserID:   userID,
 		Metadata: metadata,
@@ -245,6 +328,24 @@ func (c *BaseChannel) HandleMessage(senderID, chatID, content string, media []st
 	}
 
 	c.bus.PublishInbound(msg)
+}
+
+// GroupMember represents a member of a group chat.
+type GroupMember struct {
+	MemberID string `json:"member_id"`
+	Name     string `json:"name"`
+}
+
+// GroupMemberProvider is optionally implemented by channels that can list group members.
+type GroupMemberProvider interface {
+	ListGroupMembers(ctx context.Context, chatID string) ([]GroupMember, error)
+}
+
+// PendingCompactable is optionally implemented by channels that have a PendingHistory
+// supporting LLM-based compaction. InstanceLoader uses this to wire compaction config
+// after channel creation.
+type PendingCompactable interface {
+	SetPendingCompaction(cfg *CompactionConfig)
 }
 
 // Truncate shortens a string to maxLen, appending "..." if truncated.

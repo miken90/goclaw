@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -93,7 +94,7 @@ func migrateUpCmd() *cobra.Command {
 			}
 			defer m.Close()
 
-			if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+			if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 				return fmt.Errorf("migrate up: %w", err)
 			}
 
@@ -139,7 +140,7 @@ func migrateDownCmd() *cobra.Command {
 			if steps <= 0 {
 				steps = 1
 			}
-			if err := m.Steps(-steps); err != nil && err != migrate.ErrNoChange {
+			if err := m.Steps(-steps); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 				return fmt.Errorf("migrate down: %w", err)
 			}
 
@@ -226,7 +227,7 @@ func migrateGotoCmd() *cobra.Command {
 			}
 			defer m.Close()
 
-			if err := m.Migrate(uint(version)); err != nil && err != migrate.ErrNoChange {
+			if err := m.Migrate(uint(version)); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 				return fmt.Errorf("migrate goto: %w", err)
 			}
 			slog.Info("migrated to version", "version", version)

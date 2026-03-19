@@ -4,21 +4,53 @@ import (
 	"archive/zip"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/google/uuid"
 
+	"github.com/nextlevelbuilder/goclaw/internal/bus"
+	"github.com/nextlevelbuilder/goclaw/internal/i18n"
+	"github.com/nextlevelbuilder/goclaw/internal/permissions"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
+func (h *SkillsHandler) handleListAgentSkills(w http.ResponseWriter, r *http.Request) {
+	locale := store.LocaleFromContext(r.Context())
+	agentIDStr := r.PathValue("agentID")
+	agentID, err := uuid.Parse(agentIDStr)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidID, "agent")})
+		return
+	}
+
+	skills, err := h.skills.ListWithGrantStatus(r.Context(), agentID)
+	if err != nil {
+		slog.Error("failed to list skills with grant status", "agent_id", agentID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": i18n.T(locale, i18n.MsgFailedToList, "skills")})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"skills": skills})
+}
+
 func (h *SkillsHandler) handleGrantAgent(w http.ResponseWriter, r *http.Request) {
+	locale := store.LocaleFromContext(r.Context())
 	userID := store.UserIDFromContext(r.Context())
 	idStr := r.PathValue("id")
 	skillID, err := uuid.Parse(idStr)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid skill ID"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidID, "skill")})
 		return
+	}
+
+	// Ownership check (admins bypass)
+	auth := resolveAuth(r, h.token)
+	if !permissions.HasMinRole(auth.Role, permissions.RoleAdmin) {
+		if ownerID, found := h.skills.GetSkillOwnerID(skillID); found && ownerID != userID {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "only the skill owner can perform this action"})
+			return
+		}
 	}
 
 	var req struct {
@@ -26,13 +58,13 @@ func (h *SkillsHandler) handleGrantAgent(w http.ResponseWriter, r *http.Request)
 		Version int    `json:"version"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidJSON)})
 		return
 	}
 
 	agentID, err := uuid.Parse(req.AgentID)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid agent_id"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidID, "agent")})
 		return
 	}
 
@@ -46,21 +78,34 @@ func (h *SkillsHandler) handleGrantAgent(w http.ResponseWriter, r *http.Request)
 	}
 
 	h.skills.BumpVersion()
+	h.emitCacheInvalidate(bus.CacheKindSkillGrants, "")
+	emitAudit(h.msgBus, r, "skill.grant_changed", "skill", idStr)
 	writeJSON(w, http.StatusCreated, map[string]string{"ok": "true"})
 }
 
 func (h *SkillsHandler) handleRevokeAgent(w http.ResponseWriter, r *http.Request) {
+	locale := store.LocaleFromContext(r.Context())
 	idStr := r.PathValue("id")
 	skillID, err := uuid.Parse(idStr)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid skill ID"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidID, "skill")})
 		return
+	}
+
+	// Ownership check (admins bypass)
+	auth := resolveAuth(r, h.token)
+	if !permissions.HasMinRole(auth.Role, permissions.RoleAdmin) {
+		userID := store.UserIDFromContext(r.Context())
+		if ownerID, found := h.skills.GetSkillOwnerID(skillID); found && ownerID != userID {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "only the skill owner can perform this action"})
+			return
+		}
 	}
 
 	agentIDStr := r.PathValue("agentID")
 	agentID, err := uuid.Parse(agentIDStr)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid agent ID"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidID, "agent")})
 		return
 	}
 
@@ -70,27 +115,39 @@ func (h *SkillsHandler) handleRevokeAgent(w http.ResponseWriter, r *http.Request
 	}
 
 	h.skills.BumpVersion()
+	h.emitCacheInvalidate(bus.CacheKindSkillGrants, "")
+	emitAudit(h.msgBus, r, "skill.grant_changed", "skill", idStr)
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
 }
 
 func (h *SkillsHandler) handleGrantUser(w http.ResponseWriter, r *http.Request) {
+	locale := store.LocaleFromContext(r.Context())
 	userID := store.UserIDFromContext(r.Context())
 	idStr := r.PathValue("id")
 	skillID, err := uuid.Parse(idStr)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid skill ID"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidID, "skill")})
 		return
+	}
+
+	// Ownership check (admins bypass)
+	auth := resolveAuth(r, h.token)
+	if !permissions.HasMinRole(auth.Role, permissions.RoleAdmin) {
+		if ownerID, found := h.skills.GetSkillOwnerID(skillID); found && ownerID != userID {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "only the skill owner can perform this action"})
+			return
+		}
 	}
 
 	var req struct {
 		UserID string `json:"user_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidJSON)})
 		return
 	}
 	if req.UserID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "user_id is required"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgRequired, "user_id")})
 		return
 	}
 	if err := store.ValidateUserID(req.UserID); err != nil {
@@ -104,15 +161,28 @@ func (h *SkillsHandler) handleGrantUser(w http.ResponseWriter, r *http.Request) 
 	}
 
 	h.skills.BumpVersion()
+	h.emitCacheInvalidate(bus.CacheKindSkillGrants, "")
+	emitAudit(h.msgBus, r, "skill.grant_changed", "skill", idStr)
 	writeJSON(w, http.StatusCreated, map[string]string{"ok": "true"})
 }
 
 func (h *SkillsHandler) handleRevokeUser(w http.ResponseWriter, r *http.Request) {
+	locale := store.LocaleFromContext(r.Context())
 	idStr := r.PathValue("id")
 	skillID, err := uuid.Parse(idStr)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid skill ID"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidID, "skill")})
 		return
+	}
+
+	// Ownership check (admins bypass)
+	auth := resolveAuth(r, h.token)
+	if !permissions.HasMinRole(auth.Role, permissions.RoleAdmin) {
+		userID := store.UserIDFromContext(r.Context())
+		if ownerID, found := h.skills.GetSkillOwnerID(skillID); found && ownerID != userID {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "only the skill owner can perform this action"})
+			return
+		}
 	}
 
 	targetUserID := r.PathValue("userID")
@@ -126,6 +196,8 @@ func (h *SkillsHandler) handleRevokeUser(w http.ResponseWriter, r *http.Request)
 	}
 
 	h.skills.BumpVersion()
+	h.emitCacheInvalidate(bus.CacheKindSkillGrants, "")
+	emitAudit(h.msgBus, r, "skill.grant_changed", "skill", idStr)
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
 }
 
@@ -142,52 +214,4 @@ func readZipFile(f *zip.File) (string, error) {
 		return "", err
 	}
 	return string(data), nil
-}
-
-// parseSkillFrontmatter extracts name, description, and slug from SKILL.md YAML frontmatter.
-func parseSkillFrontmatter(content string) (name, description, slug string) {
-	if !strings.HasPrefix(content, "---") {
-		return "", "", ""
-	}
-	end := strings.Index(content[3:], "---")
-	if end < 0 {
-		return "", "", ""
-	}
-	fm := content[3 : 3+end]
-
-	for _, line := range strings.Split(fm, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "name:") {
-			name = strings.TrimSpace(strings.TrimPrefix(line, "name:"))
-			name = strings.Trim(name, `"'`)
-		}
-		if strings.HasPrefix(line, "description:") {
-			description = strings.TrimSpace(strings.TrimPrefix(line, "description:"))
-			description = strings.Trim(description, `"'`)
-		}
-		if strings.HasPrefix(line, "slug:") {
-			slug = strings.TrimSpace(strings.TrimPrefix(line, "slug:"))
-			slug = strings.Trim(slug, `"'`)
-		}
-	}
-	return
-}
-
-func slugify(name string) string {
-	s := strings.ToLower(name)
-	s = strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			return r
-		}
-		return '-'
-	}, s)
-	// Collapse multiple dashes
-	for strings.Contains(s, "--") {
-		s = strings.ReplaceAll(s, "--", "-")
-	}
-	s = strings.Trim(s, "-")
-	if s == "" {
-		s = "skill"
-	}
-	return s
 }

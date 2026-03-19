@@ -41,10 +41,8 @@ func SeedToStore(ctx context.Context, agentStore store.AgentStore, agentID uuid.
 		if name == UserFile {
 			continue
 		}
-		// TOOLS.md and HEARTBEAT.md are only useful in standalone mode.
-		// TOOLS.md: local tool notes (camera, SSH, device names).
-		// HEARTBEAT.md: replaced by cron jobs in managed mode.
-		if name == ToolsFile || name == HeartbeatFile {
+		// TOOLS.md: local tool notes (camera, SSH, device names) — not applicable.
+		if name == ToolsFile {
 			continue
 		}
 		if hasContent[name] {
@@ -63,6 +61,18 @@ func SeedToStore(ctx context.Context, agentStore store.AgentStore, agentID uuid.
 		seeded = append(seeded, name)
 	}
 
+	// Seed USER_PREDEFINED.md for predefined agents (agent-level, not in templateFiles).
+	// Provides baseline user-handling rules shared across all users.
+	if !hasContent[UserPredefinedFile] {
+		content, err := templateFS.ReadFile(filepath.Join("templates", UserPredefinedFile))
+		if err == nil {
+			if err := agentStore.SetAgentContextFile(ctx, agentID, UserPredefinedFile, string(content)); err != nil {
+				return seeded, err
+			}
+			seeded = append(seeded, UserPredefinedFile)
+		}
+	}
+
 	if len(seeded) > 0 {
 		slog.Info("seeded agent context files to store", "agent", agentID, "files", seeded)
 	}
@@ -71,7 +81,7 @@ func SeedToStore(ctx context.Context, agentStore store.AgentStore, agentID uuid.
 }
 
 // userSeedFilesOpen is the full set of files seeded per-user for open agents.
-// TOOLS.md and HEARTBEAT.md excluded — only useful in standalone mode.
+// TOOLS.md excluded — not applicable.
 var userSeedFilesOpen = []string{
 	AgentsFile,
 	SoulFile,
@@ -81,7 +91,8 @@ var userSeedFilesOpen = []string{
 }
 
 // userSeedFilesPredefined is the set of files seeded per-user for predefined agents.
-// Includes BOOTSTRAP.md for user onboarding (uses BOOTSTRAP_PREDEFINED.md template).
+// Only USER.md — predefined agents already have full context (SOUL.md, IDENTITY.md, AGENTS.md)
+// and don't need a bootstrap onboarding ritual. They just need to learn the user's profile.
 var userSeedFilesPredefined = []string{
 	UserFile,
 	BootstrapFile,

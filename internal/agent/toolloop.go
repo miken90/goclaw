@@ -28,7 +28,7 @@ type toolCallRecord struct {
 }
 
 // record adds a tool call to history and returns its argsHash.
-func (s *toolLoopState) record(toolName string, args map[string]interface{}) string {
+func (s *toolLoopState) record(toolName string, args map[string]any) string {
 	h := hashToolCall(toolName, args)
 	s.history = append(s.history, toolCallRecord{
 		toolName: toolName,
@@ -98,7 +98,7 @@ func (s *toolLoopState) detect(toolName string, argsHash string) (level, message
 }
 
 // hashToolCall produces a deterministic hash of tool name + arguments.
-func hashToolCall(toolName string, args map[string]interface{}) string {
+func hashToolCall(toolName string, args map[string]any) string {
 	s := toolName + ":" + stableJSON(args)
 	h := sha256.Sum256([]byte(s))
 	return fmt.Sprintf("%x", h[:16]) // 32 hex chars, enough for dedup
@@ -111,9 +111,9 @@ func hashResult(content string) string {
 }
 
 // stableJSON serializes a value with sorted keys for deterministic hashing.
-func stableJSON(v interface{}) string {
+func stableJSON(v any) string {
 	switch val := v.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		keys := make([]string, 0, len(val))
 		for k := range val {
 			keys = append(keys, k)
@@ -124,7 +124,7 @@ func stableJSON(v interface{}) string {
 			parts[i] = fmt.Sprintf("%q:%s", k, stableJSON(val[k]))
 		}
 		return "{" + strings.Join(parts, ",") + "}"
-	case []interface{}:
+	case []any:
 		parts := make([]string, len(val))
 		for i, elem := range val {
 			parts[i] = stableJSON(elem)

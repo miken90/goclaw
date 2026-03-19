@@ -15,6 +15,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,6 +32,7 @@ type Metadata struct {
 // Info describes a discovered skill.
 type Info struct {
 	Name        string `json:"name"`
+	Slug        string `json:"slug"`    // directory name (unique identifier)
 	Path        string `json:"path"`    // absolute path to SKILL.md
 	BaseDir     string `json:"baseDir"` // skill directory (parent of SKILL.md)
 	Source      string `json:"source"`  // "workspace", "global", "builtin"
@@ -40,11 +43,15 @@ type Info struct {
 type Loader struct {
 	// Skill directories in priority order (highest first).
 	// Matches TS loadSkillEntries() 5-tier hierarchy.
-	workspaceSkills      string // <workspace>/skills/
-	projectAgentSkills   string // <workspace>/.agents/skills/
-	personalAgentSkills  string // ~/.agents/skills/
-	globalSkills         string // ~/.goclaw/skills/
-	builtinSkills        string // bundled with binary
+	workspaceSkills     string // <workspace>/skills/
+	projectAgentSkills  string // <workspace>/.agents/skills/
+	personalAgentSkills string // ~/.agents/skills/
+	globalSkills        string // ~/.goclaw/skills/
+	builtinSkills       string // bundled with binary
+
+	// DB-managed skills directory (set via SetManagedDir).
+	// Uses versioned subdirectory structure: <dir>/<slug>/<version>/SKILL.md
+	managedSkillsDir string
 
 	mu    sync.RWMutex
 	cache map[string]*Info // name → info (lazily populated)
@@ -83,6 +90,14 @@ func NewLoader(workspace, globalSkills, builtinSkills string) *Loader {
 	}
 }
 
+// SetManagedDir sets the managed skills directory (skills-store).
+// Managed skills use versioned subdirectories: <dir>/<slug>/<version>/SKILL.md.
+// Called after PG stores are created.
+func (l *Loader) SetManagedDir(dir string) {
+	l.managedSkillsDir = dir
+	l.BumpVersion() // trigger re-scan
+}
+
 // ListSkills returns all available skills, respecting the priority hierarchy.
 // Higher-priority sources override lower ones by name.
 func (l *Loader) ListSkills() []Info {
@@ -92,7 +107,9 @@ func (l *Loader) ListSkills() []Info {
 	seen := make(map[string]bool)
 	var skills []Info
 
-	// Priority: workspace > project-agents > personal-agents > global > builtin
+	// Priority: workspace > project-agents > personal-agents > global > managed > builtin
+	// Managed (DB-seeded) skills take priority over raw bundled files so agents
+	// always receive paths within the skills-store (workspace-accessible), not /app/bundled-skills/.
 	for _, src := range []struct {
 		dir    string
 		source string
@@ -101,7 +118,6 @@ func (l *Loader) ListSkills() []Info {
 		{l.projectAgentSkills, "agents-project"},
 		{l.personalAgentSkills, "agents-personal"},
 		{l.globalSkills, "global"},
-		{l.builtinSkills, "builtin"},
 	} {
 		if src.dir == "" {
 			continue
@@ -121,6 +137,7 @@ func (l *Loader) ListSkills() []Info {
 
 			info := Info{
 				Name:    d.Name(),
+				Slug:    d.Name(),
 				Path:    skillFile,
 				BaseDir: filepath.Join(src.dir, d.Name()),
 				Source:  src.source,
@@ -137,13 +154,133 @@ func (l *Loader) ListSkills() []Info {
 		}
 	}
 
+	// Managed skills (versioned, DB-seeded) come before builtin so their workspace paths win.
+	if l.managedSkillsDir != "" {
+		for _, info := range l.listManagedSkills() {
+			if seen[info.Slug] {
+				continue
+			}
+			skills = append(skills, info)
+			seen[info.Slug] = true
+			l.cache[info.Slug] = &info
+		}
+	}
+
+	// Builtin (raw bundled files) — lowest priority fallback.
+	if l.builtinSkills != "" {
+		dirs, err := os.ReadDir(l.builtinSkills)
+		if err == nil {
+			for _, d := range dirs {
+				if !d.IsDir() || seen[d.Name()] {
+					continue
+				}
+				skillFile := filepath.Join(l.builtinSkills, d.Name(), "SKILL.md")
+				if _, err := os.Stat(skillFile); err != nil {
+					continue
+				}
+				info := Info{
+					Name:    d.Name(),
+					Slug:    d.Name(),
+					Path:    skillFile,
+					BaseDir: filepath.Join(l.builtinSkills, d.Name()),
+					Source:  "builtin",
+				}
+				if meta := parseMetadata(skillFile); meta != nil {
+					info.Description = meta.Description
+					if meta.Name != "" {
+						info.Name = meta.Name
+					}
+				}
+				skills = append(skills, info)
+				seen[d.Name()] = true
+				l.cache[d.Name()] = &info
+			}
+		}
+	}
+
 	return skills
+}
+
+// listManagedSkills scans the managed skills directory for versioned skill directories.
+// Structure: <managedSkillsDir>/<slug>/<version>/SKILL.md
+// Returns the latest version of each skill found.
+func (l *Loader) listManagedSkills() []Info {
+	dirs, err := os.ReadDir(l.managedSkillsDir)
+	if err != nil {
+		return nil
+	}
+
+	var skills []Info
+	for _, d := range dirs {
+		if !d.IsDir() {
+			continue
+		}
+		slug := d.Name()
+
+		// Find the latest version subdirectory
+		latestVersion, latestDir := l.findLatestVersion(slug)
+		if latestVersion < 0 {
+			continue
+		}
+
+		skillFile := filepath.Join(latestDir, "SKILL.md")
+		if _, err := os.Stat(skillFile); err != nil {
+			continue
+		}
+
+		info := Info{
+			Name:    slug,
+			Slug:    slug,
+			Path:    skillFile,
+			BaseDir: latestDir,
+			Source:  "managed",
+		}
+		if meta := parseMetadata(skillFile); meta != nil {
+			info.Description = meta.Description
+			if meta.Name != "" {
+				info.Name = meta.Name
+			}
+		}
+		skills = append(skills, info)
+	}
+	return skills
+}
+
+// findLatestVersion finds the highest-numbered version subdirectory for a skill slug.
+// Returns (version, path) or (-1, "") if no valid version found.
+func (l *Loader) findLatestVersion(slug string) (int, string) {
+	slugDir := filepath.Join(l.managedSkillsDir, slug)
+	entries, err := os.ReadDir(slugDir)
+	if err != nil {
+		return -1, ""
+	}
+
+	var versions []int
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		v, err := strconv.Atoi(e.Name())
+		if err != nil || v < 1 {
+			continue
+		}
+		versions = append(versions, v)
+	}
+	if len(versions) == 0 {
+		return -1, ""
+	}
+
+	sort.Sort(sort.Reverse(sort.IntSlice(versions)))
+	latestVer := versions[0]
+	return latestVer, filepath.Join(slugDir, strconv.Itoa(latestVer))
 }
 
 // LoadSkill reads and returns the content of a skill by name (frontmatter stripped).
 // The {baseDir} placeholder in SKILL.md is replaced with the skill's absolute directory path.
+// Priority: workspace > agents > global > managed > builtin
 func (l *Loader) LoadSkill(name string) (string, bool) {
-	for _, dir := range []string{l.workspaceSkills, l.projectAgentSkills, l.personalAgentSkills, l.globalSkills, l.builtinSkills} {
+	// Check flat skill directories (workspace, agents, global) first
+	for _, dir := range []string{l.workspaceSkills, l.projectAgentSkills, l.personalAgentSkills, l.globalSkills} {
 		if dir == "" {
 			continue
 		}
@@ -153,10 +290,35 @@ func (l *Loader) LoadSkill(name string) (string, bool) {
 			continue
 		}
 		content := stripFrontmatter(string(data))
-		baseDir := filepath.Join(dir, name)
-		content = strings.ReplaceAll(content, "{baseDir}", baseDir)
+		content = strings.ReplaceAll(content, "{baseDir}", filepath.Join(dir, name))
 		return content, true
 	}
+
+	// Managed skills (DB-seeded, versioned) take priority over raw builtin files.
+	if l.managedSkillsDir != "" {
+		latestVer, latestDir := l.findLatestVersion(name)
+		if latestVer >= 0 {
+			path := filepath.Join(latestDir, "SKILL.md")
+			data, err := os.ReadFile(path)
+			if err == nil {
+				content := stripFrontmatter(string(data))
+				content = strings.ReplaceAll(content, "{baseDir}", latestDir)
+				return content, true
+			}
+		}
+	}
+
+	// Builtin fallback (only if not in managed)
+	if l.builtinSkills != "" {
+		path := filepath.Join(l.builtinSkills, name, "SKILL.md")
+		data, err := os.ReadFile(path)
+		if err == nil {
+			content := stripFrontmatter(string(data))
+			content = strings.ReplaceAll(content, "{baseDir}", filepath.Join(l.builtinSkills, name))
+			return content, true
+		}
+	}
+
 	return "", false
 }
 
@@ -213,7 +375,7 @@ func (l *Loader) BuildSummary(allowList []string) string {
 			allowed[name] = true
 		}
 		for _, s := range allSkills {
-			if allowed[s.Name] {
+			if allowed[s.Slug] {
 				filtered = append(filtered, s)
 			}
 		}
@@ -251,7 +413,7 @@ func (l *Loader) BumpVersion() {
 // Dirs returns all non-empty skill directories (for the watcher to monitor).
 func (l *Loader) Dirs() []string {
 	var dirs []string
-	for _, d := range []string{l.workspaceSkills, l.projectAgentSkills, l.personalAgentSkills, l.globalSkills, l.builtinSkills} {
+	for _, d := range []string{l.workspaceSkills, l.projectAgentSkills, l.personalAgentSkills, l.globalSkills, l.builtinSkills, l.managedSkillsDir} {
 		if d != "" {
 			dirs = append(dirs, d)
 		}
@@ -275,7 +437,7 @@ func (l *Loader) FilterSkills(allowList []string) []Info {
 	}
 	var filtered []Info
 	for _, s := range all {
-		if allowed[s.Name] {
+		if allowed[s.Slug] {
 			filtered = append(filtered, s)
 		}
 	}
@@ -322,8 +484,16 @@ func parseMetadata(path string) *Metadata {
 	}
 }
 
+// normalizeLineEndings converts \r\n and bare \r to \n so frontmatter regex matches
+// files created on Windows or uploaded via ZIP with CRLF line endings.
+func normalizeLineEndings(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	return s
+}
+
 func extractFrontmatter(content string) string {
-	match := frontmatterRe.FindStringSubmatch(content)
+	match := frontmatterRe.FindStringSubmatch(normalizeLineEndings(content))
 	if len(match) > 1 {
 		return match[1]
 	}
@@ -331,12 +501,12 @@ func extractFrontmatter(content string) string {
 }
 
 func stripFrontmatter(content string) string {
-	return frontmatterRe.ReplaceAllString(content, "")
+	return frontmatterRe.ReplaceAllString(normalizeLineEndings(content), "")
 }
 
 func parseSimpleYAML(content string) map[string]string {
 	result := make(map[string]string)
-	for _, line := range strings.Split(content, "\n") {
+	for line := range strings.SplitSeq(content, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue

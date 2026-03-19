@@ -24,6 +24,7 @@ package sessions
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // PeerKind distinguishes DM from group conversations.
@@ -50,11 +51,34 @@ func BuildGroupTopicSessionKey(agentID, channel, chatID string, topicID int) str
 	return fmt.Sprintf("agent:%s:%s:group:%s:topic:%d", agentID, channel, chatID, topicID)
 }
 
+// BuildDMThreadSessionKey builds the session key for a DM thread (topic in private chat).
+// Preserves message_thread_id for session isolation within the same DM.
+//
+//	agent:{agentId}:{channel}:direct:{peerID}:thread:{threadID}
+func BuildDMThreadSessionKey(agentID, channel, peerID string, threadID int) string {
+	return fmt.Sprintf("agent:%s:%s:direct:%s:thread:%d", agentID, channel, peerID, threadID)
+}
+
 // BuildSubagentSessionKey builds the session key for a subagent.
 //
 //	agent:{agentId}:subagent:{label}
 func BuildSubagentSessionKey(agentID, label string) string {
 	return fmt.Sprintf("agent:%s:subagent:%s", agentID, label)
+}
+
+// BuildTeamSessionKey builds an isolated session key for team task execution.
+// Scoped per agent + team + chatID (user), matching workspace isolation.
+// All tasks from the same user within the same team share one session per member agent.
+//
+//	agent:{agentId}:team:{teamId}:{chatId}
+func BuildTeamSessionKey(agentID, teamID, chatID string) string {
+	return fmt.Sprintf("agent:%s:team:%s:%s", agentID, teamID, chatID)
+}
+
+// IsTeamSession checks if a session key indicates a team session.
+func IsTeamSession(key string) bool {
+	_, rest := ParseSessionKey(key)
+	return strings.HasPrefix(rest, "team:")
 }
 
 // BuildCronSessionKey builds the session key for a cron job.
@@ -140,6 +164,23 @@ func IsSubagentSession(key string) bool {
 func IsCronSession(key string) bool {
 	_, rest := ParseSessionKey(key)
 	return strings.HasPrefix(strings.ToLower(rest), "cron:")
+}
+
+// BuildHeartbeatSessionKey builds the session key for a heartbeat run.
+//
+//	isolated=true:  agent:{agentId}:heartbeat:{unix_ms}
+//	isolated=false: agent:{agentId}:heartbeat
+func BuildHeartbeatSessionKey(agentID string, isolated bool) string {
+	if isolated {
+		return fmt.Sprintf("agent:%s:heartbeat:%d", agentID, time.Now().UnixMilli())
+	}
+	return fmt.Sprintf("agent:%s:heartbeat", agentID)
+}
+
+// IsHeartbeatSession checks if a session key indicates a heartbeat session.
+func IsHeartbeatSession(key string) bool {
+	_, rest := ParseSessionKey(key)
+	return strings.HasPrefix(rest, "heartbeat")
 }
 
 // PeerKindFromGroup returns PeerGroup if isGroup is true, PeerDirect otherwise.

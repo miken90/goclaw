@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
-import { ArrowLeft, Trash2, RotateCcw, Info, Eye } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { ArrowLeft, Trash2, RotateCcw, Info, Eye, Pencil, Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { MessageBubble } from "@/components/chat/message-bubble";
@@ -10,12 +11,13 @@ import { useDebouncedCallback } from "@/hooks/use-debounced-callback";
 import { Events } from "@/api/protocol";
 import { parseSessionKey } from "@/lib/session-key";
 import { formatDate, formatTokens } from "@/lib/format";
-import type { SessionInfo, SessionPreview } from "@/types/session";
-import type { ChatMessage, AgentEventPayload } from "@/types/chat";
+import type { SessionInfo, SessionPreview, Message } from "@/types/session";
+import type { ChatMessage, AgentEventPayload, ToolStreamEntry } from "@/types/chat";
 
 /** Check if a message is an internal system message (subagent results, cron, etc.) */
 function isSystemMessage(msg: ChatMessage): boolean {
-  return msg.content?.trimStart().startsWith("[System Message]") ?? false;
+  const c = msg.content?.trimStart() ?? "";
+  return c.startsWith("[System Message]") || c.startsWith("[System]");
 }
 
 /** Check if a message should be displayed */
@@ -33,6 +35,7 @@ interface SessionDetailPageProps {
   onPreview: (key: string) => Promise<SessionPreview | null>;
   onDelete: (key: string) => Promise<void>;
   onReset: (key: string) => Promise<void>;
+  onPatch?: (key: string, updates: { label?: string }) => Promise<void>;
 }
 
 export function SessionDetailPage({
@@ -41,12 +44,16 @@ export function SessionDetailPage({
   onPreview,
   onDelete,
   onReset,
+  onPatch,
 }: SessionDetailPageProps) {
+  const { t } = useTranslation("sessions");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [summary, setSummary] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
 
   const parsed = parseSessionKey(session.key);
 
@@ -54,11 +61,38 @@ export function SessionDetailPage({
     onPreview(session.key)
       .then((preview) => {
         if (preview) {
+          const allMsgs = preview.messages;
+          // Build a map of tool_call_id -> tool message for result lookup
+          const toolResultMap = new Map<string, Message>();
+          for (const m of allMsgs) {
+            if (m.role === "tool" && m.tool_call_id) {
+              toolResultMap.set(m.tool_call_id, m);
+            }
+          }
           setMessages(
-            preview.messages.map((m, i) => ({
-              ...m,
-              timestamp: Date.now() - (preview.messages.length - i) * 1000,
-            })),
+            allMsgs.map((m, i) => {
+              const chatMsg: ChatMessage = {
+                ...m,
+                timestamp: Date.now() - (allMsgs.length - i) * 1000,
+              };
+              // Reconstruct toolDetails for assistant messages with tool_calls
+              if (m.role === "assistant" && m.tool_calls && m.tool_calls.length > 0) {
+                chatMsg.toolDetails = m.tool_calls.map((tc) => {
+                  const toolMsg = toolResultMap.get(tc.id);
+                  return {
+                    toolCallId: tc.id,
+                    runId: "",
+                    name: tc.name,
+                    phase: (toolMsg ? "completed" : "calling") as ToolStreamEntry["phase"],
+                    startedAt: 0,
+                    updatedAt: 0,
+                    arguments: tc.arguments,
+                    result: toolMsg?.content,
+                  };
+                });
+              }
+              return chatMsg;
+            }),
           );
           setSummary(preview.summary ?? null);
         }
@@ -99,16 +133,64 @@ export function SessionDetailPage({
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div>
-            <h3 className="font-medium">{session.label || parsed.scope}</h3>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Badge variant="outline">{parsed.agentId}</Badge>
+            {editingTitle ? (
+              <div className="flex items-center gap-1">
+                <input
+                  autoFocus
+                  className="h-7 rounded border bg-background px-2 text-sm font-medium outline-none focus:ring-1 focus:ring-ring"
+                  value={titleDraft}
+                  onChange={(e) => setTitleDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      onPatch?.(session.key, { label: titleDraft });
+                      setEditingTitle(false);
+                    } else if (e.key === "Escape") {
+                      setEditingTitle(false);
+                    }
+                  }}
+                />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  onClick={() => {
+                    onPatch?.(session.key, { label: titleDraft });
+                    setEditingTitle(false);
+                  }}
+                >
+                  <Check className="h-3.5 w-3.5" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setEditingTitle(false)}>
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ) : (
+              <h3
+                className="group flex cursor-pointer items-center gap-1.5 font-medium hover:text-primary"
+                onClick={() => {
+                  setTitleDraft(session.label || session.metadata?.chat_title || session.metadata?.display_name || "");
+                  setEditingTitle(true);
+                }}
+              >
+                {session.metadata?.chat_title || session.metadata?.display_name || session.label || parsed.scope}
+                <Pencil className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-50" />
+              </h3>
+            )}
+            <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+              <Badge variant="outline">{session.agentName || parsed.agentId}</Badge>
               {session.channel && session.channel !== "ws" && (
                 <Badge variant="secondary" className="gap-1">
                   <Eye className="h-3 w-3" />
                   {session.channel}
                 </Badge>
               )}
-              <span>{session.messageCount} messages</span>
+              {session.metadata?.username && (
+                <Badge variant="secondary">@{session.metadata.username}</Badge>
+              )}
+              {session.metadata?.peer_kind && (
+                <Badge variant="outline">{session.metadata.peer_kind}</Badge>
+              )}
+              <span>{session.messageCount} {t("detail.messages")}</span>
               <span>{formatDate(session.updated)}</span>
               {session.inputTokens != null && (
                 <span>
@@ -120,10 +202,10 @@ export function SessionDetailPage({
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={() => setConfirmReset(true)} className="gap-1">
-            <RotateCcw className="h-3.5 w-3.5" /> Reset
+            <RotateCcw className="h-3.5 w-3.5" /> {t("detail.reset")}
           </Button>
           <Button variant="destructive" size="sm" onClick={() => setConfirmDelete(true)} className="gap-1">
-            <Trash2 className="h-3.5 w-3.5" /> Delete
+            <Trash2 className="h-3.5 w-3.5" /> {t("detail.delete")}
           </Button>
         </div>
       </div>
@@ -141,7 +223,7 @@ export function SessionDetailPage({
           </div>
         ) : messages.length === 0 ? (
           <div className="py-12 text-center text-sm text-muted-foreground">
-            No messages in this session
+            {t("detail.noMessages")}
           </div>
         ) : (
           <div className="mx-auto max-w-3xl space-y-4">
@@ -159,9 +241,9 @@ export function SessionDetailPage({
       <ConfirmDialog
         open={confirmDelete}
         onOpenChange={setConfirmDelete}
-        title="Delete Session"
-        description="This will permanently delete all messages in this session."
-        confirmLabel="Delete"
+        title={t("detail.deleteTitle")}
+        description={t("detail.deleteDescription")}
+        confirmLabel={t("detail.confirmDelete")}
         variant="destructive"
         onConfirm={async () => {
           await onDelete(session.key);
@@ -173,9 +255,9 @@ export function SessionDetailPage({
       <ConfirmDialog
         open={confirmReset}
         onOpenChange={setConfirmReset}
-        title="Reset Session"
-        description="This will clear all messages but keep the session."
-        confirmLabel="Reset"
+        title={t("detail.resetTitle")}
+        description={t("detail.resetDescription")}
+        confirmLabel={t("detail.confirmReset")}
         onConfirm={async () => {
           await onReset(session.key);
           setConfirmReset(false);
@@ -187,6 +269,7 @@ export function SessionDetailPage({
 }
 
 function SystemMessageBlock({ content }: { content: string }) {
+  const { t } = useTranslation("sessions");
   const [expanded, setExpanded] = useState(false);
   // Extract the first line as title, rest as body
   const lines = content.split("\n");
@@ -197,7 +280,7 @@ function SystemMessageBlock({ content }: { content: string }) {
     <div className="mx-auto flex max-w-3xl items-start gap-2 rounded-md border border-dashed border-muted-foreground/30 bg-muted/30 px-4 py-2">
       <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
       <div className="min-w-0 text-xs text-muted-foreground">
-        <span className="font-medium">{title || "System Message"}</span>
+        <span className="font-medium">{title || t("detail.systemMessage")}</span>
         {body && (
           <>
             <button
@@ -205,7 +288,7 @@ function SystemMessageBlock({ content }: { content: string }) {
               onClick={() => setExpanded((v) => !v)}
               className="ml-1 cursor-pointer text-primary hover:underline"
             >
-              {expanded ? "hide" : "show details"}
+              {expanded ? t("detail.hide") : t("detail.showDetails")}
             </button>
             {expanded && (
               <div className="mt-2">
@@ -222,6 +305,7 @@ function SystemMessageBlock({ content }: { content: string }) {
 const SUMMARY_MAX_HEIGHT = 72; // ~3 lines of text
 
 function SummaryBlock({ text }: { text: string }) {
+  const { t } = useTranslation("sessions");
   const [expanded, setExpanded] = useState(false);
   const [needsTruncation, setNeedsTruncation] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -234,7 +318,7 @@ function SummaryBlock({ text }: { text: string }) {
 
   return (
     <div className="border-b bg-muted/50 px-6 py-3 text-sm">
-      <span className="font-medium">Summary: </span>
+      <span className="font-medium">{t("detail.summary")}: </span>
       <div
         ref={contentRef}
         className="mt-1 overflow-hidden transition-[max-height] duration-200"
@@ -248,7 +332,7 @@ function SummaryBlock({ text }: { text: string }) {
           onClick={() => setExpanded((v) => !v)}
           className="mt-1 cursor-pointer text-xs font-medium text-primary hover:underline"
         >
-          {expanded ? "Show less" : "Show more"}
+          {expanded ? t("detail.showLess") : t("detail.showMore")}
         </button>
       )}
     </div>

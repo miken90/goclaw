@@ -99,3 +99,60 @@ func TestScrubCredentials_EmptyString(t *testing.T) {
 		t.Errorf("empty string changed: %q", got)
 	}
 }
+
+func TestScrubCredentials_DynamicServerIPs(t *testing.T) {
+	ResetDynamicScrubValues()
+	defer ResetDynamicScrubValues()
+
+	AddDynamicScrubValues("18.141.232.136", "34.160.111.145")
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"public IP", "Your IP: 18.141.232.136", "Your IP: [SERVER_IP]"},
+		{"forwarded chain", "X-Forwarded-For: 18.141.232.136, 34.160.111.145", "X-Forwarded-For: [SERVER_IP], [SERVER_IP]"},
+		{"unrelated IP", "Hello 1.2.3.4", "Hello 1.2.3.4"},
+		{"IP in URL", "http://18.141.232.136:8080/api", "http://[SERVER_IP]:8080/api"},
+		{"multiple occurrences", "src=18.141.232.136 dst=18.141.232.136", "src=[SERVER_IP] dst=[SERVER_IP]"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ScrubCredentials(tt.input)
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAddDynamicScrubValues_Dedup(t *testing.T) {
+	ResetDynamicScrubValues()
+	defer ResetDynamicScrubValues()
+
+	AddDynamicScrubValues("10.0.0.1", "10.0.0.1", "10.0.0.2")
+	if count := DynamicScrubCount(); count != 2 {
+		t.Errorf("expected 2 unique values, got %d", count)
+	}
+}
+
+func TestAddDynamicScrubValues_IgnoresEmpty(t *testing.T) {
+	ResetDynamicScrubValues()
+	defer ResetDynamicScrubValues()
+
+	AddDynamicScrubValues("", "", "10.0.0.1")
+	if count := DynamicScrubCount(); count != 1 {
+		t.Errorf("expected 1 value, got %d", count)
+	}
+}
+
+func TestDetectLocalIPs_NoLoopback(t *testing.T) {
+	ips := detectLocalIPs()
+	for _, ipStr := range ips {
+		if ipStr == "127.0.0.1" || ipStr == "::1" {
+			t.Errorf("loopback IP should be excluded: %s", ipStr)
+		}
+	}
+}

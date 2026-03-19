@@ -1,0 +1,43 @@
+{
+  "groups": {
+    "core": "Chính",
+    "conversations": "Hội thoại",
+    "connectivity": "Kết nối",
+    "capabilities": "Khả năng",
+    "data": "Dữ liệu",
+    "monitoring": "Giám sát",
+    "system": "Hệ thống"
+  },
+  "nav": {
+    "overview": "Tổng quan",
+    "chat": "Trò chuyện",
+    "agents": "Agent",
+    "agentTeams": "Agent Team",
+    "sessions": "Session",
+    "pendingMessages": "Tin nhắn chờ",
+    "channels": "Channel",
+    "contacts": "Liên hệ",
+    "skills": "Skill",
+    "cron": "Tác vụ định kỳ",
+    "customTools": "Công cụ tùy chỉnh",
+    "builtinTools": "Công cụ tích hợp",
+    "mcpServers": "Máy chủ MCP",
+    "memory": "Bộ nhớ",
+    "knowledgeGraph": "Knowledge Graph",
+    "traces": "Theo dõi",
+    "realtimeEvents": "Sự kiện thời gian thực",
+    "usage": "Sử dụng",
+    "logs": "Nhật ký",
+    "storage": "Lưu trữ",
+    "providers": "Provider",
+    "config": "Cấu hình",
+    "approvals": "Phê duyệt",
+    "nodes": "Nodes",
+    "tts": "TTS",
+    "activity": "Hoạt động",
+    "cliCredentials": "Xác thực CLI",
+    "apiKeys": "Khóa API",
+    "apiDocs": "Tài liệu API",
+    "packages": "Gói phần mềm"
+  }
+}

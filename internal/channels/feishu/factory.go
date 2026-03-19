@@ -34,7 +34,14 @@ type feishuInstanceConfig struct {
 	MediaMaxMB       int      `json:"media_max_mb,omitempty"`
 	RenderMode       string   `json:"render_mode,omitempty"`
 	Streaming        *bool    `json:"streaming,omitempty"`
-	HistoryLimit     int      `json:"history_limit,omitempty"`
+	ReactionLevel    string   `json:"reaction_level,omitempty"`
+	HistoryLimit      int      `json:"history_limit,omitempty"`
+	BlockReply        *bool    `json:"block_reply,omitempty"`
+	STTProxyURL       string   `json:"stt_proxy_url,omitempty"`
+	STTAPIKey         string   `json:"stt_api_key,omitempty"`
+	STTTenantID       string   `json:"stt_tenant_id,omitempty"`
+	STTTimeoutSeconds int      `json:"stt_timeout_seconds,omitempty"`
+	VoiceAgentID      string   `json:"voice_agent_id,omitempty"`
 }
 
 // Factory creates a Feishu/Lark channel from DB instance data.
@@ -78,7 +85,14 @@ func Factory(name string, creds json.RawMessage, cfg json.RawMessage,
 		MediaMaxMB:        ic.MediaMaxMB,
 		RenderMode:        ic.RenderMode,
 		Streaming:         ic.Streaming,
+		ReactionLevel:     ic.ReactionLevel,
 		HistoryLimit:      ic.HistoryLimit,
+		BlockReply:        ic.BlockReply,
+		STTProxyURL:       ic.STTProxyURL,
+		STTAPIKey:         ic.STTAPIKey,
+		STTTenantID:       ic.STTTenantID,
+		STTTimeoutSeconds: ic.STTTimeoutSeconds,
+		VoiceAgentID:      ic.VoiceAgentID,
 	}
 
 	// DB instances default to "pairing" for groups (secure by default).
@@ -86,11 +100,77 @@ func Factory(name string, creds json.RawMessage, cfg json.RawMessage,
 		fsCfg.GroupPolicy = "pairing"
 	}
 
-	ch, err := New(fsCfg, msgBus, pairingSvc)
+	ch, err := New(fsCfg, msgBus, pairingSvc, nil)
 	if err != nil {
 		return nil, err
 	}
 
 	ch.SetName(name)
 	return ch, nil
+}
+
+// FactoryWithPendingStore returns a ChannelFactory with persistent history support.
+func FactoryWithPendingStore(pendingStore store.PendingMessageStore) channels.ChannelFactory {
+	return func(name string, creds json.RawMessage, cfg json.RawMessage,
+		msgBus *bus.MessageBus, pairingSvc store.PairingStore) (channels.Channel, error) {
+
+		var c feishuCreds
+		if len(creds) > 0 {
+			if err := json.Unmarshal(creds, &c); err != nil {
+				return nil, fmt.Errorf("decode feishu credentials: %w", err)
+			}
+		}
+		if c.AppID == "" || c.AppSecret == "" {
+			return nil, fmt.Errorf("feishu app_id and app_secret are required")
+		}
+
+		var ic feishuInstanceConfig
+		if len(cfg) > 0 {
+			if err := json.Unmarshal(cfg, &ic); err != nil {
+				return nil, fmt.Errorf("decode feishu config: %w", err)
+			}
+		}
+
+		fsCfg := config.FeishuConfig{
+			Enabled:           true,
+			AppID:             c.AppID,
+			AppSecret:         c.AppSecret,
+			EncryptKey:        c.EncryptKey,
+			VerificationToken: c.VerificationToken,
+			Domain:            ic.Domain,
+			ConnectionMode:    ic.ConnectionMode,
+			WebhookPort:       ic.WebhookPort,
+			WebhookPath:       ic.WebhookPath,
+			AllowFrom:         ic.AllowFrom,
+			DMPolicy:          ic.DMPolicy,
+			GroupPolicy:       ic.GroupPolicy,
+			GroupAllowFrom:    ic.GroupAllowFrom,
+			RequireMention:    ic.RequireMention,
+			TopicSessionMode:  ic.TopicSessionMode,
+			TextChunkLimit:    ic.TextChunkLimit,
+			MediaMaxMB:        ic.MediaMaxMB,
+			RenderMode:        ic.RenderMode,
+			Streaming:         ic.Streaming,
+			ReactionLevel:     ic.ReactionLevel,
+			HistoryLimit:      ic.HistoryLimit,
+			BlockReply:        ic.BlockReply,
+			STTProxyURL:       ic.STTProxyURL,
+			STTAPIKey:         ic.STTAPIKey,
+			STTTenantID:       ic.STTTenantID,
+			STTTimeoutSeconds: ic.STTTimeoutSeconds,
+			VoiceAgentID:      ic.VoiceAgentID,
+		}
+
+		if fsCfg.GroupPolicy == "" {
+			fsCfg.GroupPolicy = "pairing"
+		}
+
+		ch, err := New(fsCfg, msgBus, pairingSvc, pendingStore)
+		if err != nil {
+			return nil, err
+		}
+
+		ch.SetName(name)
+		return ch, nil
+	}
 }

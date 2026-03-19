@@ -79,10 +79,7 @@ func (s *PGTeamStore) ListDelegationHistory(ctx context.Context, opts store.Dele
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	offset := opts.Offset
-	if offset < 0 {
-		offset = 0
-	}
+	offset := max(opts.Offset, 0)
 
 	query := fmt.Sprintf(
 		`SELECT d.id, d.source_agent_id, d.target_agent_id, d.team_id, d.team_task_id,

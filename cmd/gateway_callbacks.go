@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"strings"
 
@@ -14,20 +15,19 @@ import (
 )
 
 // buildEnsureUserFiles creates the per-user file seeding callback.
-// Used by both managed and standalone modes — no mode-specific logic.
 // Seeds per-user context files on first chat (new user profile).
-func buildEnsureUserFiles(as store.AgentStore) agent.EnsureUserFilesFunc {
-	return func(ctx context.Context, agentID uuid.UUID, userID, agentType, workspace string) error {
-		isNew, err := as.GetOrCreateUserProfile(ctx, agentID, userID, workspace)
+func buildEnsureUserFiles(as store.AgentStore, configPermStore store.ConfigPermissionStore) agent.EnsureUserFilesFunc {
+	return func(ctx context.Context, agentID uuid.UUID, userID, agentType, workspace, channel string) (string, error) {
+		isNew, effectiveWs, err := as.GetOrCreateUserProfile(ctx, agentID, userID, workspace, channel)
 		if err != nil {
-			return err
+			return effectiveWs, err
 		}
 		if !isNew {
-			return nil // already profiled = already seeded
+			return effectiveWs, nil // already profiled = already seeded
 		}
 
 		// Auto-add first group member as a file writer (bootstrap the allowlist).
-		if strings.HasPrefix(userID, "group:") {
+		if configPermStore != nil && (strings.HasPrefix(userID, "group:") || strings.HasPrefix(userID, "guild:")) {
 			senderID := store.SenderIDFromContext(ctx)
 			if senderID != "" {
 				parts := strings.SplitN(senderID, "|", 2)
@@ -36,14 +36,23 @@ func buildEnsureUserFiles(as store.AgentStore) agent.EnsureUserFilesFunc {
 				if len(parts) > 1 {
 					senderUsername = parts[1]
 				}
-				if addErr := as.AddGroupFileWriter(ctx, agentID, userID, numericID, "", senderUsername); addErr != nil {
+				meta, _ := json.Marshal(map[string]string{"displayName": "", "username": senderUsername})
+				if addErr := configPermStore.Grant(ctx, &store.ConfigPermission{
+					AgentID:    agentID,
+					Scope:      userID,
+					ConfigType: "file_writer",
+					UserID:     numericID,
+					Permission: "allow",
+					Metadata:   meta,
+				}); addErr != nil {
 					slog.Warn("failed to auto-add group file writer", "error", addErr, "sender", numericID, "group", userID)
 				}
+				// No bus broadcast needed — Grant already invalidates cache
 			}
 		}
 
 		_, err = bootstrap.SeedUserFiles(ctx, as, agentID, userID, agentType)
-		return err
+		return effectiveWs, err
 	}
 }
 
@@ -57,7 +66,6 @@ func buildBootstrapCleanup(as store.AgentStore) agent.BootstrapCleanupFunc {
 }
 
 // buildContextFileLoader creates the per-request context file loader callback.
-// Used by both managed and standalone modes — no mode-specific logic.
 // Delegates to the ContextFileInterceptor for type-aware routing.
 func buildContextFileLoader(intc *tools.ContextFileInterceptor) agent.ContextFileLoaderFunc {
 	return func(ctx context.Context, agentID uuid.UUID, userID, agentType string) []bootstrap.ContextFile {

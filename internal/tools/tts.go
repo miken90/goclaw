@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/nextlevelbuilder/goclaw/internal/tts"
@@ -15,6 +16,7 @@ import (
 // Implements Tool + ContextualTool interfaces.
 // Per-call channel is read from ctx for thread-safety.
 type TtsTool struct {
+	mu      sync.RWMutex
 	manager *tts.Manager
 }
 
@@ -23,25 +25,32 @@ func NewTtsTool(mgr *tts.Manager) *TtsTool {
 	return &TtsTool{manager: mgr}
 }
 
+// UpdateManager swaps the underlying TTS manager (used on config reload).
+func (t *TtsTool) UpdateManager(mgr *tts.Manager) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.manager = mgr
+}
+
 func (t *TtsTool) Name() string { return "tts" }
 
 func (t *TtsTool) Description() string {
 	return "Convert text to speech audio. Returns a MEDIA: path to the generated audio file."
 }
 
-func (t *TtsTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *TtsTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"text": map[string]interface{}{
+		"properties": map[string]any{
+			"text": map[string]any{
 				"type":        "string",
 				"description": "The text to convert to speech",
 			},
-			"voice": map[string]interface{}{
+			"voice": map[string]any{
 				"type":        "string",
 				"description": "Voice ID (provider-specific). Optional — uses default if omitted.",
 			},
-			"provider": map[string]interface{}{
+			"provider": map[string]any{
 				"type":        "string",
 				"description": "TTS provider: openai, elevenlabs, edge, minimax. Optional — uses primary if omitted.",
 			},
@@ -53,7 +62,7 @@ func (t *TtsTool) Parameters() map[string]interface{} {
 // SetContext is a no-op; channel is now read from ctx (thread-safe).
 func (t *TtsTool) SetContext(channel, _ string) {}
 
-func (t *TtsTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *TtsTool) Execute(ctx context.Context, args map[string]any) *Result {
 	text, _ := args["text"].(string)
 	if text == "" {
 		return &Result{ForLLM: "error: text is required", IsError: true}
@@ -61,6 +70,11 @@ func (t *TtsTool) Execute(ctx context.Context, args map[string]interface{}) *Res
 
 	voice, _ := args["voice"].(string)
 	providerName, _ := args["provider"].(string)
+
+	// Snapshot manager pointer under read lock so config reloads don't race.
+	t.mu.RLock()
+	mgr := t.manager
+	t.mu.RUnlock()
 
 	// Determine format based on channel (read from ctx — thread-safe)
 	channel := ToolChannelFromCtx(ctx)
@@ -74,13 +88,13 @@ func (t *TtsTool) Execute(ctx context.Context, args map[string]interface{}) *Res
 
 	if providerName != "" {
 		// Use specific provider
-		p, ok := t.manager.GetProvider(providerName)
+		p, ok := mgr.GetProvider(providerName)
 		if !ok {
 			return &Result{ForLLM: fmt.Sprintf("error: tts provider not found: %s", providerName), IsError: true}
 		}
 		result, err = p.Synthesize(ctx, text, opts)
 	} else {
-		result, err = t.manager.SynthesizeWithFallback(ctx, text, opts)
+		result, err = mgr.SynthesizeWithFallback(ctx, text, opts)
 	}
 
 	if err != nil {
@@ -100,6 +114,8 @@ func (t *TtsTool) Execute(ctx context.Context, args map[string]interface{}) *Res
 		voiceTag = "[[audio_as_voice]]\n"
 	}
 
-	content := fmt.Sprintf("%sMEDIA:%s", voiceTag, audioPath)
-	return &Result{ForLLM: content}
+	forLLM := fmt.Sprintf("%sMEDIA:%s", voiceTag, audioPath)
+	r := &Result{ForLLM: forLLM}
+	r.Deliverable = fmt.Sprintf("[Generated audio: %s]\nText: %s", filepath.Base(audioPath), text)
+	return r
 }

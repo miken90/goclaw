@@ -11,12 +11,15 @@ import { useAuthStore } from "@/stores/use-auth-store";
 export function useChatSessions(agentId: string) {
   const ws = useWs();
   const userId = useAuthStore((s) => s.userId);
+  const connected = useAuthStore((s) => s.connected);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const loadSessions = useCallback(async () => {
-    if (!ws.isConnected) return;
+    if (!connected) return;
     setLoading(true);
+    setError(null);
     try {
       const res = await ws.call<{ sessions: SessionInfo[] }>(
         Methods.SESSIONS_LIST,
@@ -27,12 +30,12 @@ export function useChatSessions(agentId: string) {
           new Date(b.updated).getTime() - new Date(a.updated).getTime(),
       );
       setSessions(sorted);
-    } catch {
-      // silently fail - will retry on next load
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load sessions");
     } finally {
       setLoading(false);
     }
-  }, [ws, agentId]);
+  }, [ws, agentId, connected]);
 
   useEffect(() => {
     loadSessions();
@@ -46,6 +49,7 @@ export function useChatSessions(agentId: string) {
   return {
     sessions,
     loading,
+    error,
     refresh: loadSessions,
     buildNewSessionKey,
   };

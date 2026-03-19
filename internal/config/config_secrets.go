@@ -34,6 +34,9 @@ func (c *Config) MaskedCopy() *Config {
 	maskNonEmpty(&cp.Providers.Perplexity.APIKey)
 	maskNonEmpty(&cp.Providers.DashScope.APIKey)
 	maskNonEmpty(&cp.Providers.Bailian.APIKey)
+	maskNonEmpty(&cp.Providers.Zai.APIKey)
+	maskNonEmpty(&cp.Providers.ZaiCoding.APIKey)
+	maskNonEmpty(&cp.Providers.OllamaCloud.APIKey)
 
 	// Mask gateway token
 	maskNonEmpty(&cp.Gateway.Token)
@@ -81,6 +84,9 @@ func (c *Config) StripSecrets() {
 	c.Providers.Perplexity.APIKey = ""
 	c.Providers.DashScope.APIKey = ""
 	c.Providers.Bailian.APIKey = ""
+	c.Providers.Zai.APIKey = ""
+	c.Providers.ZaiCoding.APIKey = ""
+	c.Providers.OllamaCloud.APIKey = ""
 
 	// Gateway token
 	c.Gateway.Token = ""
@@ -110,8 +116,8 @@ func (c *Config) StripSecrets() {
 }
 
 // StripMaskedSecrets strips only fields that still contain the mask value "***".
-// Real values (user-entered via UI) are preserved. Used in standalone mode
-// so that secrets entered via the config UI persist in config.json.
+// Real values (user-entered via UI) are preserved, so that secrets entered
+// via the config UI persist in config.json.
 func (c *Config) StripMaskedSecrets() {
 	stripIfMasked := func(s *string) {
 		if *s == secretMask {
@@ -133,6 +139,9 @@ func (c *Config) StripMaskedSecrets() {
 	stripIfMasked(&c.Providers.Perplexity.APIKey)
 	stripIfMasked(&c.Providers.DashScope.APIKey)
 	stripIfMasked(&c.Providers.Bailian.APIKey)
+	stripIfMasked(&c.Providers.Zai.APIKey)
+	stripIfMasked(&c.Providers.ZaiCoding.APIKey)
+	stripIfMasked(&c.Providers.OllamaCloud.APIKey)
 
 	// Gateway token
 	stripIfMasked(&c.Gateway.Token)
@@ -181,7 +190,7 @@ func (c *Config) ApplyDBSecrets(secrets map[string]string) {
 }
 
 // ExtractDBSecrets returns the config_secrets key-value pairs from the config.
-// Used by managed mode to save secrets to the config_secrets table.
+// Saves secrets to the config_secrets table.
 func (c *Config) ExtractDBSecrets() map[string]string {
 	secrets := make(map[string]string)
 

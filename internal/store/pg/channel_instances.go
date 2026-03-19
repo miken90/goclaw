@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"time"
 
@@ -145,28 +147,78 @@ func (s *PGChannelInstanceStore) scanInstances(rows *sql.Rows) ([]store.ChannelI
 }
 
 func (s *PGChannelInstanceStore) Update(ctx context.Context, id uuid.UUID, updates map[string]any) error {
-	// Encrypt credentials if present
+	// Merge and encrypt credentials if present
 	if credsVal, ok := updates["credentials"]; ok && credsVal != nil {
-		var credsStr string
+		var newCreds map[string]any
 		switch v := credsVal.(type) {
-		case string:
-			credsStr = v
+		case map[string]any:
+			newCreds = v
 		default:
-			// Object/map from JSON — marshal to string for encryption
-			if b, err := json.Marshal(v); err == nil {
-				credsStr = string(b)
+			var raw []byte
+			switch vv := v.(type) {
+			case []byte:
+				raw = vv
+			case string:
+				raw = []byte(vv)
+			default:
+				if b, err := json.Marshal(v); err == nil {
+					raw = b
+				}
+			}
+			if len(raw) > 0 {
+				if err := json.Unmarshal(raw, &newCreds); err != nil {
+					newCreds = nil
+				}
 			}
 		}
-		if credsStr != "" && s.encKey != "" {
-			encrypted, err := crypto.Encrypt(credsStr, s.encKey)
+
+		// Merge with existing credentials so partial updates don't wipe other fields
+		if len(newCreds) > 0 {
+			existing, err := s.loadExistingCreds(ctx, id)
+			if err != nil {
+				return fmt.Errorf("load existing credentials for merge: %w", err)
+			}
+			maps.Copy(existing, newCreds)
+			newCreds = existing
+		}
+
+		var credsBytes []byte
+		if len(newCreds) > 0 {
+			credsBytes, _ = json.Marshal(newCreds)
+		}
+		if len(credsBytes) > 0 && s.encKey != "" {
+			encrypted, err := crypto.Encrypt(string(credsBytes), s.encKey)
 			if err != nil {
 				return fmt.Errorf("encrypt credentials: %w", err)
 			}
-			updates["credentials"] = []byte(encrypted)
+			credsBytes = []byte(encrypted)
 		}
+		updates["credentials"] = credsBytes
 	}
 	updates["updated_at"] = time.Now()
 	return execMapUpdate(ctx, s.db, "channel_instances", id, updates)
+}
+
+// loadExistingCreds reads and decrypts the current credentials for merging.
+func (s *PGChannelInstanceStore) loadExistingCreds(ctx context.Context, id uuid.UUID) (map[string]any, error) {
+	var raw []byte
+	err := s.db.QueryRowContext(ctx, "SELECT credentials FROM channel_instances WHERE id = $1", id).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) || len(raw) == 0 {
+		return make(map[string]any), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if s.encKey != "" {
+		if dec, err := crypto.Decrypt(string(raw), s.encKey); err == nil {
+			raw = []byte(dec)
+		}
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return make(map[string]any), nil
+	}
+	return m, nil
 }
 
 func (s *PGChannelInstanceStore) Delete(ctx context.Context, id uuid.UUID) error {
@@ -192,14 +244,15 @@ func (s *PGChannelInstanceStore) ListAll(ctx context.Context) ([]store.ChannelIn
 	return s.scanInstances(rows)
 }
 
-func buildChannelInstanceWhere(opts store.ChannelInstanceListOpts) (string, []interface{}) {
+func buildChannelInstanceWhere(opts store.ChannelInstanceListOpts) (string, []any) {
 	var conditions []string
-	var args []interface{}
+	var args []any
 	argIdx := 1
 
 	if opts.Search != "" {
-		conditions = append(conditions, fmt.Sprintf("(name ILIKE $%d OR display_name ILIKE $%d OR channel_type ILIKE $%d)", argIdx, argIdx, argIdx))
-		args = append(args, "%"+opts.Search+"%")
+		conditions = append(conditions, fmt.Sprintf("(name ILIKE $%d ESCAPE '\\' OR display_name ILIKE $%d ESCAPE '\\' OR channel_type ILIKE $%d ESCAPE '\\')", argIdx, argIdx, argIdx))
+		escaped := strings.NewReplacer("%", "\\%", "_", "\\_").Replace(opts.Search)
+		args = append(args, "%"+escaped+"%")
 	}
 
 	where := ""

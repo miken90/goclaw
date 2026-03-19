@@ -7,13 +7,18 @@ import (
 
 // Options keys used in ChatRequest.Options across providers.
 const (
-	OptMaxTokens      = "max_tokens"
-	OptTemperature    = "temperature"
-	OptThinkingLevel  = "thinking_level"
+	OptMaxTokens       = "max_tokens"
+	OptTemperature     = "temperature"
+	OptThinkingLevel   = "thinking_level"
 	OptReasoningEffort = "reasoning_effort"
-	OptEnableThinking = "enable_thinking"
-	OptThinkingBudget = "thinking_budget"
+	OptEnableThinking  = "enable_thinking"
+	OptThinkingBudget  = "thinking_budget"
 )
+
+// TokenSource provides an OAuth access token (with auto-refresh).
+type TokenSource interface {
+	Token() (string, error)
+}
 
 // Provider is the interface all LLM providers must implement.
 type Provider interface {
@@ -40,10 +45,10 @@ type ThinkingCapable interface {
 
 // ChatRequest contains the input for a Chat/ChatStream call.
 type ChatRequest struct {
-	Messages []Message              `json:"messages"`
-	Tools    []ToolDefinition       `json:"tools,omitempty"`
-	Model    string                 `json:"model,omitempty"`
-	Options  map[string]interface{} `json:"options,omitempty"`
+	Messages []Message        `json:"messages"`
+	Tools    []ToolDefinition `json:"tools,omitempty"`
+	Model    string           `json:"model,omitempty"`
+	Options  map[string]any   `json:"options,omitempty"`
 }
 
 // ChatResponse is the result from an LLM call.
@@ -54,6 +59,10 @@ type ChatResponse struct {
 	FinishReason string     `json:"finish_reason"` // "stop", "tool_calls", "length"
 	Usage        *Usage     `json:"usage,omitempty"`
 
+	// Phase is Codex-specific (gpt-5.3-codex): "commentary" or "final_answer".
+	// Agent loop must persist this on assistant messages for Codex performance.
+	Phase string `json:"phase,omitempty"`
+
 	// RawAssistantContent preserves the raw content blocks array from the provider response.
 	// Used by Anthropic to pass thinking blocks back in tool use loops (required by API).
 	RawAssistantContent json.RawMessage `json:"-"`
@@ -61,9 +70,9 @@ type ChatResponse struct {
 
 // StreamChunk is a piece of a streaming response.
 type StreamChunk struct {
-	Content   string `json:"content,omitempty"`
-	Thinking  string `json:"thinking,omitempty"`
-	Done      bool   `json:"done,omitempty"`
+	Content  string `json:"content,omitempty"`
+	Thinking string `json:"thinking,omitempty"`
+	Done     bool   `json:"done,omitempty"`
 }
 
 // ImageContent represents a base64-encoded image for vision-capable models.
@@ -72,13 +81,30 @@ type ImageContent struct {
 	Data     string `json:"data"`      // base64-encoded image bytes
 }
 
+// MediaRef is a lightweight reference to a persistently stored media file.
+// Stored in session JSONB (~60 bytes each) instead of megabytes for base64.
+// On reload, MediaRefs are resolved to file paths and loaded into Images (for images).
+type MediaRef struct {
+	ID       string `json:"id"`        // unique media ID (uuid)
+	MimeType string `json:"mime_type"` // e.g. "image/jpeg", "application/pdf"
+	Kind     string `json:"kind"`      // "image", "video", "audio", "document"
+}
+
 // Message represents a conversation message.
 type Message struct {
-	Role       string         `json:"role"`                  // "system", "user", "assistant", "tool"
+	Role       string         `json:"role"` // "system", "user", "assistant", "tool"
 	Content    string         `json:"content"`
-	Images     []ImageContent `json:"images,omitempty"`      // vision: base64 images
+	Thinking   string         `json:"thinking,omitempty"`   // reasoning_content for thinking models (Kimi, DeepSeek, etc.)
+	Images     []ImageContent `json:"images,omitempty"`     // vision: base64 images (runtime only, not persisted)
+	MediaRefs  []MediaRef     `json:"media_refs,omitempty"` // persistent media file references
 	ToolCalls  []ToolCall     `json:"tool_calls,omitempty"`
 	ToolCallID string         `json:"tool_call_id,omitempty"` // for role="tool" responses
+
+	// Phase is a Codex-specific field (gpt-5.3-codex) indicating message purpose.
+	// Values: "commentary" (intermediate), "final_answer" (closeout), or "" (unset).
+	// Must be persisted and passed back in subsequent requests for Codex performance.
+	// Other providers ignore this field.
+	Phase string `json:"phase,omitempty"`
 
 	// RawAssistantContent carries raw provider content blocks through tool loop iterations.
 	// Anthropic requires thinking blocks to be passed back exactly as received.
@@ -87,10 +113,10 @@ type Message struct {
 
 // ToolCall represents a tool invocation requested by the LLM.
 type ToolCall struct {
-	ID        string                 `json:"id"`
-	Name      string                 `json:"name"`
-	Arguments map[string]interface{} `json:"arguments"`
-	Metadata  map[string]string      `json:"metadata,omitempty"` // provider-specific (e.g. Gemini thought_signature)
+	ID        string            `json:"id"`
+	Name      string            `json:"name"`
+	Arguments map[string]any    `json:"arguments"`
+	Metadata  map[string]string `json:"metadata,omitempty"` // provider-specific (e.g. Gemini thought_signature)
 }
 
 // ToolDefinition describes a tool available to the LLM.
@@ -101,9 +127,9 @@ type ToolDefinition struct {
 
 // ToolFunctionSchema is the schema for a function tool.
 type ToolFunctionSchema struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Parameters  map[string]interface{} `json:"parameters"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
 }
 
 // Usage tracks token consumption.

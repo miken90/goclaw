@@ -12,8 +12,8 @@ import (
 type Tool interface {
 	Name() string
 	Description() string
-	Parameters() map[string]interface{}
-	Execute(ctx context.Context, args map[string]interface{}) *Result
+	Parameters() map[string]any
+	Execute(ctx context.Context, args map[string]any) *Result
 }
 
 // ContextualTool receives channel/chat context before execution.
@@ -44,13 +44,23 @@ type AsyncTool interface {
 
 // --- Configuration interfaces for reducing type assertions in cmd/ wiring ---
 
-// InterceptorAware tools can receive ContextFile and Memory interceptors (managed mode).
+// InterceptorAware tools can receive ContextFile and Memory interceptors.
 type InterceptorAware interface {
 	SetContextFileInterceptor(*ContextFileInterceptor)
 	SetMemoryInterceptor(*MemoryInterceptor)
 }
 
-// MemoryStoreAware tools can receive a MemoryStore for managed-mode queries.
+// ConfigPermAware tools receive a ConfigPermissionStore for group permission checks.
+type ConfigPermAware interface {
+	SetConfigPermStore(store.ConfigPermissionStore)
+}
+
+// WorkspaceInterceptorAware tools can receive a WorkspaceInterceptor for team workspace validation.
+type WorkspaceInterceptorAware interface {
+	SetWorkspaceInterceptor(*WorkspaceInterceptor)
+}
+
+// MemoryStoreAware tools can receive a MemoryStore for Postgres queries.
 type MemoryStoreAware interface {
 	SetMemoryStore(store.MemoryStore)
 }
@@ -87,6 +97,12 @@ type ChannelSender func(ctx context.Context, channel, chatID, content string) er
 // ChannelSenderAware tools can receive a channel sender function.
 type ChannelSenderAware interface {
 	SetChannelSender(ChannelSender)
+}
+
+// ChannelAware is optionally implemented by tools that only work on specific channel types.
+// Tools implementing this are filtered out when the current channel type doesn't match.
+type ChannelAware interface {
+	RequiredChannelTypes() []string
 }
 
 // ToProviderDef converts a Tool to a providers.ToolDefinition for LLM APIs.

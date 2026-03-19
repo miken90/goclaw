@@ -1,8 +1,10 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useRef, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { FILE_DESCRIPTIONS } from "./file-utils";
+import { ContactInsertSearch } from "./contact-insert-search";
 
 interface FileEditorProps {
   fileName: string | null;
@@ -14,6 +16,8 @@ interface FileEditorProps {
   canEdit: boolean;
   onSave: () => void;
   headerActions?: ReactNode;
+  /** Show contact search box for inserting contact snippets into the editor. */
+  contactSearchEnabled?: boolean;
 }
 
 export function FileEditor({
@@ -26,7 +30,38 @@ export function FileEditor({
   canEdit,
   onSave,
   headerActions,
+  contactSearchEnabled,
 }: FileEditorProps) {
+  const { t } = useTranslation("agents");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const handleInsertText = useCallback(
+    (text: string) => {
+      const ta = textareaRef.current;
+      if (!ta) {
+        // Fallback: append at end
+        onChange(content + (content.endsWith("\n") ? "" : "\n") + text);
+        return;
+      }
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      const before = content.slice(0, start);
+      const after = content.slice(end);
+      // Add newline prefix if cursor isn't at line start
+      const needNewline = before.length > 0 && !before.endsWith("\n");
+      const inserted = (needNewline ? "\n" : "") + text + "\n";
+      onChange(before + inserted + after);
+      // Restore cursor after inserted text
+      requestAnimationFrame(() => {
+        const pos = start + inserted.length;
+        ta.selectionStart = pos;
+        ta.selectionEnd = pos;
+        ta.focus();
+      });
+    },
+    [content, onChange],
+  );
+
   if (!fileName) {
     return (
       <div className="flex flex-1 flex-col">
@@ -34,7 +69,7 @@ export function FileEditor({
           <div className="mb-2 flex justify-end gap-2">{headerActions}</div>
         )}
         <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-          Select a file to {canEdit ? "edit" : "view"}
+          {canEdit ? t("files.selectFileToEdit") : t("files.selectFileToView")}
         </div>
       </div>
     );
@@ -56,17 +91,23 @@ export function FileEditor({
           {canEdit && (
             <Button size="sm" onClick={onSave} disabled={!dirty || saving}>
               {!saving && <Save className="h-3.5 w-3.5" />}
-              {saving ? "Saving..." : "Save"}
+              {saving ? t("files.saving") : t("files.save")}
             </Button>
           )}
         </div>
       </div>
+      {contactSearchEnabled && canEdit && (
+        <div className="mb-2">
+          <ContactInsertSearch onInsert={handleInsertText} />
+        </div>
+      )}
       {loading && !content ? (
         <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-          Loading...
+          {t("files.loading")}
         </div>
       ) : (
         <Textarea
+          ref={textareaRef}
           value={content}
           onChange={(e) => {
             if (!canEdit) return;
@@ -74,7 +115,7 @@ export function FileEditor({
           }}
           readOnly={!canEdit}
           className={`flex-1 resize-none font-mono text-sm ${!canEdit ? "opacity-70" : ""}`}
-          placeholder="File content..."
+          placeholder={t("files.contentPlaceholder")}
         />
       )}
     </div>

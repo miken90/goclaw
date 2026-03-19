@@ -6,25 +6,27 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/nextlevelbuilder/goclaw/internal/i18n"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
 func (h *AgentsHandler) handleListShares(w http.ResponseWriter, r *http.Request) {
 	userID := store.UserIDFromContext(r.Context())
+	locale := store.LocaleFromContext(r.Context())
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid agent ID"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidID, "agent")})
 		return
 	}
 
 	// Only owner can list shares
 	ag, err := h.agents.GetByID(r.Context(), id)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": i18n.T(locale, i18n.MsgNotFound, "agent", id.String())})
 		return
 	}
 	if userID != "" && ag.OwnerID != userID && !h.isOwnerUser(userID) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only owner can view shares"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": i18n.T(locale, i18n.MsgOwnerOnly, "view shares")})
 		return
 	}
 
@@ -34,25 +36,26 @@ func (h *AgentsHandler) handleListShares(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{"shares": shares})
+	writeJSON(w, http.StatusOK, map[string]any{"shares": shares})
 }
 
 func (h *AgentsHandler) handleShare(w http.ResponseWriter, r *http.Request) {
 	userID := store.UserIDFromContext(r.Context())
+	locale := store.LocaleFromContext(r.Context())
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid agent ID"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidID, "agent")})
 		return
 	}
 
 	// Only owner can share
 	ag, err := h.agents.GetByID(r.Context(), id)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": i18n.T(locale, i18n.MsgNotFound, "agent", id.String())})
 		return
 	}
 	if userID != "" && ag.OwnerID != userID && !h.isOwnerUser(userID) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only owner can share agent"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": i18n.T(locale, i18n.MsgOwnerOnly, "share agent")})
 		return
 	}
 
@@ -61,11 +64,11 @@ func (h *AgentsHandler) handleShare(w http.ResponseWriter, r *http.Request) {
 		Role   string `json:"role"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidRequest, err.Error())})
 		return
 	}
 	if req.UserID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "user_id is required"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgRequired, "user_id")})
 		return
 	}
 	if err := store.ValidateUserID(req.UserID); err != nil {
@@ -81,25 +84,27 @@ func (h *AgentsHandler) handleShare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	emitAudit(h.msgBus, r, "agent.shared", "agent", id.String())
 	writeJSON(w, http.StatusCreated, map[string]string{"ok": "true"})
 }
 
 func (h *AgentsHandler) handleRevokeShare(w http.ResponseWriter, r *http.Request) {
 	userID := store.UserIDFromContext(r.Context())
+	locale := store.LocaleFromContext(r.Context())
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid agent ID"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidID, "agent")})
 		return
 	}
 
 	// Only owner can revoke shares
 	ag, err := h.agents.GetByID(r.Context(), id)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": i18n.T(locale, i18n.MsgNotFound, "agent", id.String())})
 		return
 	}
 	if userID != "" && ag.OwnerID != userID && !h.isOwnerUser(userID) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only owner can revoke shares"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": i18n.T(locale, i18n.MsgOwnerOnly, "revoke shares")})
 		return
 	}
 
@@ -113,33 +118,35 @@ func (h *AgentsHandler) handleRevokeShare(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	emitAudit(h.msgBus, r, "agent.share_revoked", "agent", id.String())
 	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
 }
 
 func (h *AgentsHandler) handleRegenerate(w http.ResponseWriter, r *http.Request) {
 	userID := store.UserIDFromContext(r.Context())
+	locale := store.LocaleFromContext(r.Context())
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid agent ID"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidID, "agent")})
 		return
 	}
 
 	// Only owner can regenerate
 	ag, err := h.agents.GetByID(r.Context(), id)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": i18n.T(locale, i18n.MsgNotFound, "agent", id.String())})
 		return
 	}
 	if userID != "" && ag.OwnerID != userID && !h.isOwnerUser(userID) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only owner can regenerate agent"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": i18n.T(locale, i18n.MsgOwnerOnly, "regenerate agent")})
 		return
 	}
 	if ag.Status == store.AgentStatusSummoning {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "agent is already being summoned"})
+		writeJSON(w, http.StatusConflict, map[string]string{"error": i18n.T(locale, i18n.MsgAlreadySummoning)})
 		return
 	}
 	if h.summoner == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "summoning not available"})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": i18n.T(locale, i18n.MsgSummoningUnavailable)})
 		return
 	}
 
@@ -147,11 +154,11 @@ func (h *AgentsHandler) handleRegenerate(w http.ResponseWriter, r *http.Request)
 		Prompt string `json:"prompt"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidRequest, err.Error())})
 		return
 	}
 	if req.Prompt == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "prompt is required"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgRequired, "prompt")})
 		return
 	}
 
@@ -163,6 +170,7 @@ func (h *AgentsHandler) handleRegenerate(w http.ResponseWriter, r *http.Request)
 
 	go h.summoner.RegenerateAgent(id, ag.Provider, ag.Model, req.Prompt)
 
+	emitAudit(h.msgBus, r, "agent.regenerated", "agent", id.String())
 	writeJSON(w, http.StatusAccepted, map[string]string{"ok": "true", "status": store.AgentStatusSummoning})
 }
 
@@ -170,33 +178,34 @@ func (h *AgentsHandler) handleRegenerate(w http.ResponseWriter, r *http.Request)
 // Used when initial summoning failed (e.g. wrong model) and user wants to retry.
 func (h *AgentsHandler) handleResummon(w http.ResponseWriter, r *http.Request) {
 	userID := store.UserIDFromContext(r.Context())
+	locale := store.LocaleFromContext(r.Context())
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid agent ID"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidID, "agent")})
 		return
 	}
 
 	ag, err := h.agents.GetByID(r.Context(), id)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "agent not found"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": i18n.T(locale, i18n.MsgNotFound, "agent", id.String())})
 		return
 	}
 	if userID != "" && ag.OwnerID != userID && !h.isOwnerUser(userID) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "only owner can resummon agent"})
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": i18n.T(locale, i18n.MsgOwnerOnly, "resummon agent")})
 		return
 	}
 	if ag.Status == store.AgentStatusSummoning {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "agent is already being summoned"})
+		writeJSON(w, http.StatusConflict, map[string]string{"error": i18n.T(locale, i18n.MsgAlreadySummoning)})
 		return
 	}
 	if h.summoner == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "summoning not available"})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": i18n.T(locale, i18n.MsgSummoningUnavailable)})
 		return
 	}
 
 	description := extractDescription(ag.OtherConfig)
 	if description == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent has no description to resummon from"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgNoDescription)})
 		return
 	}
 
@@ -207,6 +216,7 @@ func (h *AgentsHandler) handleResummon(w http.ResponseWriter, r *http.Request) {
 
 	go h.summoner.SummonAgent(id, ag.Provider, ag.Model, description)
 
+	emitAudit(h.msgBus, r, "agent.resummoned", "agent", id.String())
 	writeJSON(w, http.StatusAccepted, map[string]string{"ok": "true", "status": store.AgentStatusSummoning})
 }
 
@@ -215,7 +225,7 @@ func extractDescription(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
-	var cfg map[string]interface{}
+	var cfg map[string]any
 	if json.Unmarshal(raw, &cfg) != nil {
 		return ""
 	}
@@ -223,7 +233,7 @@ func extractDescription(raw json.RawMessage) string {
 	return desc
 }
 
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
+func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(data)

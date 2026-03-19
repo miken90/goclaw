@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/nextlevelbuilder/goclaw/internal/i18n"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
@@ -25,15 +26,7 @@ func (h *DelegationsHandler) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (h *DelegationsHandler) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if h.token != "" {
-			if extractBearerToken(r) != h.token {
-				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-				return
-			}
-		}
-		next(w, r)
-	}
+	return requireAuth(h.token, "", next)
 }
 
 func (h *DelegationsHandler) handleList(w http.ResponseWriter, r *http.Request) {
@@ -80,17 +73,18 @@ func (h *DelegationsHandler) handleList(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]interface{}{
+	writeJSON(w, http.StatusOK, map[string]any{
 		"records": records,
 		"total":   total,
 	})
 }
 
 func (h *DelegationsHandler) handleGet(w http.ResponseWriter, r *http.Request) {
+	locale := store.LocaleFromContext(r.Context())
 	idStr := r.PathValue("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid id"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": i18n.T(locale, i18n.MsgInvalidID, "delegation")})
 		return
 	}
 

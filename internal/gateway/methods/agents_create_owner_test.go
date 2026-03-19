@@ -77,20 +77,17 @@ func (s *createCaptureStore) GetUserOverride(_ context.Context, _ uuid.UUID, _ s
 func (s *createCaptureStore) SetUserOverride(_ context.Context, _ *store.UserAgentOverrideData) error {
 	return nil
 }
-func (s *createCaptureStore) GetOrCreateUserProfile(_ context.Context, _ uuid.UUID, _, _ string) (bool, error) {
-	return false, nil
+func (s *createCaptureStore) GetOrCreateUserProfile(_ context.Context, _ uuid.UUID, _, _, _ string) (bool, string, error) {
+	return false, "", nil
 }
-func (s *createCaptureStore) IsGroupFileWriter(_ context.Context, _ uuid.UUID, _, _ string) (bool, error) {
-	return false, nil
-}
-func (s *createCaptureStore) AddGroupFileWriter(_ context.Context, _ uuid.UUID, _, _, _, _ string) error {
-	return nil
-}
-func (s *createCaptureStore) RemoveGroupFileWriter(_ context.Context, _ uuid.UUID, _, _ string) error {
-	return nil
-}
-func (s *createCaptureStore) ListGroupFileWriters(_ context.Context, _ uuid.UUID, _ string) ([]store.GroupFileWriterData, error) {
+func (s *createCaptureStore) ListUserInstances(_ context.Context, _ uuid.UUID) ([]store.UserInstanceData, error) {
 	return nil, nil
+}
+func (s *createCaptureStore) UpdateUserProfileMetadata(_ context.Context, _ uuid.UUID, _ string, _ map[string]string) error {
+	return nil
+}
+func (s *createCaptureStore) EnsureUserProfile(_ context.Context, _ uuid.UUID, _ string) error {
+	return nil
 }
 
 // ---- helpers ----
@@ -123,7 +120,7 @@ func nullClient() *gateway.Client {
 	return &gateway.Client{}
 }
 
-// newManagedMethods returns AgentsMethods wired for managed mode with the given stub store.
+// newManagedMethods returns AgentsMethods wired with the given stub store.
 func newManagedMethods(t *testing.T, stub store.AgentStore) *AgentsMethods {
 	t.Helper()
 	return &AgentsMethods{
@@ -131,7 +128,6 @@ func newManagedMethods(t *testing.T, stub store.AgentStore) *AgentsMethods {
 		cfg:        minimalConfig(),
 		workspace:  t.TempDir(),
 		agentStore: stub,
-		isManaged:  true,
 	}
 }
 

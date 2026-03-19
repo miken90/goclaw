@@ -36,16 +36,17 @@ func (c *Channel) parseMessageEvent(event *MessageEvent) *messageContext {
 		}
 		mentions = append(mentions, mi)
 
-		// Check if bot is mentioned
-		if c.botOpenID != "" && mi.OpenID == c.botOpenID {
+		// Check if bot is mentioned.
+		// If botOpenID is known, match exactly; otherwise treat any mention as bot mention
+		// (fallback when probeBotInfo fails — better to process than silently drop).
+		if c.botOpenID == "" || mi.OpenID == c.botOpenID {
 			mentionedBot = true
 		}
 	}
 
-	// Strip bot mention from content
-	if mentionedBot && c.botOpenID != "" {
-		content = stripBotMention(content, mentions, c.botOpenID)
-	}
+	// Replace mention placeholders with readable names.
+	// Bot mention is stripped entirely; other user mentions become @Name.
+	content = resolveMentions(content, mentions, c.botOpenID)
 
 	return &messageContext{
 		ChatID:       chatID,
@@ -99,12 +100,12 @@ func parseMessageContent(rawContent, messageType string) string {
 }
 
 func parsePostContent(rawContent string) string {
-	var post map[string]interface{}
+	var post map[string]any
 	if err := json.Unmarshal([]byte(rawContent), &post); err != nil {
 		return rawContent
 	}
 
-	var langContent interface{}
+	var langContent any
 	for _, lang := range []string{"zh_cn", "en_us"} {
 		if lc, ok := post[lang]; ok {
 			langContent = lc
@@ -121,25 +122,25 @@ func parsePostContent(rawContent string) string {
 		return rawContent
 	}
 
-	langMap, ok := langContent.(map[string]interface{})
+	langMap, ok := langContent.(map[string]any)
 	if !ok {
 		return rawContent
 	}
 
-	contentArr, ok := langMap["content"].([]interface{})
+	contentArr, ok := langMap["content"].([]any)
 	if !ok {
 		return rawContent
 	}
 
 	var textParts []string
 	for _, para := range contentArr {
-		paraArr, ok := para.([]interface{})
+		paraArr, ok := para.([]any)
 		if !ok {
 			continue
 		}
 		var lineParts []string
 		for _, elem := range paraArr {
-			elemMap, ok := elem.(map[string]interface{})
+			elemMap, ok := elem.(map[string]any)
 			if !ok {
 				continue
 			}
@@ -178,20 +179,20 @@ func parsePostContent(rawContent string) string {
 	return strings.Join(textParts, "\n")
 }
 
-func stripBotMention(text string, mentions []mentionInfo, botOpenID string) string {
+// resolveMentions replaces mention placeholders (@_user_1, @_user_2, etc.) in content.
+// Bot mention is stripped entirely; other user mentions become @Name.
+func resolveMentions(text string, mentions []mentionInfo, botOpenID string) string {
 	for _, m := range mentions {
-		if m.OpenID == botOpenID && m.Key != "" {
+		if m.Key == "" {
+			continue
+		}
+		if botOpenID != "" && m.OpenID == botOpenID {
+			// Strip bot mention
 			text = strings.ReplaceAll(text, m.Key, "")
+		} else if m.Name != "" {
+			// Replace with @Name
+			text = strings.ReplaceAll(text, m.Key, "@"+m.Name)
 		}
 	}
 	return strings.TrimSpace(text)
-}
-
-// --- Helpers ---
-
-func safeStr(s *string) string {
-	if s == nil {
-		return ""
-	}
-	return *s
 }

@@ -2,9 +2,12 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 )
@@ -29,10 +32,11 @@ func MediaImagesFromCtx(ctx context.Context) []providers.ImageContent {
 // visionProviderPriority is the order in which providers are tried for vision.
 var visionProviderPriority = []string{"openrouter", "gemini", "anthropic", "dashscope"}
 
-// visionModelOverrides maps provider names to preferred vision models.
-// Providers not listed here use their default model.
-var visionModelOverrides = map[string]string{
+// visionModelDefaults maps provider names to preferred vision models.
+var visionModelDefaults = map[string]string{
 	"openrouter": "google/gemini-2.5-flash-image",
+	"gemini":     "gemini-2.5-flash",
+	"anthropic":  "",
 	"dashscope":  "qwen3-vl",
 }
 
@@ -48,42 +52,87 @@ func NewReadImageTool(registry *providers.Registry) *ReadImageTool {
 func (t *ReadImageTool) Name() string { return "read_image" }
 
 func (t *ReadImageTool) Description() string {
-	return "Analyze images attached to the current message using a vision model. Use this when you see <media:image> tags but cannot view images directly."
+	return "Analyze images using vision AI. Works with: (1) images sent by the user (<media:image> tags), (2) workspace/generated image files (pass a file path)."
 }
 
-func (t *ReadImageTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *ReadImageTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"prompt": map[string]interface{}{
+		"properties": map[string]any{
+			"prompt": map[string]any{
 				"type":        "string",
 				"description": "What you want to know about the image(s). E.g. 'Describe this image in detail' or 'What text is in this image?'",
+			},
+			"path": map[string]any{
+				"type":        "string",
+				"description": "Optional file path to an image in the workspace. Use this for generated images or attachments. If omitted, analyzes images from the conversation.",
 			},
 		},
 		"required": []string{"prompt"},
 	}
 }
 
-func (t *ReadImageTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+// maxImageFileBytes is the max size for loading workspace images (10MB).
+const maxImageFileBytes = 10 * 1024 * 1024
+
+func (t *ReadImageTool) Execute(ctx context.Context, args map[string]any) *Result {
 	prompt, _ := args["prompt"].(string)
 	if prompt == "" {
 		prompt = "Describe this image in detail."
 	}
 
+	// If path is provided, load image from workspace file
 	images := MediaImagesFromCtx(ctx)
+	if imgPath, _ := args["path"].(string); imgPath != "" {
+		fileImages, err := t.loadImageFromPath(ctx, imgPath)
+		if err != nil {
+			return ErrorResult(err.Error())
+		}
+		images = fileImages
+	}
+
 	if len(images) == 0 {
-		return ErrorResult("No images available in this conversation. The user may not have sent an image.")
+		return ErrorResult("No images available. Either send an image in the chat or provide a file path with the 'path' parameter.")
 	}
 
-	// Find a vision-capable provider (per-agent config > hardcoded priority)
-	provider, model, err := t.resolveVisionProviderWithConfig(ctx)
+	chain := ResolveMediaProviderChain(ctx, "read_image", "", "",
+		visionProviderPriority, visionModelDefaults, t.registry)
+
+	// Inject prompt and images into each chain entry's params
+	for i := range chain {
+		if chain[i].Params == nil {
+			chain[i].Params = make(map[string]any)
+		}
+		chain[i].Params["prompt"] = prompt
+		chain[i].Params["images"] = images
+	}
+
+	chainResult, err := ExecuteWithChain(ctx, chain, t.registry, t.callProvider)
 	if err != nil {
-		return ErrorResult(err.Error())
+		return ErrorResult(fmt.Sprintf("image analysis failed: %v", err))
 	}
 
-	slog.Info("read_image: calling vision provider", "provider", provider.Name(), "model", model, "images", len(images))
+	result := NewResult(string(chainResult.Data))
+	result.Usage = chainResult.Usage
+	result.Provider = chainResult.Provider
+	result.Model = chainResult.Model
+	return result
+}
 
-	resp, err := provider.Chat(ctx, providers.ChatRequest{
+// callProvider dispatches the vision call using provider.Chat().
+func (t *ReadImageTool) callProvider(ctx context.Context, cp credentialProvider, providerName, model string, params map[string]any) ([]byte, *providers.Usage, error) {
+	prompt := GetParamString(params, "prompt", "Describe this image in detail.")
+	images, _ := params["images"].([]providers.ImageContent)
+
+	// Get the full provider for Chat() access
+	p, err := t.registry.Get(providerName)
+	if err != nil {
+		return nil, nil, fmt.Errorf("provider %q not available: %w", providerName, err)
+	}
+
+	slog.Info("read_image: calling vision provider", "provider", providerName, "model", model, "images", len(images))
+
+	resp, err := p.Chat(ctx, providers.ChatRequest{
 		Messages: []providers.Message{
 			{
 				Role:    "user",
@@ -92,85 +141,58 @@ func (t *ReadImageTool) Execute(ctx context.Context, args map[string]interface{}
 			},
 		},
 		Model: model,
-		Options: map[string]interface{}{
+		Options: map[string]any{
 			"max_tokens":  1024,
 			"temperature": 0.3,
 		},
 	})
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("Vision provider error: %v", err))
+		return nil, nil, fmt.Errorf("vision provider error: %w", err)
 	}
 
-	result := NewResult(resp.Content)
-	result.Usage = resp.Usage
-	result.Provider = provider.Name()
-	result.Model = model
-	return result
+	return []byte(resp.Content), resp.Usage, nil
 }
 
-// resolveVisionProviderWithConfig checks per-agent VisionConfig first,
-// then global builtin_tools.settings, then falls back to hardcoded priority.
-func (t *ReadImageTool) resolveVisionProviderWithConfig(ctx context.Context) (providers.Provider, string, error) {
-	// 1. Per-agent override (highest priority)
-	if cfg := VisionConfigFromCtx(ctx); cfg != nil && cfg.Provider != "" {
-		p, err := t.registry.Get(cfg.Provider)
-		if err != nil {
-			return nil, "", fmt.Errorf("configured vision provider %q not available: %w", cfg.Provider, err)
-		}
-		model := cfg.Model
-		if model == "" {
-			model = p.DefaultModel()
-		}
-		return p, model, nil
+// loadImageFromPath reads an image file from the workspace and returns it as ImageContent.
+func (t *ReadImageTool) loadImageFromPath(ctx context.Context, path string) ([]providers.ImageContent, error) {
+	// Infer MIME type from extension
+	ext := strings.ToLower(filepath.Ext(path))
+	mimeTypes := map[string]string{
+		".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+		".png": "image/png", ".gif": "image/gif",
+		".webp": "image/webp", ".bmp": "image/bmp",
 	}
-	// 2. Global builtin_tools.settings (DB defaults)
-	if p, model, ok := t.resolveFromBuiltinSettings(ctx); ok {
-		return p, model, nil
+	mime, ok := mimeTypes[ext]
+	if !ok {
+		return nil, fmt.Errorf("unsupported image format: %s (supported: jpg, png, gif, webp, bmp)", ext)
 	}
-	// 3. Hardcoded defaults
-	return t.resolveVisionProvider()
-}
 
-// resolveFromBuiltinSettings checks global builtin tool settings for provider/model config.
-func (t *ReadImageTool) resolveFromBuiltinSettings(ctx context.Context) (providers.Provider, string, bool) {
-	settings := BuiltinToolSettingsFromCtx(ctx)
-	if settings == nil {
-		return nil, "", false
-	}
-	raw, ok := settings["read_image"]
-	if !ok || len(raw) == 0 {
-		return nil, "", false
-	}
-	var cfg struct {
-		Provider string `json:"provider"`
-		Model    string `json:"model"`
-	}
-	if err := json.Unmarshal(raw, &cfg); err != nil || cfg.Provider == "" {
-		return nil, "", false
-	}
-	p, err := t.registry.Get(cfg.Provider)
+	// Resolve path within workspace (respect workspace restriction).
+	workspace := ToolWorkspaceFromCtx(ctx)
+	resolved, err := resolvePathWithAllowed(path, workspace, effectiveRestrict(ctx, true), allowedWithTeamWorkspace(ctx, nil))
 	if err != nil {
-		return nil, "", false
+		return nil, fmt.Errorf("invalid image path: %w", err)
 	}
-	model := cfg.Model
-	if model == "" {
-		model = p.DefaultModel()
+	if err := checkDeniedPath(resolved, workspace, nil); err != nil {
+		return nil, err
 	}
-	return p, model, true
-}
 
-// resolveVisionProvider finds the first available vision-capable provider.
-func (t *ReadImageTool) resolveVisionProvider() (providers.Provider, string, error) {
-	for _, name := range visionProviderPriority {
-		p, err := t.registry.Get(name)
-		if err != nil {
-			continue
-		}
-		model := p.DefaultModel()
-		if override, ok := visionModelOverrides[name]; ok {
-			model = override
-		}
-		return p, model, nil
+	// Pre-check file size before loading into memory.
+	fi, err := os.Stat(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat image file: %w", err)
 	}
-	return nil, "", fmt.Errorf("no vision-capable provider available (need one of: %v)", visionProviderPriority)
+	if fi.Size() > maxImageFileBytes {
+		return nil, fmt.Errorf("image file too large (%d bytes, max %d)", fi.Size(), maxImageFileBytes)
+	}
+
+	data, err := os.ReadFile(resolved)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read image file: %w", err)
+	}
+
+	return []providers.ImageContent{{
+		MimeType: mime,
+		Data:     base64.StdEncoding.EncodeToString(data),
+	}}, nil
 }

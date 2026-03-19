@@ -7,7 +7,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/agent"
+	"github.com/nextlevelbuilder/goclaw/internal/bus"
+	"github.com/nextlevelbuilder/goclaw/internal/channels/media"
 	"github.com/nextlevelbuilder/goclaw/internal/gateway"
+	"github.com/nextlevelbuilder/goclaw/internal/i18n"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/sessions"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
@@ -18,12 +21,11 @@ import (
 type ChatMethods struct {
 	agents      *agent.Router
 	sessions    store.SessionStore
-	isManaged   bool
 	rateLimiter *gateway.RateLimiter
 }
 
-func NewChatMethods(agents *agent.Router, sess store.SessionStore, isManaged bool, rl *gateway.RateLimiter) *ChatMethods {
-	return &ChatMethods{agents: agents, sessions: sess, isManaged: isManaged, rateLimiter: rl}
+func NewChatMethods(agents *agent.Router, sess store.SessionStore, rl *gateway.RateLimiter) *ChatMethods {
+	return &ChatMethods{agents: agents, sessions: sess, rateLimiter: rl}
 }
 
 // Register adds chat methods to the router.
@@ -34,14 +36,43 @@ func (m *ChatMethods) Register(router *gateway.MethodRouter) {
 	router.Register(protocol.MethodChatInject, m.handleInject)
 }
 
+// chatMediaItem represents a media file attached to a chat message.
+type chatMediaItem struct {
+	Path     string `json:"path"`
+	Filename string `json:"filename,omitempty"`
+}
+
 type chatSendParams struct {
-	Message    string `json:"message"`
-	AgentID    string `json:"agentId"`
-	SessionKey string `json:"sessionKey"`
-	Stream     bool   `json:"stream"`
+	Message    string            `json:"message"`
+	AgentID    string            `json:"agentId"`
+	SessionKey string            `json:"sessionKey"`
+	Stream     bool              `json:"stream"`
+	Media      json.RawMessage   `json:"media,omitempty"` // []string (legacy) or []chatMediaItem
+}
+
+// parseMedia handles both legacy string paths and new {path,filename} objects.
+func (p *chatSendParams) parseMedia() []chatMediaItem {
+	if len(p.Media) == 0 {
+		return nil
+	}
+	// Try new format: [{path, filename}]
+	var items []chatMediaItem
+	if err := json.Unmarshal(p.Media, &items); err == nil {
+		return items
+	}
+	// Fallback: legacy ["path1", "path2"]
+	var paths []string
+	if err := json.Unmarshal(p.Media, &paths); err == nil {
+		for _, path := range paths {
+			items = append(items, chatMediaItem{Path: path})
+		}
+		return items
+	}
+	return nil
 }
 
 func (m *ChatMethods) handleSend(ctx context.Context, client *gateway.Client, req *protocol.RequestFrame) {
+	locale := store.LocaleFromContext(ctx)
 	// Rate limit check per user/client
 	if m.rateLimiter != nil && m.rateLimiter.Enabled() {
 		key := client.UserID()
@@ -49,19 +80,28 @@ func (m *ChatMethods) handleSend(ctx context.Context, client *gateway.Client, re
 			key = client.ID()
 		}
 		if !m.rateLimiter.Allow(key) {
-			client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, "rate limit exceeded — please wait before sending more messages"))
+			client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgRateLimitExceeded)))
 			return
 		}
 	}
 
 	var params chatSendParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, "invalid params: "+err.Error()))
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgInvalidJSON)))
 		return
 	}
 
 	if params.AgentID == "" {
-		params.AgentID = "default"
+		// Extract agent key from session key (format: "agent:{key}:{rest}")
+		// so resuming an existing session routes to the correct agent.
+		if params.SessionKey != "" {
+			if agentKey, _ := sessions.ParseSessionKey(params.SessionKey); agentKey != "" {
+				params.AgentID = agentKey
+			}
+		}
+		if params.AgentID == "" {
+			params.AgentID = "default"
+		}
 	}
 
 	loop, err := m.agents.Get(params.AgentID)
@@ -71,8 +111,8 @@ func (m *ChatMethods) handleSend(ctx context.Context, client *gateway.Client, re
 	}
 
 	userID := client.UserID()
-	if m.isManaged && userID == "" {
-		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, "user_id is required in managed mode — provide it in the connect handshake"))
+	if userID == "" {
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgUserIDRequired)))
 		return
 	}
 
@@ -88,23 +128,70 @@ func (m *ChatMethods) handleSend(ctx context.Context, client *gateway.Client, re
 		runCtxBase = store.WithUserID(runCtxBase, userID)
 	}
 
+	// Mid-run injection: if session already has an active run, inject the message
+	// into the running loop instead of starting a new concurrent run.
+	if m.agents.IsSessionBusy(sessionKey) {
+		injected := m.agents.InjectMessage(sessionKey, agent.InjectedMessage{
+			Content: params.Message,
+			UserID:  userID,
+		})
+		if injected {
+			client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
+				"injected": true,
+			}))
+			return
+		}
+		// Fallback: injection failed (channel full), proceed with new run
+	}
+
 	// Create cancellable context for abort support (matching TS AbortController pattern).
 	runCtx, cancel := context.WithCancel(runCtxBase)
-	m.agents.RegisterRun(runID, sessionKey, params.AgentID, cancel)
+	injectCh := m.agents.RegisterRun(runID, sessionKey, params.AgentID, cancel)
 
 	// Run agent asynchronously - events are broadcast via the event system
 	go func() {
 		defer m.agents.UnregisterRun(runID)
 		defer cancel()
 
+		// Parse media items (supports both legacy string paths and new {path,filename} objects).
+		items := params.parseMedia()
+
+		// Convert media items to bus.MediaFile with MIME detection.
+		var mediaFiles []bus.MediaFile
+		var mediaInfos []media.MediaInfo
+		for _, item := range items {
+			mimeType := media.DetectMIMEType(item.Path)
+			mediaFiles = append(mediaFiles, bus.MediaFile{Path: item.Path, MimeType: mimeType})
+			mediaInfos = append(mediaInfos, media.MediaInfo{
+				Type:        media.MediaKindFromMime(mimeType),
+				FilePath:    item.Path,
+				ContentType: mimeType,
+				FileName:    item.Filename,
+			})
+		}
+
+		// Prepend media tags so the LLM knows what media is attached.
+		message := params.Message
+		if len(mediaInfos) > 0 {
+			if tags := media.BuildMediaTags(mediaInfos); tags != "" {
+				if message != "" {
+					message = tags + "\n\n" + message
+				} else {
+					message = tags
+				}
+			}
+		}
+
 		result, err := loop.Run(runCtx, agent.RunRequest{
 			SessionKey: sessionKey,
-			Message:    params.Message,
+			Message:    message,
+			Media:      mediaFiles,
 			Channel:    "ws",
 			ChatID:     client.ID(),
 			RunID:      runID,
 			UserID:     userID,
 			Stream:     params.Stream,
+			InjectCh:   injectCh,
 		})
 
 		if err != nil {
@@ -116,11 +203,15 @@ func (m *ChatMethods) handleSend(ctx context.Context, client *gateway.Client, re
 			return
 		}
 
-		client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+		resp := map[string]any{
 			"runId":   result.RunID,
 			"content": result.Content,
 			"usage":   result.Usage,
-		}))
+		}
+		if len(result.Media) > 0 {
+			resp["media"] = result.Media
+		}
+		client.SendResponse(protocol.NewOKResponse(req.ID, resp))
 	}()
 }
 
@@ -130,9 +221,10 @@ type chatHistoryParams struct {
 }
 
 func (m *ChatMethods) handleHistory(ctx context.Context, client *gateway.Client, req *protocol.RequestFrame) {
+	locale := store.LocaleFromContext(ctx)
 	var params chatHistoryParams
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, "invalid params: "+err.Error()))
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgInvalidJSON)))
 		return
 	}
 
@@ -147,30 +239,31 @@ func (m *ChatMethods) handleHistory(ctx context.Context, client *gateway.Client,
 
 	history := m.sessions.GetHistory(sessionKey)
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"messages": history,
 	}))
 }
 
 // handleInject injects a message into a session transcript without running the agent.
 // Matching TS chat.inject (src/gateway/server-methods/chat.ts:686-746).
-func (m *ChatMethods) handleInject(_ context.Context, client *gateway.Client, req *protocol.RequestFrame) {
+func (m *ChatMethods) handleInject(ctx context.Context, client *gateway.Client, req *protocol.RequestFrame) {
+	locale := store.LocaleFromContext(ctx)
 	var params struct {
 		SessionKey string `json:"sessionKey"`
 		Message    string `json:"message"`
 		Label      string `json:"label"`
 	}
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, "invalid params: "+err.Error()))
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgInvalidJSON)))
 		return
 	}
 
 	if params.SessionKey == "" {
-		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, "sessionKey is required"))
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgRequired, "sessionKey")))
 		return
 	}
 	if params.Message == "" {
-		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, "message is required"))
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgMsgRequired)))
 		return
 	}
 
@@ -192,7 +285,7 @@ func (m *ChatMethods) handleInject(_ context.Context, client *gateway.Client, re
 		Content: text,
 	})
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"ok":        true,
 		"messageId": messageID,
 	}))
@@ -208,18 +301,19 @@ func (m *ChatMethods) handleInject(_ context.Context, client *gateway.Client, re
 // Response:
 //
 //	{ ok: true, aborted: bool, runIds: []string }
-func (m *ChatMethods) handleAbort(_ context.Context, client *gateway.Client, req *protocol.RequestFrame) {
+func (m *ChatMethods) handleAbort(ctx context.Context, client *gateway.Client, req *protocol.RequestFrame) {
+	locale := store.LocaleFromContext(ctx)
 	var params struct {
 		RunID      string `json:"runId"`
 		SessionKey string `json:"sessionKey"`
 	}
 	if err := json.Unmarshal(req.Params, &params); err != nil {
-		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, "invalid params: "+err.Error()))
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgInvalidJSON)))
 		return
 	}
 
 	if params.SessionKey == "" && params.RunID == "" {
-		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, "sessionKey or runId is required"))
+		client.SendResponse(protocol.NewErrorResponse(req.ID, protocol.ErrInvalidRequest, i18n.T(locale, i18n.MsgRequired, "sessionKey or runId")))
 		return
 	}
 
@@ -235,7 +329,7 @@ func (m *ChatMethods) handleAbort(_ context.Context, client *gateway.Client, req
 		abortedIDs = m.agents.AbortRunsForSession(params.SessionKey)
 	}
 
-	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]interface{}{
+	client.SendResponse(protocol.NewOKResponse(req.ID, map[string]any{
 		"ok":      true,
 		"aborted": len(abortedIDs) > 0,
 		"runIds":  abortedIDs,

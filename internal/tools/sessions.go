@@ -27,15 +27,15 @@ func (t *SessionsListTool) Description() string {
 	return "List sessions for this agent with optional filters."
 }
 
-func (t *SessionsListTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *SessionsListTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"limit": map[string]interface{}{
+		"properties": map[string]any{
+			"limit": map[string]any{
 				"type":        "number",
 				"description": "Max sessions to return (default 20)",
 			},
-			"active_minutes": map[string]interface{}{
+			"active_minutes": map[string]any{
 				"type":        "number",
 				"description": "Only show sessions active in the last N minutes",
 			},
@@ -43,7 +43,7 @@ func (t *SessionsListTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *SessionsListTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *SessionsListTool) Execute(ctx context.Context, args map[string]any) *Result {
 	if t.sessions == nil {
 		return ErrorResult("session store not available")
 	}
@@ -93,7 +93,7 @@ func (t *SessionsListTool) Execute(ctx context.Context, args map[string]interfac
 		})
 	}
 
-	out, _ := json.Marshal(map[string]interface{}{
+	out, _ := json.Marshal(map[string]any{
 		"count":    len(entries),
 		"sessions": entries,
 	})
@@ -117,11 +117,11 @@ func (t *SessionStatusTool) Description() string {
 	return "Show session status: model, tokens, compaction count, channel, last update."
 }
 
-func (t *SessionStatusTool) Parameters() map[string]interface{} {
-	return map[string]interface{}{
+func (t *SessionStatusTool) Parameters() map[string]any {
+	return map[string]any{
 		"type": "object",
-		"properties": map[string]interface{}{
-			"session_key": map[string]interface{}{
+		"properties": map[string]any{
+			"session_key": map[string]any{
 				"type":        "string",
 				"description": "Session key to inspect (default: current session)",
 			},
@@ -129,7 +129,7 @@ func (t *SessionStatusTool) Parameters() map[string]interface{} {
 	}
 }
 
-func (t *SessionStatusTool) Execute(ctx context.Context, args map[string]interface{}) *Result {
+func (t *SessionStatusTool) Execute(ctx context.Context, args map[string]any) *Result {
 	if t.sessions == nil {
 		return ErrorResult("session store not available")
 	}

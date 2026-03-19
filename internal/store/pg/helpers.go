@@ -5,11 +5,17 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// validColumnName matches safe SQL identifiers (letters, digits, underscores).
+// Defense-in-depth: prevents column name injection in execMapUpdate.
+var validColumnName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 // --- Nullable helpers ---
 
@@ -55,6 +61,13 @@ func derefUUID(u *uuid.UUID) uuid.UUID {
 	return *u
 }
 
+func derefBytes(b *[]byte) []byte {
+	if b == nil {
+		return nil
+	}
+	return *b
+}
+
 // --- JSON helpers ---
 
 func jsonOrEmpty(data []byte) []byte {
@@ -64,7 +77,14 @@ func jsonOrEmpty(data []byte) []byte {
 	return data
 }
 
-func jsonOrNull(data json.RawMessage) interface{} {
+func jsonOrEmptyArray(data []byte) []byte {
+	if data == nil {
+		return []byte("[]")
+	}
+	return data
+}
+
+func jsonOrNull(data json.RawMessage) any {
 	if data == nil {
 		return nil
 	}
@@ -74,14 +94,22 @@ func jsonOrNull(data json.RawMessage) interface{} {
 // --- PostgreSQL array helpers ---
 
 // pqStringArray converts a Go string slice to a PostgreSQL text[] literal.
-func pqStringArray(arr []string) interface{} {
+// Each element is double-quoted and escaped to prevent array literal injection.
+func pqStringArray(arr []string) any {
 	if arr == nil {
 		return nil
 	}
-	return "{" + strings.Join(arr, ",") + "}"
+	quoted := make([]string, len(arr))
+	for i, s := range arr {
+		escaped := strings.ReplaceAll(s, `\`, `\\`)
+		escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+		quoted[i] = `"` + escaped + `"`
+	}
+	return "{" + strings.Join(quoted, ",") + "}"
 }
 
 // scanStringArray parses a PostgreSQL text[] column (scanned as []byte) into a Go string slice.
+// Handles both quoted and unquoted elements in PostgreSQL array literal format.
 func scanStringArray(data []byte, dest *[]string) {
 	if data == nil || len(data) == 0 {
 		return
@@ -92,22 +120,70 @@ func scanStringArray(data []byte, dest *[]string) {
 	if s == "" {
 		return
 	}
-	*dest = strings.Split(s, ",")
+
+	// Parse PostgreSQL array format: {val1,"quoted,val",val3}
+	var result []string
+	i := 0
+	for i < len(s) {
+		if s[i] == '"' {
+			// Quoted element: find closing quote (handle escaped quotes)
+			i++ // skip opening quote
+			var elem strings.Builder
+			for i < len(s) {
+				if s[i] == '\\' && i+1 < len(s) {
+					elem.WriteByte(s[i+1])
+					i += 2
+				} else if s[i] == '"' {
+					i++ // skip closing quote
+					break
+				} else {
+					elem.WriteByte(s[i])
+					i++
+				}
+			}
+			result = append(result, elem.String())
+		} else {
+			// Unquoted element: read until comma
+			j := strings.IndexByte(s[i:], ',')
+			if j < 0 {
+				result = append(result, s[i:])
+				break
+			}
+			result = append(result, s[i:i+j])
+			i += j
+		}
+		// Skip comma separator
+		if i < len(s) && s[i] == ',' {
+			i++
+		}
+	}
+	*dest = result
 }
 
 // --- Dynamic UPDATE helper ---
 
 // execMapUpdate builds and runs a dynamic UPDATE from a column→value map.
+// Column names are validated against a strict identifier regex to prevent SQL injection.
 func execMapUpdate(ctx context.Context, db *sql.DB, table string, id uuid.UUID, updates map[string]any) error {
 	if len(updates) == 0 {
 		return nil
 	}
 	var setClauses []string
-	var args []interface{}
+	var args []any
 	i := 1
 	for col, val := range updates {
+		if !validColumnName.MatchString(col) {
+			slog.Warn("security.invalid_column_name", "table", table, "column", col)
+			return fmt.Errorf("invalid column name: %q", col)
+		}
 		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", col, i))
 		args = append(args, val)
+		i++
+	}
+	// Auto-set updated_at for tables that have the column, unless caller already included it.
+	if _, ok := updates["updated_at"]; !ok && tableHasUpdatedAt(table) {
+		setClauses = append(setClauses, fmt.Sprintf("updated_at = $%d", i))
+		args = append(args, time.Now().UTC())
 		i++
 	}
 	args = append(args, id)
@@ -116,6 +192,18 @@ func execMapUpdate(ctx context.Context, db *sql.DB, table string, id uuid.UUID, 
 	return err
 }
 
-func nowUTC() time.Time {
-	return time.Now().UTC()
+// tablesWithUpdatedAt lists tables that have an updated_at column.
+var tablesWithUpdatedAt = map[string]bool{
+	"agents": true, "llm_providers": true, "sessions": true,
+	"channel_instances": true, "cron_jobs": true, "custom_tools": true,
+	"skills": true, "mcp_servers": true, "agent_links": true,
+	"agent_teams": true, "team_tasks": true, "builtin_tools": true, "team_workspace_files": true,
+	"agent_context_files": true, "user_context_files": true,
+	"user_agent_overrides": true, "config_secrets": true,
+	"memory_documents": true, "memory_chunks": true, "embedding_cache": true,
+	"secure_cli_binaries": true,
+}
+
+func tableHasUpdatedAt(table string) bool {
+	return tablesWithUpdatedAt[table]
 }

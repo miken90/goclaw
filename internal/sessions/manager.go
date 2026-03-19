@@ -278,6 +278,17 @@ func (m *Manager) TruncateHistory(key string, keepLast int) {
 	s.Updated = time.Now()
 }
 
+// SetHistory replaces a session's message history with the given slice.
+func (m *Manager) SetHistory(key string, msgs []providers.Message) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if s, ok := m.sessions[key]; ok {
+		s.Messages = msgs
+		s.Updated = time.Now()
+	}
+}
+
 // Reset clears a session's history and summary.
 func (m *Manager) Reset(key string) {
 	m.mu.Lock()
@@ -326,6 +337,8 @@ func (m *Manager) List(agentID string) []SessionInfo {
 			MessageCount: len(s.Messages),
 			Created:      s.Created,
 			Updated:      s.Updated,
+			Label:        s.Label,
+			Channel:      s.Channel,
 		})
 	}
 	return result
@@ -333,7 +346,6 @@ func (m *Manager) List(agentID string) []SessionInfo {
 
 // LastUsedChannel finds the most recently updated channel session for an agent
 // and extracts channel + chatID from the key. Returns ("", "") if none found.
-// Used for heartbeat delivery target resolution (target="last").
 func (m *Manager) LastUsedChannel(agentID string) (channel, chatID string) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -346,9 +358,9 @@ func (m *Manager) LastUsedChannel(agentID string) (channel, chatID string) {
 		if !strings.HasPrefix(key, prefix) {
 			continue
 		}
-		// Skip non-channel sessions (cron, subagent, heartbeat)
+		// Skip non-channel sessions (cron, subagent)
 		rest := key[len(prefix):]
-		if strings.HasPrefix(rest, "cron:") || strings.HasPrefix(rest, "subagent:") || strings.HasPrefix(rest, "heartbeat:") {
+		if strings.HasPrefix(rest, "cron:") || strings.HasPrefix(rest, "subagent:") {
 			continue
 		}
 		if s.Updated.After(bestUpdated) {
@@ -375,6 +387,8 @@ type SessionInfo struct {
 	MessageCount int       `json:"messageCount"`
 	Created      time.Time `json:"created"`
 	Updated      time.Time `json:"updated"`
+	Label        string    `json:"label,omitempty"`
+	Channel      string    `json:"channel,omitempty"`
 }
 
 // Save persists a session to disk atomically.

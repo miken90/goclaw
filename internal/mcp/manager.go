@@ -21,6 +21,11 @@ const (
 	initialBackoff       = 2 * time.Second
 	maxBackoff           = 60 * time.Second
 	maxReconnectAttempts = 10
+
+	// mcpToolInlineMaxCount is the threshold above which MCP tools switch
+	// to search mode (deferred loading via mcp_tool_search) instead of
+	// being registered inline in the tool registry.
+	mcpToolInlineMaxCount = 40
 )
 
 // ServerStatus reports the connection status of an MCP server.
@@ -48,35 +53,58 @@ type serverState struct {
 }
 
 // Manager orchestrates MCP server connections and tool registration.
-// Supports two modes:
-//   - Standalone: reads from config.MCPServerConfig map (shared across all agents)
-//   - Managed: queries MCPServerStore per agent+user for permission-filtered servers
+// Supports two sources:
+//   - Config-based: reads from config.MCPServerConfig map (shared across all agents)
+//   - DB-backed: queries MCPServerStore per agent+user for permission-filtered servers
+//
+// When total MCP tool count exceeds mcpToolInlineMaxCount, the manager
+// enters "search mode": tools are kept in deferredTools instead of the
+// registry, and only mcp_tool_search is registered. Tools are activated
+// on demand via ActivateTools().
 type Manager struct {
 	mu       sync.RWMutex
 	servers  map[string]*serverState
 	registry *tools.Registry
 
-	// Standalone mode
+	// Config-based servers
 	configs map[string]*config.MCPServerConfig
 
-	// Managed mode
+	// DB-backed servers
 	store store.MCPServerStore
+
+	// Shared connection pool (nil = config-only mode)
+	pool          *Pool
+	poolServers   map[string]struct{}  // server names acquired from pool (for cleanup)
+	poolToolNames map[string][]string  // per-agent tool names for pool-backed servers
+
+	// Search mode: deferred tools not registered in registry
+	deferredTools  map[string]*BridgeTool // registeredName → BridgeTool
+	activatedTools map[string]struct{}     // tracks activated tool names for group:mcp
+	searchMode     bool
 }
 
 // ManagerOption configures the Manager.
 type ManagerOption func(*Manager)
 
-// WithConfigs sets static MCP server configs (standalone mode).
+// WithConfigs sets static MCP server configs from the config file.
 func WithConfigs(cfgs map[string]*config.MCPServerConfig) ManagerOption {
 	return func(m *Manager) {
 		m.configs = cfgs
 	}
 }
 
-// WithStore sets the MCPServerStore for managed mode.
+// WithStore sets the MCPServerStore for DB-backed MCP server loading.
 func WithStore(s store.MCPServerStore) ManagerOption {
 	return func(m *Manager) {
 		m.store = s
+	}
+}
+
+// WithPool sets a shared connection pool for MCP servers.
+// When set, LoadForAgent uses the pool instead of creating per-agent connections.
+func WithPool(p *Pool) ManagerOption {
+	return func(m *Manager) {
+		m.pool = p
 	}
 }
 
@@ -92,7 +120,7 @@ func NewManager(registry *tools.Registry, opts ...ManagerOption) *Manager {
 	return m
 }
 
-// Start connects to all configured MCP servers (standalone mode).
+// Start connects to all config-file MCP servers.
 // Non-fatal: logs warnings for servers that fail to connect and continues.
 func (m *Manager) Start(ctx context.Context) error {
 	if len(m.configs) == 0 {
@@ -118,7 +146,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	return nil
 }
 
-// LoadForAgent connects MCP servers accessible by a specific agent+user (managed mode).
+// LoadForAgent connects MCP servers accessible by a specific agent+user.
 // Previously registered MCP tools for this manager are cleared and reloaded.
 func (m *Manager) LoadForAgent(ctx context.Context, agentID uuid.UUID, userID string) error {
 	if m.store == nil {
@@ -139,12 +167,25 @@ func (m *Manager) LoadForAgent(ctx context.Context, agentID uuid.UUID, userID st
 			continue
 		}
 
-		if err := m.connectServer(ctx, srv.Name, srv.Transport, srv.Command,
-			jsonBytesToStringSlice(srv.Args), jsonBytesToStringMap(srv.Env),
-			srv.URL, jsonBytesToStringMap(srv.Headers),
-			srv.ToolPrefix, srv.TimeoutSec); err != nil {
-			slog.Warn("mcp.server.connect_failed", "server", srv.Name, "error", err)
-			continue
+		args := jsonBytesToStringSlice(srv.Args)
+		env := jsonBytesToStringMap(srv.Env)
+		headers := jsonBytesToStringMap(srv.Headers)
+
+		if m.pool != nil {
+			// Pool mode: acquire shared connection, create per-agent BridgeTools
+			if err := m.connectViaPool(ctx, srv.Name, srv.Transport, srv.Command,
+				args, env, srv.URL, headers, srv.ToolPrefix, srv.TimeoutSec); err != nil {
+				slog.Warn("mcp.server.connect_failed", "server", srv.Name, "error", err)
+				continue
+			}
+		} else {
+			// Per-agent mode: create per-agent connection
+			if err := m.connectServer(ctx, srv.Name, srv.Transport, srv.Command,
+				args, env, srv.URL, headers,
+				srv.ToolPrefix, srv.TimeoutSec); err != nil {
+				slog.Warn("mcp.server.connect_failed", "server", srv.Name, "error", err)
+				continue
+			}
 		}
 
 		// Apply tool filtering from grants
@@ -153,7 +194,157 @@ func (m *Manager) LoadForAgent(ctx context.Context, agentID uuid.UUID, userID st
 		}
 	}
 
+	// Check if we should enter search mode (too many tools to inline)
+	m.maybeEnterSearchMode()
+
 	return nil
+}
+
+// maybeEnterSearchMode moves all registered BridgeTools to deferredTools
+// if total count exceeds the inline threshold.
+func (m *Manager) maybeEnterSearchMode() {
+	allNames := m.ToolNames()
+	if len(allNames) <= mcpToolInlineMaxCount {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.deferredTools = make(map[string]*BridgeTool, len(allNames))
+	m.activatedTools = make(map[string]struct{})
+
+	// Move all tools to deferred — handle both pool-backed and standalone
+	for serverName := range m.servers {
+		var toolNames []string
+		if _, isPool := m.poolServers[serverName]; isPool {
+			toolNames = m.poolToolNames[serverName]
+		} else {
+			toolNames = m.servers[serverName].toolNames
+		}
+
+		for _, name := range toolNames {
+			if bt, ok := m.registry.Get(name); ok {
+				if bridge, ok := bt.(*BridgeTool); ok {
+					m.deferredTools[name] = bridge
+					m.registry.Unregister(name)
+				}
+			}
+		}
+
+		// Clear tool names
+		if _, isPool := m.poolServers[serverName]; isPool {
+			m.poolToolNames[serverName] = nil
+		} else {
+			m.servers[serverName].toolNames = nil
+		}
+	}
+
+	tools.UnregisterToolGroup("mcp")
+	m.searchMode = true
+
+	slog.Info("mcp.search_mode.enabled",
+		"deferred_tools", len(m.deferredTools),
+		"threshold", mcpToolInlineMaxCount)
+}
+
+// IsSearchMode reports whether the manager is in deferred/search mode.
+func (m *Manager) IsSearchMode() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.searchMode
+}
+
+// DeferredToolInfos returns all deferred tools for BM25 indexing.
+func (m *Manager) DeferredToolInfos() []*BridgeTool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	result := make([]*BridgeTool, 0, len(m.deferredTools))
+	for _, bt := range m.deferredTools {
+		result = append(result, bt)
+	}
+	return result
+}
+
+// ActivateTools moves named deferred tools into the registry so
+// they become available on the next agent loop iteration.
+// Uses 3-phase locking to avoid deadlock with registry.mu.
+func (m *Manager) ActivateTools(names []string) {
+	// Phase 1: collect tools to activate (read lock)
+	m.mu.RLock()
+	toActivate := make([]*BridgeTool, 0, len(names))
+	for _, name := range names {
+		if bt, ok := m.deferredTools[name]; ok {
+			if _, exists := m.registry.Get(name); !exists {
+				toActivate = append(toActivate, bt)
+			}
+		}
+	}
+	m.mu.RUnlock()
+
+	if len(toActivate) == 0 {
+		return
+	}
+
+	// Phase 2: register in registry (no Manager lock held)
+	var activated []string
+	for _, bt := range toActivate {
+		if _, exists := m.registry.Get(bt.Name()); !exists {
+			m.registry.Register(bt)
+			activated = append(activated, bt.Name())
+		}
+	}
+
+	if len(activated) == 0 {
+		return
+	}
+
+	// Phase 3: update internal state (write lock)
+	m.mu.Lock()
+	for _, name := range activated {
+		delete(m.deferredTools, name)
+		m.activatedTools[name] = struct{}{}
+	}
+	activeNames := make([]string, 0, len(m.activatedTools))
+	for n := range m.activatedTools {
+		activeNames = append(activeNames, n)
+	}
+	m.mu.Unlock()
+
+	tools.RegisterToolGroup("mcp", activeNames)
+	slog.Info("mcp.tools.activated", "tools", activated)
+}
+
+// ActivateToolIfDeferred activates a single named tool if it is currently deferred.
+// Returns true if the tool is now in the registry.
+// Used by the Registry's deferredActivator callback for lazy tool activation.
+func (m *Manager) ActivateToolIfDeferred(name string) bool {
+	m.mu.Lock()
+	_, isDeferred := m.deferredTools[name]
+	_, isActivated := m.activatedTools[name]
+	if isActivated {
+		m.mu.Unlock()
+		return true // already activated by a concurrent call
+	}
+	if !isDeferred {
+		m.mu.Unlock()
+		return false
+	}
+	// Mark as activated under lock to prevent concurrent ActivateTools races.
+	m.activatedTools[name] = struct{}{}
+	bt := m.deferredTools[name]
+	delete(m.deferredTools, name)
+	activeNames := make([]string, 0, len(m.activatedTools))
+	for n := range m.activatedTools {
+		activeNames = append(activeNames, n)
+	}
+	m.mu.Unlock()
+
+	// Register in registry outside lock (registry has its own sync).
+	m.registry.Register(bt)
+	tools.RegisterToolGroup("mcp", activeNames)
+	slog.Info("mcp.tools.activated", "tools", []string{name})
+	return true
 }
 
 // Stop shuts down all MCP server connections and unregisters tools.
@@ -162,20 +353,32 @@ func (m *Manager) Stop() {
 	defer m.mu.Unlock()
 
 	for name, ss := range m.servers {
-		if ss.cancel != nil {
-			ss.cancel()
-		}
-		if ss.client != nil {
-			if err := ss.client.Close(); err != nil {
-				slog.Debug("mcp.server.close_error", "server", name, "error", err)
+		if _, isPool := m.poolServers[name]; isPool {
+			// Pool-backed: unregister per-agent tools, release shared connection
+			for _, toolName := range m.poolToolNames[name] {
+				m.registry.Unregister(toolName)
 			}
-		}
-		// Unregister tools
-		for _, toolName := range ss.toolNames {
-			m.registry.Unregister(toolName)
+			if m.pool != nil {
+				m.pool.Release(name)
+			}
+		} else {
+			// Standalone: close connection directly
+			if ss.cancel != nil {
+				ss.cancel()
+			}
+			if ss.client != nil {
+				if err := ss.client.Close(); err != nil {
+					slog.Debug("mcp.server.close_error", "server", name, "error", err)
+				}
+			}
+			for _, toolName := range ss.toolNames {
+				m.registry.Unregister(toolName)
+			}
 		}
 	}
 	m.servers = make(map[string]*serverState)
+	m.poolServers = nil
+	m.poolToolNames = nil
 }
 
 // ServerStatus returns the status of all connected MCP servers.

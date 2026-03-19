@@ -4,6 +4,8 @@ import { useWs, useHttp } from "@/hooks/use-ws";
 import { useAuthStore } from "@/stores/use-auth-store";
 import { Methods } from "@/api/protocol";
 import { queryKeys } from "@/lib/query-keys";
+import { toast } from "@/stores/use-toast-store";
+import i18n from "@/i18n";
 import type { AgentData } from "@/types/agent";
 
 interface AgentInfoWs {
@@ -18,7 +20,7 @@ export function useAgents() {
   const connected = useAuthStore((s) => s.connected);
   const queryClient = useQueryClient();
 
-  const { data: agents = [], isLoading: loading, error: queryError } = useQuery({
+  const { data: agents = [], isPending: loading, error: queryError } = useQuery({
     queryKey: queryKeys.agents.all,
     queryFn: async () => {
       // Try HTTP first (returns full agent data, filtered by user access)
@@ -61,20 +63,53 @@ export function useAgents() {
 
   const createAgent = useCallback(
     async (data: Partial<AgentData>) => {
-      const res = await http.post<AgentData>("/v1/agents", data);
-      await invalidate();
-      return res;
+      try {
+        const res = await http.post<AgentData>("/v1/agents", data);
+        await invalidate();
+        toast.success(i18n.t("agents:toast.created"), `${data.display_name || data.agent_key || "Agent"} has been added`);
+        return res;
+      } catch (err) {
+        toast.error(i18n.t("agents:toast.createFailed"), err instanceof Error ? err.message : i18n.t("agents:toast.unknownError"));
+        throw err;
+      }
+    },
+    [http, invalidate],
+  );
+
+  const updateAgent = useCallback(
+    async (id: string, data: Partial<AgentData>) => {
+      try {
+        await http.put(`/v1/agents/${id}`, data);
+        await invalidate();
+        toast.success(i18n.t("agents:toast.updated"), `${data.display_name || data.agent_key || "Agent"} has been updated`);
+      } catch (err) {
+        toast.error(i18n.t("agents:toast.updateFailed"), err instanceof Error ? err.message : i18n.t("agents:toast.unknownError"));
+        throw err;
+      }
     },
     [http, invalidate],
   );
 
   const deleteAgent = useCallback(
     async (id: string) => {
-      await http.delete(`/v1/agents/${id}`);
-      await invalidate();
+      try {
+        await http.delete(`/v1/agents/${id}`);
+        await invalidate();
+        toast.success(i18n.t("agents:toast.deleted"));
+      } catch (err) {
+        toast.error(i18n.t("agents:toast.deleteFailed"), err instanceof Error ? err.message : i18n.t("agents:toast.unknownError"));
+        throw err;
+      }
     },
     [http, invalidate],
   );
 
-  return { agents, loading, error, refresh: invalidate, createAgent, deleteAgent };
+  const resummonAgent = useCallback(
+    async (id: string) => {
+      await http.post(`/v1/agents/${id}/resummon`);
+    },
+    [http],
+  );
+
+  return { agents, loading, error, refresh: invalidate, createAgent, updateAgent, deleteAgent, resummonAgent };
 }

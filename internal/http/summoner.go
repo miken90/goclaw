@@ -2,10 +2,8 @@ package http
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,7 +12,6 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
-	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
 )
 
 // Summoning event type constants.
@@ -29,11 +26,13 @@ const (
 const frontmatterKey = "__frontmatter__"
 
 // summoningFiles is the ordered list of context files the LLM should generate.
-// Only personality files — operational files (AGENTS.md, TOOLS.md, HEARTBEAT.md)
+// Only personality files — operational files (AGENTS.md, TOOLS.md)
 // are kept as fixed templates from bootstrap.SeedToStore().
+// USER_PREDEFINED.md is optional — generated only when description mentions user context.
 var summoningFiles = []string{
 	bootstrap.SoulFile,
 	bootstrap.IdentityFile,
+	bootstrap.UserPredefinedFile,
 }
 
 // fileTagRe parses <file name="SOUL.md">content</file> from LLM output.
@@ -62,38 +61,139 @@ func NewAgentSummoner(agents store.AgentStore, providerReg *providers.Registry, 
 	}
 }
 
+// singleCallTimeout is the deadline for the optimistic single LLM call.
+// If exceeded, we fall back to the 2-call approach with the remaining budget.
+const singleCallTimeout = 300 * time.Second
+
 // SummonAgent generates context files from a natural language description.
 // Meant to be called as a goroutine: go summoner.SummonAgent(...)
+// Tries a single LLM call first (all files at once). On timeout, falls back to
+// 2 sequential calls (SOUL.md → IDENTITY.md + USER_PREDEFINED.md).
+// On retry (resummon), skips files that were already generated (differ from template).
 // On success: stores generated files and sets agent status to "active".
 // On failure: keeps template files (already seeded) and sets status to store.AgentStatusSummonFailed.
 func (s *AgentSummoner) SummonAgent(agentID uuid.UUID, providerName, model, description string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Second)
 	defer cancel()
 
+	s.ensureUserPredefined(ctx, agentID)
 	s.emitEvent(agentID, SummonEventStarted, "", "")
 
-	files, err := s.generateFiles(ctx, providerName, model, s.buildCreatePrompt(description))
-	if err != nil {
-		slog.Warn("summoning: LLM generation failed, falling back to templates",
-			"agent", agentID, "error", err)
+	// Check which files already exist (from a previous partial run)
+	existingMap := s.loadExistingFiles(ctx, agentID)
+
+	// Skip if all files already generated
+	if s.isGenerated(existingMap, bootstrap.SoulFile) && s.isGenerated(existingMap, bootstrap.IdentityFile) {
+		slog.Info("summoning: all files already generated, skipping", "agent", agentID)
+		s.emitEvent(agentID, SummonEventFileGenerated, bootstrap.SoulFile, "")
+		s.emitEvent(agentID, SummonEventFileGenerated, bootstrap.IdentityFile, "")
+		s.finishSummon(ctx, agentID, existingMap[bootstrap.IdentityFile], "", description)
+		return
+	}
+
+	// === Optimistic single-call: generate all files at once ===
+	singleCtx, singleCancel := context.WithTimeout(ctx, singleCallTimeout)
+	files, err := s.generateFiles(singleCtx, providerName, model, s.buildCreatePrompt(description))
+	singleCancel()
+
+	if err == nil {
+		slog.Info("summoning: single-call succeeded", "agent", agentID)
+		s.storeFiles(ctx, agentID, files)
+		s.finishSummon(ctx, agentID, files[bootstrap.IdentityFile], files[frontmatterKey], description)
+		return
+	}
+
+	// Non-retryable error → fail immediately
+	if !isRetryableError(err) {
+		slog.Warn("summoning: single-call failed (non-retryable)", "agent", agentID, "error", err)
 		s.emitEvent(agentID, SummonEventFailed, "", err.Error())
-		// Use fresh context — the original may have timed out, but we still need to update status.
 		s.setAgentStatus(context.Background(), agentID, store.AgentStatusSummonFailed)
 		return
 	}
 
-	s.storeFiles(ctx, agentID, files)
+	// === Fallback: 2-call approach ===
+	slog.Info("summoning: single-call timed out, falling back to 2-call", "agent", agentID, "error", err)
 
-	// Save frontmatter + display_name extracted from IDENTITY.md
+	// Refresh existing files (single-call didn't store anything on error)
+	existingMap = s.loadExistingFiles(ctx, agentID)
+
+	var soulContent string
+	var frontmatter string
+
+	// Step 1: Generate SOUL.md
+	if s.isGenerated(existingMap, bootstrap.SoulFile) {
+		soulContent = existingMap[bootstrap.SoulFile]
+		slog.Info("summoning: SOUL.md already generated, skipping", "agent", agentID)
+		s.emitEvent(agentID, SummonEventFileGenerated, bootstrap.SoulFile, "")
+	} else {
+		soulFiles, soulErr := s.generateFiles(ctx, providerName, model, s.buildSoulPrompt(description))
+		if soulErr != nil {
+			slog.Warn("summoning: SOUL.md generation failed", "agent", agentID, "error", soulErr)
+			s.emitEvent(agentID, SummonEventFailed, "", soulErr.Error())
+			s.setAgentStatus(context.Background(), agentID, store.AgentStatusSummonFailed)
+			return
+		}
+		soulContent = soulFiles[bootstrap.SoulFile]
+		frontmatter = soulFiles[frontmatterKey]
+		if soulContent != "" {
+			if storeErr := s.agents.SetAgentContextFile(ctx, agentID, bootstrap.SoulFile, soulContent); storeErr != nil {
+				slog.Warn("summoning: failed to store SOUL.md", "agent", agentID, "error", storeErr)
+			} else {
+				s.emitEvent(agentID, SummonEventFileGenerated, bootstrap.SoulFile, "")
+			}
+		}
+	}
+
+	// Step 2: Generate IDENTITY.md + USER_PREDEFINED.md using SOUL.md as context
+	identityNeeded := !s.isGenerated(existingMap, bootstrap.IdentityFile)
+	userPredNeeded := !s.isGenerated(existingMap, bootstrap.UserPredefinedFile)
+
+	var identityContent string
+	if !identityNeeded && !userPredNeeded {
+		identityContent = existingMap[bootstrap.IdentityFile]
+		slog.Info("summoning: IDENTITY.md + USER_PREDEFINED.md already generated, skipping", "agent", agentID)
+		s.emitEvent(agentID, SummonEventFileGenerated, bootstrap.IdentityFile, "")
+	} else {
+		idFiles, idErr := s.generateFiles(ctx, providerName, model, s.buildIdentityPrompt(description, soulContent))
+		if idErr != nil {
+			slog.Warn("summoning: IDENTITY.md generation failed", "agent", agentID, "error", idErr)
+			s.emitEvent(agentID, SummonEventFailed, "", idErr.Error())
+			s.setAgentStatus(context.Background(), agentID, store.AgentStatusSummonFailed)
+			return
+		}
+		identityContent = idFiles[bootstrap.IdentityFile]
+		if frontmatter == "" {
+			frontmatter = idFiles[frontmatterKey]
+		}
+		if identityContent != "" && identityNeeded {
+			if storeErr := s.agents.SetAgentContextFile(ctx, agentID, bootstrap.IdentityFile, identityContent); storeErr != nil {
+				slog.Warn("summoning: failed to store IDENTITY.md", "agent", agentID, "error", storeErr)
+			} else {
+				s.emitEvent(agentID, SummonEventFileGenerated, bootstrap.IdentityFile, "")
+			}
+		}
+		if upContent := idFiles[bootstrap.UserPredefinedFile]; upContent != "" && userPredNeeded {
+			if storeErr := s.agents.SetAgentContextFile(ctx, agentID, bootstrap.UserPredefinedFile, upContent); storeErr != nil {
+				slog.Warn("summoning: failed to store USER_PREDEFINED.md", "agent", agentID, "error", storeErr)
+			} else {
+				s.emitEvent(agentID, SummonEventFileGenerated, bootstrap.UserPredefinedFile, "")
+			}
+		}
+	}
+
+	s.finishSummon(ctx, agentID, identityContent, frontmatter, description)
+}
+
+// finishSummon saves agent metadata and marks the agent as active.
+func (s *AgentSummoner) finishSummon(ctx context.Context, agentID uuid.UUID, identityContent, frontmatter, description string) {
 	updates := map[string]any{}
-	fm := files[frontmatterKey]
-	if fm == "" {
-		fm = truncateUTF8(description, 200)
+	if frontmatter == "" {
+		frontmatter = truncateUTF8(description, 200)
 	}
-	if fm != "" {
-		updates["frontmatter"] = fm
+	if frontmatter != "" {
+		updates["frontmatter"] = frontmatter
 	}
-	if name := extractIdentityName(files[bootstrap.IdentityFile]); name != "" {
+	if name := extractIdentityName(identityContent); name != "" {
 		updates["display_name"] = name
 	}
 	if len(updates) > 0 {
@@ -101,294 +201,17 @@ func (s *AgentSummoner) SummonAgent(agentID uuid.UUID, providerName, model, desc
 			slog.Warn("summoning: failed to save agent metadata", "agent", agentID, "error", err)
 		}
 	}
-
 	s.setAgentStatus(ctx, agentID, store.AgentStatusActive)
 	s.emitEvent(agentID, SummonEventCompleted, "", "")
-
-	slog.Info("summoning: completed", "agent", agentID, "files", len(files))
+	slog.Info("summoning: completed", "agent", agentID)
 }
 
-// RegenerateAgent updates context files based on an edit prompt.
-// Reads existing files, sends them + edit instructions to LLM, stores results.
-// Synchronous — caller should run in goroutine if needed.
-func (s *AgentSummoner) RegenerateAgent(agentID uuid.UUID, providerName, model, editPrompt string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
-	defer cancel()
-
-	s.emitEvent(agentID, SummonEventStarted, "", "")
-
-	// Read existing files for context
-	existing, err := s.agents.GetAgentContextFiles(ctx, agentID)
-	if err != nil {
-		slog.Warn("summoning: failed to read existing files", "agent", agentID, "error", err)
-		s.emitEvent(agentID, SummonEventFailed, "", err.Error())
-		s.setAgentStatus(context.Background(), agentID, store.AgentStatusSummonFailed)
-		return
-	}
-
-	prompt := s.buildEditPrompt(existing, editPrompt)
-
-	files, err := s.generateFiles(ctx, providerName, model, prompt)
-	if err != nil {
-		slog.Warn("summoning: regeneration failed", "agent", agentID, "error", err)
-		s.emitEvent(agentID, SummonEventFailed, "", err.Error())
-		// Use fresh context — the original may have timed out, but we still need to update status.
-		s.setAgentStatus(context.Background(), agentID, store.AgentStatusSummonFailed)
-		return
-	}
-
-	s.storeFiles(ctx, agentID, files)
-
-	// Update frontmatter + display_name if IDENTITY.md was regenerated
-	updates := map[string]any{}
-	if fm, ok := files[frontmatterKey]; ok && fm != "" {
-		updates["frontmatter"] = fm
-	}
-	if name := extractIdentityName(files[bootstrap.IdentityFile]); name != "" {
-		updates["display_name"] = name
-	}
-	if len(updates) > 0 {
-		if err := s.agents.Update(ctx, agentID, updates); err != nil {
-			slog.Warn("summoning: failed to save agent metadata", "agent", agentID, "error", err)
-		}
-	}
-
-	s.setAgentStatus(ctx, agentID, store.AgentStatusActive)
-	s.emitEvent(agentID, SummonEventCompleted, "", "")
-
-	slog.Info("summoning: regeneration completed", "agent", agentID, "files", len(files))
-}
-
-// generateFiles calls the LLM and parses the XML-tagged response into file map.
-func (s *AgentSummoner) generateFiles(ctx context.Context, providerName, model, prompt string) (map[string]string, error) {
-	provider, err := s.resolveProvider(providerName)
-	if err != nil {
-		return nil, fmt.Errorf("resolve provider: %w", err)
-	}
-
-	resp, err := provider.Chat(ctx, providers.ChatRequest{
-		Messages: []providers.Message{
-			{Role: "user", Content: prompt},
-		},
-		Model: model,
-		Options: map[string]interface{}{
-			"max_tokens":  8192,
-			"temperature": 0.7,
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("LLM call: %w", err)
-	}
-
-	files := parseFileResponse(resp.Content)
-	if len(files) == 0 {
-		return nil, fmt.Errorf("LLM returned no parseable files (response length: %d)", len(resp.Content))
-	}
-
-	return files, nil
-}
-
-// storeFiles saves generated files to agent_context_files and emits progress events.
-func (s *AgentSummoner) storeFiles(ctx context.Context, agentID uuid.UUID, files map[string]string) {
-	for _, name := range summoningFiles {
-		content, ok := files[name]
-		if !ok || content == "" {
-			continue
-		}
-		if err := s.agents.SetAgentContextFile(ctx, agentID, name, content); err != nil {
-			slog.Warn("summoning: failed to store file", "agent", agentID, "file", name, "error", err)
-			continue
-		}
-		s.emitEvent(agentID, SummonEventFileGenerated, name, "")
-	}
-}
-
-func (s *AgentSummoner) resolveProvider(name string) (providers.Provider, error) {
-	if s.providerReg == nil {
-		return nil, fmt.Errorf("no provider registry")
-	}
-
-	provider, err := s.providerReg.Get(name)
-	if err != nil {
-		// Fallback to first available provider
-		names := s.providerReg.List()
-		if len(names) == 0 {
-			return nil, fmt.Errorf("no providers configured")
-		}
-		provider, err = s.providerReg.Get(names[0])
-		if err != nil {
-			return nil, err
-		}
-		slog.Warn("summoning: provider not found, using fallback", "wanted", name, "using", names[0])
-	}
-	return provider, nil
-}
-
-func (s *AgentSummoner) setAgentStatus(ctx context.Context, agentID uuid.UUID, status string) {
-	if err := s.agents.Update(ctx, agentID, map[string]any{"status": status}); err != nil {
-		slog.Warn("summoning: failed to update agent status", "agent", agentID, "status", status, "error", err)
-	}
-}
-
-func (s *AgentSummoner) emitEvent(agentID uuid.UUID, eventType, fileName, errMsg string) {
-	if s.msgBus == nil {
-		return
-	}
-	payload := map[string]interface{}{
-		"type":     eventType,
-		"agent_id": agentID.String(),
-	}
-	if fileName != "" {
-		payload["file"] = fileName
-	}
-	if errMsg != "" {
-		payload["error"] = errMsg
-	}
-	s.msgBus.Broadcast(bus.Event{
-		Name:    protocol.EventAgentSummoning,
-		Payload: payload,
-	})
-}
-
-// buildCreatePrompt constructs the prompt for initial SOUL.md + IDENTITY.md generation.
-// Only personality files are LLM-generated; operational files stay as fixed templates.
-func (s *AgentSummoner) buildCreatePrompt(description string) string {
-	var sb strings.Builder
-	sb.WriteString("You are setting up a new AI assistant. Based on the description below, generate TWO files: SOUL.md and IDENTITY.md.\n\n")
-
-	fmt.Fprintf(&sb, "<description>\n%s\n</description>\n\n", description)
-
-	// Load SOUL.md template as reference
-	soulTemplate, err := bootstrap.ReadTemplate(bootstrap.SoulFile)
-	if err != nil {
-		slog.Warn("summoning: failed to read SOUL.md template", "error", err)
-	}
-	identityTemplate, err := bootstrap.ReadTemplate(bootstrap.IdentityFile)
-	if err != nil {
-		slog.Warn("summoning: failed to read IDENTITY.md template", "error", err)
-	}
-
-	sb.WriteString("<templates>\n")
-	if soulTemplate != "" {
-		fmt.Fprintf(&sb, "<file name=\"SOUL.md\">\n%s\n</file>\n", soulTemplate)
-	}
-	if identityTemplate != "" {
-		fmt.Fprintf(&sb, "<file name=\"IDENTITY.md\">\n%s\n</file>\n", identityTemplate)
-	}
-	sb.WriteString("</templates>\n\n")
-
-	sb.WriteString(`IMPORTANT RULES:
-
-1. Language: Write ALL content in the SAME LANGUAGE as the <description>. If description is in Vietnamese, write in Vietnamese. If in English, write in English. BUT keep ALL headings and section titles in English exactly as in the templates.
-
-2. SOUL.md rules:
-   - KEEP the exact English headings: "# SOUL.md - Who You Are", "## Core Truths", "## Boundaries", "## Vibe", "## Continuity"
-   - KEEP the general advice in "## Core Truths" — do NOT inject agent-specific references there. Core Truths are universal personality traits.
-   - CUSTOMIZE "## Vibe" to reflect this agent's unique personality and communication style.
-   - CUSTOMIZE "## Boundaries" if the agent has specific boundaries mentioned in the description.
-   - Keep "## Continuity" as-is (just translate if needed).
-   - Do NOT add the agent's name or role references into Core Truths or Boundaries.
-
-3. IDENTITY.md rules:
-   - KEEP the exact English heading: "# IDENTITY.md - Who Am I?"
-   - Fill in ONLY the field values: Name, Creature, Purpose, Vibe, Emoji based on the description.
-   - Purpose: mission statement — what this agent does, key resources, focus areas. Can be multiple lines. Include URLs or references mentioned in the description.
-   - REMOVE all template placeholder/instruction text (the italic hints in parentheses).
-   - Leave Avatar blank.
-   - Keep the footer note section as-is.
-
-4. Generate a short expertise summary (1-2 sentences, under 200 characters) for delegation discovery.
-
-Output format — generate in this EXACT order:
-
-<frontmatter>
-(short expertise summary here)
-</frontmatter>
-
-<file name="SOUL.md">
-(content here)
-</file>
-
-<file name="IDENTITY.md">
-(content here)
-</file>`)
-
-	return sb.String()
-}
-
-// buildEditPrompt constructs the prompt for editing existing SOUL.md + IDENTITY.md.
-func (s *AgentSummoner) buildEditPrompt(existing []store.AgentContextFileData, editPrompt string) string {
-	var sb strings.Builder
-	sb.WriteString("You are updating an existing AI assistant's personality files (SOUL.md and IDENTITY.md only).\n\nHere are the current files:\n\n<current_files>\n")
+// loadExistingFiles reads agent context files and returns them as a map.
+func (s *AgentSummoner) loadExistingFiles(ctx context.Context, agentID uuid.UUID) map[string]string {
+	existing, _ := s.agents.GetAgentContextFiles(ctx, agentID)
+	m := make(map[string]string, len(existing))
 	for _, f := range existing {
-		if f.Content == "" {
-			continue
-		}
-		// Only include personality files for editing
-		if f.FileName != bootstrap.SoulFile && f.FileName != bootstrap.IdentityFile {
-			continue
-		}
-		fmt.Fprintf(&sb, "<file name=%q>\n%s\n</file>\n", f.FileName, f.Content)
+		m[f.FileName] = f.Content
 	}
-	sb.WriteString("</current_files>\n\n")
-	fmt.Fprintf(&sb, "<edit_instructions>\n%s\n</edit_instructions>\n\n", editPrompt)
-	sb.WriteString(`IMPORTANT RULES:
-1. Write ALL content in the SAME LANGUAGE as the existing files. Only keep headings and technical terms in English.
-2. Keep ALL English headings exactly as they are (e.g. "## Core Truths", "## Vibe").
-3. Only output files that need changes. Omit unchanged files.
-
-Output format:
-
-<file name="SOUL.md">
-(updated content, or omit if unchanged)
-</file>
-
-<file name="IDENTITY.md">
-(updated content, or omit if unchanged)
-</file>
-`)
-	return sb.String()
-}
-
-// extractIdentityName extracts the Name field from IDENTITY.md content.
-// Matches format: - **Name:** value
-func extractIdentityName(content string) string {
-	if content == "" {
-		return ""
-	}
-	m := identityNameRe.FindStringSubmatch(content)
-	if len(m) < 2 {
-		return ""
-	}
-	return strings.TrimSpace(m[1])
-}
-
-// truncateUTF8 truncates s to at most maxLen runes, appending "…" if truncated.
-func truncateUTF8(s string, maxLen int) string {
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
-	}
-	return string(runes[:maxLen]) + "…"
-}
-
-// parseFileResponse extracts file contents and frontmatter from XML-tagged LLM output.
-// Frontmatter is stored under the special key "__frontmatter__".
-func parseFileResponse(content string) map[string]string {
-	files := make(map[string]string)
-	matches := fileTagRe.FindAllStringSubmatch(content, -1)
-	for _, m := range matches {
-		name := strings.TrimSpace(m[1])
-		body := strings.TrimSpace(m[2])
-		if name != "" && body != "" {
-			files[name] = body
-		}
-	}
-	// Extract frontmatter tag if present
-	if fm := frontmatterTagRe.FindStringSubmatch(content); len(fm) > 1 {
-		if trimmed := strings.TrimSpace(fm[1]); trimmed != "" {
-			files[frontmatterKey] = trimmed
-		}
-	}
-	return files
+	return m
 }

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AgentSelector } from "@/components/chat/agent-selector";
@@ -23,8 +24,9 @@ export function ChatSidebar({
   onSessionSelect,
   onNewChat,
 }: ChatSidebarProps) {
+  const { t } = useTranslation("chat");
   return (
-    <div className="flex h-full w-72 flex-col border-r">
+    <div className="flex h-full w-72 max-w-[85vw] flex-col border-r bg-background">
       {/* Agent selector */}
       <div className="border-b p-3">
         <AgentSelector value={agentId} onChange={onAgentChange} />
@@ -38,7 +40,7 @@ export function ChatSidebar({
           onClick={onNewChat}
         >
           <Plus className="h-4 w-4" />
-          New Chat
+          {t("newChat")}
         </Button>
       </div>
 

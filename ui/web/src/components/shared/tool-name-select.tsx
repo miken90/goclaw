@@ -1,4 +1,6 @@
-import { useMemo, useState, useRef, useEffect } from "react";
+import { useMemo, useState, useRef, useEffect, useLayoutEffect } from "react";
+import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import { X, ChevronDownIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useBuiltinTools } from "@/pages/builtin-tools/hooks/use-builtin-tools";
@@ -20,15 +22,18 @@ interface ToolOption {
 export function ToolNameSelect({
   value,
   onChange,
-  placeholder = "Select or type tool names...",
+  placeholder,
   className,
 }: ToolNameSelectProps) {
+  const { t } = useTranslation("common");
   const { tools: builtinTools } = useBuiltinTools();
   const { tools: customTools } = useCustomTools();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
 
   const allTools = useMemo<ToolOption[]>(() => {
     const builtin: ToolOption[] = builtinTools.map((t) => ({
@@ -57,11 +62,28 @@ export function ToolNameSelect({
     return { builtin: builtinGroup, custom: customGroup };
   }, [filtered]);
 
+  // Compute dropdown position for portal rendering
+  useLayoutEffect(() => {
+    if (!open || !containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    setDropdownStyle({
+      position: "fixed",
+      top: rect.bottom + 4,
+      left: rect.left,
+      width: rect.width,
+      zIndex: 9999,
+    });
+  }, [open, search]);
+
   // Close on outside click
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (
+        containerRef.current && !containerRef.current.contains(target) &&
+        (!dropdownRef.current || !dropdownRef.current.contains(target))
+      ) {
         setOpen(false);
       }
     };
@@ -99,7 +121,7 @@ export function ToolNameSelect({
       <div
         className={cn(
           "border-input dark:bg-input/30 flex min-h-9 flex-wrap items-center gap-1 rounded-md border bg-transparent px-2 py-1 text-sm shadow-xs transition-[color,box-shadow]",
-          "focus-within:border-ring focus-within:ring-ring/50 focus-within:ring-[3px]",
+          "focus-within:border-ring focus-within:ring-ring/50 focus-within:ring-2",
         )}
         onClick={() => inputRef.current?.focus()}
       >
@@ -127,7 +149,7 @@ export function ToolNameSelect({
           }}
           onFocus={() => setOpen(true)}
           onKeyDown={handleKeyDown}
-          placeholder={value.length === 0 ? placeholder : ""}
+          placeholder={value.length === 0 ? (placeholder ?? t("selectOrTypeTools")) : ""}
           className="placeholder:text-muted-foreground min-w-[80px] flex-1 bg-transparent py-0.5 text-sm outline-none"
         />
         <ChevronDownIcon
@@ -135,12 +157,16 @@ export function ToolNameSelect({
           onClick={() => setOpen(!open)}
         />
       </div>
-      {open && (grouped.builtin.length > 0 || grouped.custom.length > 0) && (
-        <div className="bg-popover text-popover-foreground absolute top-full left-0 z-50 mt-1 max-h-60 w-full overflow-y-auto rounded-md border p-1 shadow-md">
+      {open && (grouped.builtin.length > 0 || grouped.custom.length > 0) && createPortal(
+        <div
+          ref={dropdownRef}
+          style={dropdownStyle}
+          className="bg-popover text-popover-foreground pointer-events-auto max-h-60 overflow-y-auto rounded-md border p-1 shadow-md"
+        >
           {grouped.builtin.length > 0 && (
             <>
               <div className="text-muted-foreground px-2 py-1 text-[10px] font-semibold uppercase tracking-wider">
-                Built-in
+                {t("builtinTools")}
               </div>
               {grouped.builtin.map((t) => (
                 <button
@@ -159,7 +185,7 @@ export function ToolNameSelect({
           {grouped.custom.length > 0 && (
             <>
               <div className="text-muted-foreground mt-1 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider">
-                Custom
+                {t("customTools")}
               </div>
               {grouped.custom.map((t) => (
                 <button
@@ -174,7 +200,8 @@ export function ToolNameSelect({
               ))}
             </>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

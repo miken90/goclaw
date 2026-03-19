@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Cpu, Plus, RefreshCw, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -7,7 +8,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { SearchInput } from "@/components/shared/search-input";
 import { Pagination } from "@/components/shared/pagination";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
-import { ConfirmDialog } from "@/components/shared/confirm-dialog";
+import { ConfirmDeleteDialog } from "@/components/shared/confirm-delete-dialog";
 import { useProviders, type ProviderData, type ProviderInput } from "./hooks/use-providers";
 import { ProviderFormDialog } from "./provider-form-dialog";
 import { useMinLoading } from "@/hooks/use-min-loading";
@@ -26,9 +27,14 @@ const typeBadge: Record<string, { label: string; variant: "default" | "secondary
   minimax_native: { label: "MiniMax", variant: "secondary" },
   cohere: { label: "Cohere", variant: "secondary" },
   perplexity: { label: "Perplexity", variant: "secondary" },
+  chatgpt_oauth: { label: "ChatGPT (OAuth)", variant: "default" },
+  yescale: { label: "YesScale", variant: "secondary" },
+  acp: { label: "ACP", variant: "outline" },
 };
 
 export function ProvidersPage() {
+  const { t } = useTranslation("providers");
+  const { t: tc } = useTranslation("common");
   const {
     providers, loading, refresh,
     createProvider, updateProvider, deleteProvider,
@@ -72,17 +78,17 @@ export function ProvidersPage() {
   };
 
   return (
-    <div className="p-6">
+    <div className="p-4 sm:p-6">
       <PageHeader
-        title="Providers"
-        description="Manage LLM providers"
+        title={t("title")}
+        description={t("description")}
         actions={
           <div className="flex gap-2">
             <Button size="sm" onClick={() => { setEditProvider(null); setFormOpen(true); }} className="gap-1">
-              <Plus className="h-3.5 w-3.5" /> Add Provider
+              <Plus className="h-3.5 w-3.5" /> {t("addProvider")}
             </Button>
             <Button variant="outline" size="sm" onClick={refresh} disabled={spinning} className="gap-1">
-              <RefreshCw className={"h-3.5 w-3.5" + (spinning ? " animate-spin" : "")} /> Refresh
+              <RefreshCw className={"h-3.5 w-3.5" + (spinning ? " animate-spin" : "")} /> {tc("refresh")}
             </Button>
           </div>
         }
@@ -92,7 +98,7 @@ export function ProvidersPage() {
         <SearchInput
           value={search}
           onChange={setSearch}
-          placeholder="Search providers..."
+          placeholder={t("searchPlaceholder")}
           className="max-w-sm"
         />
       </div>
@@ -103,20 +109,20 @@ export function ProvidersPage() {
         ) : filtered.length === 0 ? (
           <EmptyState
             icon={Cpu}
-            title={search ? "No matching providers" : "No providers"}
-            description={search ? "Try a different search term." : "Add your first LLM provider to get started."}
+            title={search ? t("noMatchTitle") : t("emptyTitle")}
+            description={search ? t("noMatchDescription") : t("emptyDescription")}
           />
         ) : (
-          <div className="rounded-md border">
-            <table className="w-full text-sm">
+          <div className="rounded-md border overflow-x-auto">
+            <table className="w-full min-w-[700px] text-sm">
               <thead>
                 <tr className="border-b bg-muted/50">
-                  <th className="px-4 py-3 text-left font-medium">Name</th>
-                  <th className="px-4 py-3 text-left font-medium">Type</th>
-                  <th className="px-4 py-3 text-left font-medium">API Base</th>
-                  <th className="px-4 py-3 text-left font-medium">API Key</th>
-                  <th className="px-4 py-3 text-left font-medium">Status</th>
-                  <th className="px-4 py-3 text-right font-medium">Actions</th>
+                  <th className="px-4 py-3 text-left font-medium">{t("columns.name")}</th>
+                  <th className="px-4 py-3 text-left font-medium">{t("columns.type")}</th>
+                  <th className="px-4 py-3 text-left font-medium">{t("columns.apiBase")}</th>
+                  <th className="px-4 py-3 text-left font-medium">{t("columns.apiKey")}</th>
+                  <th className="px-4 py-3 text-left font-medium">{t("columns.status")}</th>
+                  <th className="px-4 py-3 text-right font-medium">{t("columns.actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -142,35 +148,39 @@ export function ProvidersPage() {
                         {p.api_base || "-"}
                       </td>
                       <td className="px-4 py-3">
-                        {p.api_key === "***" ? (
+                        {p.provider_type === "chatgpt_oauth" ? (
+                          <Badge variant="outline" className="text-xs">{t("apiKey.oauthToken")}</Badge>
+                        ) : p.api_key === "***" ? (
                           <Badge variant="outline" className="font-mono text-xs">***</Badge>
                         ) : (
-                          <span className="text-xs text-muted-foreground">Not set</span>
+                          <span className="text-xs text-muted-foreground">{t("apiKey.notSet")}</span>
                         )}
                       </td>
                       <td className="px-4 py-3">
                         <Badge variant={p.enabled ? "default" : "secondary"}>
-                          {p.enabled ? "Enabled" : "Disabled"}
+                          {p.enabled ? tc("enabled") : tc("disabled")}
                         </Badge>
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => { setEditProvider(p); setFormOpen(true); }}
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setDeleteTarget(p)}
-                            className="text-destructive hover:text-destructive"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
+                        {p.provider_type !== "chatgpt_oauth" && (
+                          <div className="flex items-center justify-end gap-1">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => { setEditProvider(p); setFormOpen(true); }}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setDeleteTarget(p)}
+                              className="text-destructive hover:text-destructive"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   );
@@ -194,15 +204,16 @@ export function ProvidersPage() {
         onOpenChange={setFormOpen}
         provider={editProvider}
         onSubmit={editProvider ? handleEdit : handleCreate}
+        existingProviders={providers}
       />
 
-      <ConfirmDialog
+      <ConfirmDeleteDialog
         open={!!deleteTarget}
         onOpenChange={(v) => !v && setDeleteTarget(null)}
-        title="Delete Provider"
-        description={`Are you sure you want to delete "${deleteTarget?.display_name || deleteTarget?.name}"?`}
-        confirmLabel="Delete"
-        variant="destructive"
+        title={t("delete.title")}
+        description={t("delete.description", { name: deleteTarget?.display_name || deleteTarget?.name })}
+        confirmValue={deleteTarget?.display_name || deleteTarget?.name || ""}
+        confirmLabel={t("delete.confirmLabel")}
         onConfirm={handleDelete}
         loading={deleteLoading}
       />

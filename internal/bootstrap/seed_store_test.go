@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"maps"
 	"testing"
 
 	"github.com/google/uuid"
@@ -55,9 +56,13 @@ func (s *seedStubStore) DeleteUserContextFile(_ context.Context, _ uuid.UUID, _,
 }
 
 // Remaining interface methods — not exercised.
-func (s *seedStubStore) Create(_ context.Context, _ *store.AgentData) error              { return nil }
-func (s *seedStubStore) GetByKey(_ context.Context, _ string) (*store.AgentData, error)  { return nil, nil }
-func (s *seedStubStore) GetByID(_ context.Context, _ uuid.UUID) (*store.AgentData, error) { return nil, nil }
+func (s *seedStubStore) Create(_ context.Context, _ *store.AgentData) error { return nil }
+func (s *seedStubStore) GetByKey(_ context.Context, _ string) (*store.AgentData, error) {
+	return nil, nil
+}
+func (s *seedStubStore) GetByID(_ context.Context, _ uuid.UUID) (*store.AgentData, error) {
+	return nil, nil
+}
 func (s *seedStubStore) Update(_ context.Context, _ uuid.UUID, _ map[string]any) error   { return nil }
 func (s *seedStubStore) Delete(_ context.Context, _ uuid.UUID) error                     { return nil }
 func (s *seedStubStore) List(_ context.Context, _ string) ([]store.AgentData, error)     { return nil, nil }
@@ -79,20 +84,17 @@ func (s *seedStubStore) GetUserOverride(_ context.Context, _ uuid.UUID, _ string
 func (s *seedStubStore) SetUserOverride(_ context.Context, _ *store.UserAgentOverrideData) error {
 	return nil
 }
-func (s *seedStubStore) GetOrCreateUserProfile(_ context.Context, _ uuid.UUID, _, _ string) (bool, error) {
-	return false, nil
+func (s *seedStubStore) GetOrCreateUserProfile(_ context.Context, _ uuid.UUID, _, _, _ string) (bool, string, error) {
+	return false, "", nil
 }
-func (s *seedStubStore) IsGroupFileWriter(_ context.Context, _ uuid.UUID, _, _ string) (bool, error) {
-	return false, nil
-}
-func (s *seedStubStore) AddGroupFileWriter(_ context.Context, _ uuid.UUID, _, _, _, _ string) error {
-	return nil
-}
-func (s *seedStubStore) RemoveGroupFileWriter(_ context.Context, _ uuid.UUID, _, _ string) error {
-	return nil
-}
-func (s *seedStubStore) ListGroupFileWriters(_ context.Context, _ uuid.UUID, _ string) ([]store.GroupFileWriterData, error) {
+func (s *seedStubStore) ListUserInstances(_ context.Context, _ uuid.UUID) ([]store.UserInstanceData, error) {
 	return nil, nil
+}
+func (s *seedStubStore) UpdateUserProfileMetadata(_ context.Context, _ uuid.UUID, _ string, _ map[string]string) error {
+	return nil
+}
+func (s *seedStubStore) EnsureUserProfile(_ context.Context, _ uuid.UUID, _ string) error {
+	return nil
 }
 
 // ---- Tests ----
@@ -230,27 +232,6 @@ func TestSeedUserFiles_OpenAgent_UsesEmbeddedTemplate(t *testing.T) {
 	}
 }
 
-// TestSeedUserFiles_PredefinedAgent_BootstrapUsesCorrectTemplate verifies that
-// BOOTSTRAP.md is still seeded from BOOTSTRAP_PREDEFINED.md for predefined agents.
-func TestSeedUserFiles_PredefinedAgent_BootstrapUsesCorrectTemplate(t *testing.T) {
-	as := newSeedStub()
-	agentID := uuid.New()
-
-	_, err := SeedUserFiles(context.Background(), as, agentID, "user-eve", store.AgentTypePredefined)
-	if err != nil {
-		t.Fatalf("SeedUserFiles returned error: %v", err)
-	}
-
-	// BOOTSTRAP.md must have been seeded
-	got, ok := as.seededUserFiles[BootstrapFile]
-	if !ok {
-		t.Fatal("predefined agent: BOOTSTRAP.md was not seeded")
-	}
-	if got == "" {
-		t.Error("predefined agent: BOOTSTRAP.md should have content from BOOTSTRAP_PREDEFINED.md template")
-	}
-}
-
 // TestSeedUserFiles_IdempotentOnSecondCall verifies that calling SeedUserFiles
 // a second time for the same user does not re-seed already-present files.
 func TestSeedUserFiles_IdempotentOnSecondCall(t *testing.T) {
@@ -261,9 +242,7 @@ func TestSeedUserFiles_IdempotentOnSecondCall(t *testing.T) {
 	SeedUserFiles(context.Background(), as, agentID, "user-frank", store.AgentTypePredefined)
 
 	// Simulate what the first call wrote (move seededUserFiles → userFiles)
-	for k, v := range as.seededUserFiles {
-		as.userFiles[k] = v
-	}
+	maps.Copy(as.userFiles, as.seededUserFiles)
 	as.seededUserFiles = make(map[string]string)
 
 	// Second call — must seed nothing (all files already exist)

@@ -5,31 +5,36 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"sync"
 	"time"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
+	"github.com/nextlevelbuilder/goclaw/internal/config"
+	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
 // ChannelFactory creates a Channel from DB instance data.
 // name: channel name (registered in Manager, used in session keys).
 // creds: decrypted credentials JSON (token, API keys, etc.).
-// cfg: non-secret config JSONB (dm_policy, stream_mode, etc.).
+// cfg: non-secret config JSONB (dm_policy, dm_stream, group_stream, etc.).
 type ChannelFactory func(name string, creds json.RawMessage, cfg json.RawMessage,
 	msgBus *bus.MessageBus, pairingSvc store.PairingStore) (Channel, error)
 
 // InstanceLoader loads channel instances from the database and registers them with the Manager.
 // Follows the DynamicToolLoader pattern: LoadAll at startup, Reload on cache invalidation.
 type InstanceLoader struct {
-	store      store.ChannelInstanceStore
-	agentStore store.AgentStore
-	factories  map[string]ChannelFactory
-	manager    *Manager
-	msgBus     *bus.MessageBus
-	pairingSvc store.PairingStore
-	mu         sync.Mutex
-	loaded     map[string]struct{} // channel names managed by this loader
+	store       store.ChannelInstanceStore
+	agentStore  store.AgentStore
+	providerReg        *providers.Registry
+	pendingCompactCfg  *config.PendingCompactionConfig
+	factories          map[string]ChannelFactory
+	manager            *Manager
+	msgBus             *bus.MessageBus
+	pairingSvc         store.PairingStore
+	mu                 sync.Mutex
+	loaded             map[string]struct{} // channel names managed by this loader
 }
 
 // NewInstanceLoader creates a new InstanceLoader.
@@ -49,6 +54,18 @@ func NewInstanceLoader(
 		pairingSvc: pairingSvc,
 		loaded:     make(map[string]struct{}),
 	}
+}
+
+// SetProviderRegistry sets the provider registry for pending message compaction.
+// Must be called before LoadAll/Reload.
+func (l *InstanceLoader) SetProviderRegistry(reg *providers.Registry) {
+	l.providerReg = reg
+}
+
+// SetPendingCompactionConfig sets the global pending message compaction thresholds.
+// Must be called before LoadAll/Reload.
+func (l *InstanceLoader) SetPendingCompactionConfig(cfg *config.PendingCompactionConfig) {
+	l.pendingCompactCfg = cfg
 }
 
 // RegisterFactory registers a factory for a channel type (e.g., "telegram", "discord").
@@ -140,15 +157,43 @@ func (l *InstanceLoader) Stop(ctx context.Context) {
 	l.loaded = make(map[string]struct{})
 }
 
+// coerceStringBools converts string "true"/"false" values to JSON booleans
+// in a raw config blob. Older UI versions saved select-based bool fields as strings.
+func coerceStringBools(data json.RawMessage) json.RawMessage {
+	if len(data) == 0 {
+		return data
+	}
+	var m map[string]any
+	if json.Unmarshal(data, &m) != nil {
+		return data
+	}
+	changed := false
+	for k, v := range m {
+		if s, ok := v.(string); ok {
+			switch s {
+			case "true":
+				m[k] = true
+				changed = true
+			case "false":
+				m[k] = false
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return data
+	}
+	out, _ := json.Marshal(m)
+	return out
+}
+
 // LoadedNames returns the set of channel names managed by the loader.
 func (l *InstanceLoader) LoadedNames() map[string]struct{} {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	result := make(map[string]struct{}, len(l.loaded))
-	for k, v := range l.loaded {
-		result[k] = v
-	}
+	maps.Copy(result, l.loaded)
 	return result
 }
 
@@ -162,20 +207,76 @@ func (l *InstanceLoader) loadInstance(ctx context.Context, inst store.ChannelIns
 		return nil
 	}
 
-	ch, err := factory(inst.Name, inst.Credentials, inst.Config, l.msgBus, l.pairingSvc)
+	// Normalize config: convert string "true"/"false" to JSON booleans.
+	// Older UI versions saved select-based bool fields as strings.
+	cfg := coerceStringBools(inst.Config)
+
+	ch, err := factory(inst.Name, inst.Credentials, cfg, l.msgBus, l.pairingSvc)
 	if err != nil {
 		return err
 	}
+	if ch == nil {
+		slog.Info("channel instance not ready (missing credentials)", "name", inst.Name, "type", inst.ChannelType)
+		return nil
+	}
 
 	// Resolve agent_key from UUID — the routing system (Router, session keys) uses agent_key, not UUID.
+	var ag *store.AgentData
 	if base, ok := ch.(interface{ SetAgentID(string) }); ok {
-		ag, err := l.agentStore.GetByID(ctx, inst.AgentID)
+		var err error
+		ag, err = l.agentStore.GetByID(ctx, inst.AgentID)
 		if err != nil {
 			return fmt.Errorf("agent %s not found for channel %s: %w", inst.AgentID, inst.Name, err)
 		}
 		base.SetAgentID(ag.AgentKey)
 	}
+	// Set the platform type on the channel so Manager.ChannelTypeForName can read it.
+	if base, ok := ch.(interface{ SetType(string) }); ok {
+		base.SetType(inst.ChannelType)
+	}
 
+	// Wire pending message auto-compaction.
+	// Priority: config provider/model > agent's provider/model > fallback.
+	if pc, ok := ch.(PendingCompactable); ok && l.providerReg != nil {
+		var p providers.Provider
+		var model string
+
+		// Try config-level provider/model first.
+		if l.pendingCompactCfg != nil && l.pendingCompactCfg.Provider != "" {
+			if cp, err := l.providerReg.Get(l.pendingCompactCfg.Provider); err == nil {
+				p = cp
+				model = l.pendingCompactCfg.Model
+				if model == "" {
+					model = cp.DefaultModel()
+				}
+			}
+		}
+		// Fallback: agent's provider/model.
+		if p == nil && ag != nil && ag.Provider != "" {
+			if ap, err := l.providerReg.Get(ag.Provider); err == nil {
+				p = ap
+				model = ag.Model
+				if model == "" {
+					model = ap.DefaultModel()
+				}
+			}
+		}
+
+		if p != nil && model != "" {
+			cc := &CompactionConfig{
+				Provider: p,
+				Model:    model,
+			}
+			if l.pendingCompactCfg != nil {
+				cc.Threshold = l.pendingCompactCfg.Threshold
+				cc.KeepRecent = l.pendingCompactCfg.KeepRecent
+				cc.MaxTokens = l.pendingCompactCfg.MaxTokens
+			}
+			pc.SetPendingCompaction(cc)
+			slog.Debug("pending compaction configured", "channel", inst.Name, "provider", p.Name(), "model", model,
+				"threshold", cc.Threshold, "keep_recent", cc.KeepRecent, "max_tokens", cc.MaxTokens)
+		}
+	}
 	l.manager.RegisterChannel(inst.Name, ch)
 	l.loaded[inst.Name] = struct{}{}
 

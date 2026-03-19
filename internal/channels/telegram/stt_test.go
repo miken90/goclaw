@@ -12,6 +12,14 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 )
 
+// sttTestResponse mirrors the STT proxy JSON response for test assertions.
+type sttTestResponse struct {
+	Transcript string `json:"transcript"`
+}
+
+// sttEndpoint is the expected STT endpoint path.
+const sttEndpoint = "/transcribe_audio"
+
 // newChannelWithSTT is a minimal Channel stub for STT unit tests.
 // It skips bot initialisation (which requires a real Telegram token).
 func newChannelWithSTT(cfg config.TelegramConfig) *Channel {
@@ -87,7 +95,7 @@ func TestTranscribeAudio_Success(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Verify endpoint path.
-		if r.URL.Path != sttTranscribeEndpoint {
+		if r.URL.Path != sttEndpoint {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		// Verify method.
@@ -103,7 +111,7 @@ func TestTranscribeAudio_Success(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(sttResponse{Transcript: "hello world"})
+		json.NewEncoder(w).Encode(sttTestResponse{Transcript: "hello world"})
 	}))
 	defer srv.Close()
 
@@ -129,7 +137,7 @@ func TestTranscribeAudio_BearerToken(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(sttResponse{Transcript: "ok"})
+		json.NewEncoder(w).Encode(sttTestResponse{Transcript: "ok"})
 	}))
 	defer srv.Close()
 
@@ -156,7 +164,7 @@ func TestTranscribeAudio_NoAuthHeader(t *testing.T) {
 			t.Errorf("expected no Authorization header, got %q", auth)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(sttResponse{Transcript: "ok"})
+		json.NewEncoder(w).Encode(sttTestResponse{Transcript: "ok"})
 	}))
 	defer srv.Close()
 
@@ -180,7 +188,7 @@ func TestTranscribeAudio_TenantID(t *testing.T) {
 			gotTenant = r.FormValue("tenant_id")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(sttResponse{Transcript: "ok"})
+		json.NewEncoder(w).Encode(sttTestResponse{Transcript: "ok"})
 	}))
 	defer srv.Close()
 
@@ -209,7 +217,7 @@ func TestTranscribeAudio_NoTenantField(t *testing.T) {
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(sttResponse{Transcript: "ok"})
+		json.NewEncoder(w).Encode(sttTestResponse{Transcript: "ok"})
 	}))
 	defer srv.Close()
 
@@ -267,7 +275,7 @@ func TestTranscribeAudio_EmptyTranscript(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(sttResponse{Transcript: ""})
+		json.NewEncoder(w).Encode(sttTestResponse{Transcript: ""})
 	}))
 	defer srv.Close()
 

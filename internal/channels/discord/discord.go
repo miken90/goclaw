@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -30,12 +29,13 @@ type Channel struct {
 	typingCtrls     sync.Map // channelID string → *typing.Controller
 	pairingService  store.PairingStore
 	pairingDebounce sync.Map // senderID → time.Time
+	approvedGroups  sync.Map // chatID → true (in-memory cache for paired groups)
 	groupHistory    *channels.PendingHistory
 	historyLimit    int
 }
 
 // New creates a new Discord channel from config.
-func New(cfg config.DiscordConfig, msgBus *bus.MessageBus, pairingSvc store.PairingStore) (*Channel, error) {
+func New(cfg config.DiscordConfig, msgBus *bus.MessageBus, pairingSvc store.PairingStore, pendingStore store.PendingMessageStore) (*Channel, error) {
 	session, err := discordgo.New("Bot " + cfg.Token)
 	if err != nil {
 		return nil, fmt.Errorf("create discord session: %w", err)
@@ -46,7 +46,7 @@ func New(cfg config.DiscordConfig, msgBus *bus.MessageBus, pairingSvc store.Pair
 		discordgo.IntentsDirectMessages |
 		discordgo.IntentsMessageContent
 
-	base := channels.NewBaseChannel("discord", msgBus, cfg.AllowFrom)
+	base := channels.NewBaseChannel(channels.TypeDiscord, msgBus, cfg.AllowFrom)
 	base.ValidatePolicy(cfg.DMPolicy, cfg.GroupPolicy)
 
 	requireMention := true
@@ -65,13 +65,14 @@ func New(cfg config.DiscordConfig, msgBus *bus.MessageBus, pairingSvc store.Pair
 		config:         cfg,
 		requireMention: requireMention,
 		pairingService: pairingSvc,
-		groupHistory:   channels.NewPendingHistory(),
+		groupHistory:   channels.MakeHistory(channels.TypeDiscord, pendingStore),
 		historyLimit:   historyLimit,
 	}, nil
 }
 
 // Start opens the Discord gateway connection and begins receiving events.
 func (c *Channel) Start(_ context.Context) error {
+	c.groupHistory.StartFlusher()
 	slog.Info("starting discord bot")
 
 	c.session.AddHandler(c.handleMessage)
@@ -94,8 +95,17 @@ func (c *Channel) Start(_ context.Context) error {
 	return nil
 }
 
+// BlockReplyEnabled returns the per-channel block_reply override (nil = inherit gateway default).
+func (c *Channel) BlockReplyEnabled() *bool { return c.config.BlockReply }
+
+// SetPendingCompaction configures LLM-based auto-compaction for pending messages.
+func (c *Channel) SetPendingCompaction(cfg *channels.CompactionConfig) {
+	c.groupHistory.SetCompactionConfig(cfg)
+}
+
 // Stop closes the Discord gateway connection.
 func (c *Channel) Stop(_ context.Context) error {
+	c.groupHistory.StopFlusher()
 	slog.Info("stopping discord bot")
 	c.SetRunning(false)
 	return c.session.Close()
@@ -136,6 +146,16 @@ func (c *Channel) Send(_ context.Context, msg bus.OutboundMessage) error {
 	}
 
 	content := msg.Content
+
+	// Handle outbound media attachments: send files via Discord's file upload API.
+	if len(msg.Media) > 0 {
+		// Delete placeholder if present
+		if pID, ok := c.placeholders.Load(placeholderKey); ok {
+			c.placeholders.Delete(placeholderKey)
+			_ = c.session.ChannelMessageDelete(channelID, pID.(string))
+		}
+		return c.sendMediaMessage(channelID, content, msg.Media)
+	}
 
 	// NO_REPLY cleanup: content is empty when agent suppresses reply.
 	// Delete placeholder and return without sending any message.
@@ -209,240 +229,6 @@ func (c *Channel) sendChunked(channelID, content string) error {
 	}
 
 	return nil
-}
-
-// handleMessage processes incoming Discord messages.
-func (c *Channel) handleMessage(_ *discordgo.Session, m *discordgo.MessageCreate) {
-	// Ignore bot's own messages
-	if m.Author == nil || m.Author.ID == c.botUserID {
-		return
-	}
-
-	// Ignore bot messages
-	if m.Author.Bot {
-		return
-	}
-
-	senderID := m.Author.ID
-	senderName := resolveDisplayName(m)
-
-	channelID := m.ChannelID
-	isDM := m.GuildID == ""
-
-	// DM/Group policy check
-	peerKind := "group"
-	if isDM {
-		peerKind = "direct"
-	}
-
-	if isDM {
-		if !c.checkDMPolicy(senderID, channelID) {
-			return
-		}
-	} else {
-		if !c.CheckPolicy("group", "", c.config.GroupPolicy, senderID) {
-			slog.Debug("discord group message rejected by policy",
-				"user_id", senderID,
-				"username", senderName,
-			)
-			return
-		}
-	}
-
-	// Check allowlist (for "open" policy, still apply allowlist if configured)
-	if !c.IsAllowed(senderID) {
-		slog.Debug("discord message rejected by allowlist",
-			"user_id", senderID,
-			"username", senderName,
-		)
-		return
-	}
-
-	// Build content
-	content := m.Content
-
-	// Append attachment URLs
-	for _, att := range m.Attachments {
-		if content != "" {
-			content += "\n"
-		}
-		content += fmt.Sprintf("[attachment: %s]", att.URL)
-	}
-
-	if content == "" {
-		content = "[empty message]"
-	}
-
-	// Mention gating: in groups, only respond when bot is @mentioned (default true).
-	// When not mentioned, record message to pending history for later context.
-	if peerKind == "group" && c.requireMention {
-		mentioned := false
-		for _, u := range m.Mentions {
-			if u.ID == c.botUserID {
-				mentioned = true
-				break
-			}
-		}
-		if !mentioned {
-			c.groupHistory.Record(channelID, channels.HistoryEntry{
-				Sender:    senderName,
-				Body:      content,
-				Timestamp: m.Timestamp,
-				MessageID: m.ID,
-			}, c.historyLimit)
-
-			slog.Debug("discord group message recorded (no mention)",
-				"channel_id", channelID,
-				"user_id", senderID,
-				"username", senderName,
-			)
-			return
-		}
-	}
-
-	slog.Debug("discord message received",
-		"sender_id", senderID,
-		"channel_id", channelID,
-		"is_dm", isDM,
-		"preview", channels.Truncate(content, 50),
-	)
-
-	// Send typing indicator with keepalive + TTL safety net.
-	// Discord typing expires after 10s, so keepalive every 9s.
-	// TTL auto-stops after 60s to prevent stuck indicators.
-	typingCtrl := typing.New(typing.Options{
-		MaxDuration:       60 * time.Second,
-		KeepaliveInterval: 9 * time.Second,
-		StartFn: func() error {
-			return c.session.ChannelTyping(channelID)
-		},
-	})
-	// Stop previous typing controller for this channel (if any)
-	if prev, ok := c.typingCtrls.Load(channelID); ok {
-		prev.(*typing.Controller).Stop()
-	}
-	c.typingCtrls.Store(channelID, typingCtrl)
-	typingCtrl.Start()
-
-	// Send placeholder "Thinking..." message.
-	// Key by inbound message ID (not channel ID) to avoid race conditions
-	// when multiple messages arrive in the same channel concurrently.
-	placeholder, err := c.session.ChannelMessageSend(channelID, "Thinking...")
-	if err == nil {
-		c.placeholders.Store(m.ID, placeholder.ID)
-	}
-
-	// Strip bot @mention from content — it's just the trigger, not meaningful.
-	content = strings.ReplaceAll(content, "<@"+c.botUserID+">", "")
-	content = strings.TrimSpace(content)
-
-	// Build final content with group context.
-	finalContent := content
-	if peerKind == "group" {
-		annotated := fmt.Sprintf("[From: %s (<@%s>)]\n%s", senderName, senderID, content)
-		if c.historyLimit > 0 {
-			finalContent = c.groupHistory.BuildContext(channelID, annotated, c.historyLimit)
-		} else {
-			finalContent = annotated
-		}
-	}
-
-	metadata := map[string]string{
-		"message_id":      m.ID,
-		"user_id":         senderID,
-		"username":        m.Author.Username,
-		"display_name":    senderName,
-		"guild_id":        m.GuildID,
-		"channel_id":      channelID,
-		"is_dm":           fmt.Sprintf("%t", isDM),
-		"placeholder_key": m.ID, // keyed by inbound message ID for placeholder lookup
-	}
-
-	c.HandleMessage(senderID, channelID, finalContent, nil, metadata, peerKind)
-
-	// Clear pending history after sending to agent.
-	if peerKind == "group" {
-		c.groupHistory.Clear(channelID)
-	}
-}
-
-// checkDMPolicy evaluates the DM policy for a sender, handling pairing flow.
-func (c *Channel) checkDMPolicy(senderID, channelID string) bool {
-	dmPolicy := c.config.DMPolicy
-	if dmPolicy == "" {
-		dmPolicy = "pairing"
-	}
-
-	switch dmPolicy {
-	case "disabled":
-		slog.Debug("discord DM rejected: disabled", "sender_id", senderID)
-		return false
-	case "open":
-		return true
-	case "allowlist":
-		if !c.IsAllowed(senderID) {
-			slog.Debug("discord DM rejected by allowlist", "sender_id", senderID)
-			return false
-		}
-		return true
-	default: // "pairing"
-		paired := false
-		if c.pairingService != nil {
-			paired = c.pairingService.IsPaired(senderID, c.Name())
-		}
-		inAllowList := c.HasAllowList() && c.IsAllowed(senderID)
-
-		if paired || inAllowList {
-			return true
-		}
-
-		c.sendPairingReply(senderID, channelID)
-		return false
-	}
-}
-
-// sendPairingReply sends a pairing code to the user via DM.
-func (c *Channel) sendPairingReply(senderID, channelID string) {
-	if c.pairingService == nil {
-		return
-	}
-
-	// Debounce
-	if lastSent, ok := c.pairingDebounce.Load(senderID); ok {
-		if time.Since(lastSent.(time.Time)) < pairingDebounceTime {
-			return
-		}
-	}
-
-	code, err := c.pairingService.RequestPairing(senderID, c.Name(), channelID, "default")
-	if err != nil {
-		slog.Debug("discord pairing request failed", "sender_id", senderID, "error", err)
-		return
-	}
-
-	replyText := fmt.Sprintf(
-		"GoClaw: access not configured.\n\nYour Discord user ID: %s\n\nPairing code: %s\n\nAsk the bot owner to approve with:\n  goclaw pairing approve %s",
-		senderID, code, code,
-	)
-
-	if _, err := c.session.ChannelMessageSend(channelID, replyText); err != nil {
-		slog.Warn("failed to send discord pairing reply", "error", err)
-	} else {
-		c.pairingDebounce.Store(senderID, time.Now())
-		slog.Info("discord pairing reply sent", "sender_id", senderID, "code", code)
-	}
-}
-
-// resolveDisplayName returns the best available display name for a Discord message author.
-// Priority: server nickname > global display name > username.
-func resolveDisplayName(m *discordgo.MessageCreate) string {
-	if m.Member != nil && m.Member.Nick != "" {
-		return m.Member.Nick
-	}
-	if m.Author.GlobalName != "" {
-		return m.Author.GlobalName
-	}
-	return m.Author.Username
 }
 
 // lastIndexByte returns the last index of byte c in s, or -1.
