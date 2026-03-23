@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -330,7 +331,7 @@ func handleTeammateMessage(
 			teamID, _ := uuid.Parse(inMeta["team_id"])
 			if teamTaskID != uuid.Nil && teamStore != nil {
 				cachedTeam, _ = teamStore.GetTeam(ctx, teamID)
-				if cachedTeam != nil && isConsumerTeamV2(cachedTeam) {
+				if cachedTeam != nil {
 					// Check current task status — agent may have already updated it via tool.
 					currentTask, taskErr := teamStore.GetTask(ctx, teamTaskID)
 					alreadyTerminal := taskErr == nil && currentTask != nil &&
@@ -432,6 +433,33 @@ func handleTeammateMessage(
 			announceMedia = outcome.Result.Media
 		}
 
+		// Append member comments & attachments so leader sees them in the announce.
+		if taskIDStr := inMeta["team_task_id"]; taskIDStr != "" && teamStore != nil {
+			if taskUUID, err := uuid.Parse(taskIDStr); err == nil {
+				if comments, err := teamStore.ListRecentTaskComments(ctx, taskUUID, 5); err == nil && len(comments) > 0 {
+					var parts []string
+					for _, c := range comments {
+						author := c.AgentKey
+						if author == "" {
+							author = "system"
+						}
+						text := c.Content
+						if len([]rune(text)) > 500 {
+							text = string([]rune(text)[:500]) + "..."
+						}
+						parts = append(parts, fmt.Sprintf("- [%s]: %s", author, text))
+					}
+					announceContent += "\n\n[Member notes]\n" + strings.Join(parts, "\n")
+				}
+				if attachments, err := teamStore.ListTaskAttachments(ctx, taskUUID); err == nil && len(attachments) > 0 {
+					announceContent += "\n\n[Attached files in team workspace]"
+					for _, a := range attachments {
+						announceContent += "\n- " + filepath.Base(a.Path)
+					}
+				}
+			}
+		}
+
 		// Announce result (or failure) to lead agent via announce queue.
 		// Queue merges concurrent completions into a single batched announce.
 		if origChatID == "" {
@@ -483,30 +511,9 @@ func handleTeammateMessage(
 			parentRootSpanID, _ = uuid.Parse(sid)
 		}
 
-		// Enrich announce content with member comments on the task (if any).
-		if taskIDStr := inMeta["team_task_id"]; taskIDStr != "" && teamStore != nil {
-			if tid, err := uuid.Parse(taskIDStr); err == nil {
-				if comments, err := teamStore.ListTaskComments(ctx, tid); err == nil && len(comments) > 0 {
-					// Include last 5 comments, each truncated to 200 chars.
-					start := 0
-					if len(comments) > 5 {
-						start = len(comments) - 5
-					}
-					var commentLines []string
-					for _, c := range comments[start:] {
-						author := c.AgentKey
-						if author == "" && c.UserID != "" {
-							author = "user:" + c.UserID
-						}
-						body := c.Content
-						if len(body) > 200 {
-							body = body[:200] + "..."
-						}
-						commentLines = append(commentLines, fmt.Sprintf("- [%s]: %s", author, body))
-					}
-					announceContent += "\n\n--- Member comments ---\n" + strings.Join(commentLines, "\n")
-				}
-			}
+		// Cap announce content to prevent context blowup for the leader agent.
+		if len([]rune(announceContent)) > 50_000 {
+			announceContent = string([]rune(announceContent)[:50_000]) + "\n[truncated]"
 		}
 
 		// Enqueue result. If we become the processor, run the announce loop.
