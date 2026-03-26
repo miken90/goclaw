@@ -40,6 +40,8 @@ export function TracesPage() {
   const { agents } = useAgents();
   const { instances: channels } = useChannelInstances();
 
+  const [abortingRunId, setAbortingRunId] = useState<string | null>(null);
+
   const { traces, total, loading, fetching, refresh, getTrace } = useTraces({
     agentId: agentFilter,
     channel: channelFilter,
@@ -47,10 +49,16 @@ export function TracesPage() {
     offset: (page - 1) * pageSize,
   });
 
+  const spinning = useMinLoading(fetching);
+  const showSkeleton = useDeferredLoading(loading && traces.length === 0);
+
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
   const handleAbortRun = useCallback(
     async (trace: TraceData, e: React.MouseEvent) => {
-      e.stopPropagation(); // Don't open trace detail
-      if (!ws.isConnected) return;
+      e.stopPropagation();
+      if (!ws.isConnected || abortingRunId) return;
+      setAbortingRunId(trace.run_id);
       try {
         const res = await ws.call(Methods.CHAT_ABORT, {
           sessionKey: trace.session_key,
@@ -64,14 +72,12 @@ export function TracesPage() {
         }
       } catch {
         toast.error(t("toast.abortFailed"));
+      } finally {
+        setAbortingRunId(null);
       }
     },
-    [ws, t, refresh],
+    [ws, t, refresh, abortingRunId],
   );
-  const spinning = useMinLoading(fetching);
-  const showSkeleton = useDeferredLoading(loading && traces.length === 0);
-
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
     <div className="p-4 sm:p-6 pb-10">
@@ -167,6 +173,7 @@ export function TracesPage() {
                             variant="destructive"
                             size="icon-xs"
                             onClick={(e) => handleAbortRun(trace, e)}
+                            disabled={abortingRunId === trace.run_id}
                             title={t("stopRun")}
                           >
                             <Square className="h-3 w-3" />
