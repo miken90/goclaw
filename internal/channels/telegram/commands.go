@@ -58,6 +58,9 @@ func (c *Channel) handleBotCommand(ctx context.Context, message *telego.Message,
 
 	cmd = strings.SplitN(cmd, "@", 2)[0]
 
+	// Inject tenant scope so all command handlers have tenant_id in context.
+	ctx = store.WithTenantID(ctx, c.TenantID())
+
 	chatIDObj := tu.ID(chatID)
 
 	// Helper: set MessageThreadID on outgoing messages for forum topics.

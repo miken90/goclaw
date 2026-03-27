@@ -287,6 +287,7 @@ func handleTeammateMessage(
 		Stream:          false,
 		TeamTaskID:      msg.Metadata["team_task_id"],
 		TeamWorkspace:   msg.Metadata["team_workspace"],
+		LeaderAgentID:   msg.Metadata["leader_agent_id"],
 		WorkspaceChatID: origChatID,
 		TeamID:          msg.Metadata["team_id"],
 		LinkedTraceID:   linkedTraceID,
@@ -372,7 +373,7 @@ func handleTeammateMessage(
 							}
 						}
 						// Smart post-turn decision based on action flags.
-						// Priority: error > completed > escalated > reviewed > progress-only > no-action.
+						// Only error, completed/escalated, and reviewed block auto-complete.
 						switch {
 						case outcome.Err != nil:
 							// Agent errored → auto-fail.
@@ -404,15 +405,9 @@ func handleTeammateMessage(
 							_ = teamStore.RenewTaskLock(ctx, teamTaskID, teamID)
 							slog.Info("post-turn: task submitted for review", "task_id", teamTaskID)
 
-						case taskActionFlags.Progressed || taskActionFlags.Commented || taskActionFlags.Claimed:
-							// Member interacted but didn't take terminal action — renew lock.
-							_ = teamStore.RenewTaskLock(ctx, teamTaskID, teamID)
-							slog.Warn("post-turn: member did not take terminal action",
-								"task_id", teamTaskID, "progressed", taskActionFlags.Progressed,
-								"commented", taskActionFlags.Commented, "claimed", taskActionFlags.Claimed)
-
 						default:
-							// No task action flags recorded — backward compat: auto-complete.
+							// Agent turn ended without terminal action — auto-complete.
+							// Covers: Progressed, Commented, Claimed, or no flags at all.
 							if outcome.Result != nil {
 								result := outcome.Result.Content
 								if len(outcome.Result.Deliverables) > 0 {
