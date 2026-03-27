@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -232,6 +233,35 @@ func (t *TeamTasksTool) executeCreate(ctx context.Context, args map[string]any) 
 
 	if err := t.manager.teamStore.CreateTask(ctx, task); err != nil {
 		return ErrorResult("failed to create task: " + err.Error())
+	}
+
+	// Persist media files copied during task creation as DB attachments,
+	// so the UI and queries see them in team_task_attachments table.
+	// (Members get auto-attached via WorkspaceInterceptor, but leaders
+	// don't run inside a task context — handle explicitly here.)
+	if files, ok := taskMeta["attached_files"].([]any); ok {
+		for _, f := range files {
+			filePath, ok := f.(string)
+			if !ok || filePath == "" {
+				continue
+			}
+			var fileSize int64
+			if info, err := os.Stat(filePath); err == nil {
+				fileSize = info.Size()
+			}
+			att := &store.TeamTaskAttachmentData{
+				TaskID:           task.ID,
+				TeamID:           team.ID,
+				ChatID:           chatID,
+				Path:             filePath,
+				FileSize:         fileSize,
+				MimeType:         mimeFromExt(filepath.Ext(filePath)),
+				CreatedByAgentID: &agentID,
+			}
+			if err := t.manager.teamStore.AttachFileToTask(ctx, att); err != nil {
+				slog.Warn("executeCreate: auto-attach media failed", "task_id", task.ID, "path", filePath, "error", err)
+			}
+		}
 	}
 
 	agentKey := t.manager.agentKeyFromID(ctx, agentID)
