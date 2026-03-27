@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
+	"github.com/nextlevelbuilder/goclaw/internal/safego"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/internal/tools"
 )
@@ -87,13 +87,15 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 	// When workspace sharing is enabled, show the base workspace without user subfolder.
 	promptWorkspace := l.workspace
 	if l.agentUUID != uuid.Nil && userID != "" && l.workspace != "" {
+		shared := l.shouldShareWorkspace(userID, peerKind)
 		if cachedWs, ok := l.userWorkspaces.Load(userID); ok {
-			promptWorkspace = cachedWs.(string)
-			if !l.shouldShareWorkspace(userID, peerKind) {
-				promptWorkspace = filepath.Join(promptWorkspace, sanitizePathSegment(userID))
-			}
-		} else if !l.shouldShareWorkspace(userID, peerKind) {
-			promptWorkspace = filepath.Join(l.workspace, sanitizePathSegment(userID))
+			promptWorkspace = tools.ResolveWorkspace(cachedWs.(string),
+				tools.UserChatLayer(tools.SanitizePathSegment(userID), shared),
+			)
+		} else {
+			promptWorkspace = tools.ResolveWorkspace(l.workspace,
+				tools.UserChatLayer(tools.SanitizePathSegment(userID), shared),
+			)
 		}
 	}
 
@@ -179,7 +181,7 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 		OwnerIDs:               l.ownerIDs,
 		Mode:                   mode,
 		ToolNames:              toolNames,
-		SkillsSummary:          l.resolveSkillsSummary(skillFilter),
+		SkillsSummary:          l.resolveSkillsSummary(ctx, skillFilter),
 		HasMemory:              l.hasMemory,
 		HasSpawn:               l.tools != nil && hasSpawn,
 		HasTeam:                hasTeamTools,
@@ -231,8 +233,8 @@ func (l *Loop) buildMessages(ctx context.Context, history []providers.Message, s
 		slog.Info("sanitizeHistory: cleaned session history",
 			"session", sessionKey, "dropped", droppedCount)
 		cleanedHistory, _ := sanitizeHistory(history)
-		l.sessions.SetHistory(sessionKey, cleanedHistory)
-		l.sessions.Save(sessionKey)
+		l.sessions.SetHistory(ctx, sessionKey, cleanedHistory)
+		l.sessions.Save(ctx, sessionKey)
 	}
 
 	// Current user message
@@ -305,7 +307,7 @@ const (
 // Returns (summary XML, useInline) — useInline=true means skills are inlined and
 // the system prompt should use TS-style "scan <available_skills>" instructions
 // instead of "use skill_search".
-func (l *Loop) resolveSkillsSummary(skillFilter []string) string {
+func (l *Loop) resolveSkillsSummary(ctx context.Context, skillFilter []string) string {
 	if l.skillsLoader == nil {
 		return ""
 	}
@@ -316,7 +318,7 @@ func (l *Loop) resolveSkillsSummary(skillFilter []string) string {
 		allowList = skillFilter
 	}
 
-	filtered := l.skillsLoader.FilterSkills(allowList)
+	filtered := l.skillsLoader.FilterSkills(ctx, allowList)
 	if len(filtered) == 0 {
 		return ""
 	}
@@ -330,7 +332,7 @@ func (l *Loop) resolveSkillsSummary(skillFilter []string) string {
 
 	if len(filtered) <= skillInlineMaxCount && estimatedTokens <= skillInlineMaxTokens {
 		// Inline mode: build full XML summary
-		return l.skillsLoader.BuildSummary(allowList)
+		return l.skillsLoader.BuildSummary(ctx, allowList)
 	}
 
 	// Search mode: no XML in prompt, agent uses skill_search tool
@@ -370,7 +372,8 @@ func limitHistoryTurns(msgs []providers.Message, limit int) []providers.Message 
 //   - Orphaned tool messages at start of history (after truncation)
 //   - tool_result without matching tool_use in preceding assistant message
 //   - assistant with tool_calls but missing tool_results
-// sanitizeHistory repairs tool_use/tool_result pairing in session history.
+//   - Duplicate tool call IDs across turns (legacy sessions before uniquifyToolCallIDs)
+//
 // Returns the cleaned messages and the number of messages that were dropped or synthesized.
 func sanitizeHistory(msgs []providers.Message) ([]providers.Message, int) {
 	if len(msgs) == 0 {
@@ -393,15 +396,36 @@ func sanitizeHistory(msgs []providers.Message) ([]providers.Message, int) {
 	}
 
 	// 2. Walk through messages ensuring tool_result follows matching tool_use.
+	// Also dedup tool call IDs across the transcript for legacy sessions that
+	// may have persisted duplicates before the live uniquify fix was deployed.
 	var result []providers.Message
+	globalSeen := make(map[string]bool) // tracks IDs seen across entire transcript
+
 	for i := start; i < len(msgs); i++ {
 		msg := msgs[i]
 
 		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
-			// Collect expected tool call IDs
+			// Deep-copy ToolCalls to avoid mutating the original session history.
+			oldCalls := msg.ToolCalls
+			msg.ToolCalls = make([]providers.ToolCall, len(oldCalls))
+			copy(msg.ToolCalls, oldCalls)
+
+			// Dedup: rewrite any ID that was already seen in an earlier turn or
+			// within the same turn. Uses a queue per original ID so multiple tool
+			// results with the same raw ID pair correctly in encounter order.
+			idQueue := make(map[string][]string, len(msg.ToolCalls)) // origID → []newID
 			expectedIDs := make(map[string]bool, len(msg.ToolCalls))
-			for _, tc := range msg.ToolCalls {
-				expectedIDs[tc.ID] = true
+			for j := range msg.ToolCalls {
+				origID := msg.ToolCalls[j].ID
+				newID := origID
+				if globalSeen[origID] {
+					newID = fmt.Sprintf("%s_dedup_%d", origID, j)
+					slog.Debug("sanitizeHistory: dedup tool call ID", "orig", origID, "new", newID)
+				}
+				msg.ToolCalls[j].ID = newID
+				globalSeen[newID] = true
+				idQueue[origID] = append(idQueue[origID], newID)
+				expectedIDs[newID] = true
 			}
 
 			result = append(result, msg)
@@ -410,9 +434,12 @@ func sanitizeHistory(msgs []providers.Message) ([]providers.Message, int) {
 			for i+1 < len(msgs) && msgs[i+1].Role == "tool" {
 				i++
 				toolMsg := msgs[i]
-				if expectedIDs[toolMsg.ToolCallID] {
+				if queue, ok := idQueue[toolMsg.ToolCallID]; ok && len(queue) > 0 {
+					newID := queue[0]
+					idQueue[toolMsg.ToolCallID] = queue[1:]
+					toolMsg.ToolCallID = newID
 					result = append(result, toolMsg)
-					delete(expectedIDs, toolMsg.ToolCallID)
+					delete(expectedIDs, newID)
 				} else {
 					slog.Debug("sanitizeHistory: dropping mismatched tool result",
 						"tool_call_id", toolMsg.ToolCallID)
@@ -421,14 +448,16 @@ func sanitizeHistory(msgs []providers.Message) ([]providers.Message, int) {
 			}
 
 			// Synthesize missing tool results
-			for id := range expectedIDs {
-				slog.Debug("sanitizeHistory: synthesizing missing tool result", "tool_call_id", id)
-				result = append(result, providers.Message{
-					Role:       "tool",
-					Content:    "[Tool result missing — session was compacted]",
-					ToolCallID: id,
-				})
-				dropped++
+			for _, tc := range msg.ToolCalls {
+				if expectedIDs[tc.ID] {
+					slog.Debug("sanitizeHistory: synthesizing missing tool result", "tool_call_id", tc.ID)
+					result = append(result, providers.Message{
+						Role:       "tool",
+						Content:    "[Tool result missing — session was compacted]",
+						ToolCallID: tc.ID,
+					})
+					dropped++
+				}
 			}
 		} else if msg.Role == "tool" {
 			// Orphaned tool message mid-history (no preceding assistant with matching tool_calls)
@@ -444,10 +473,10 @@ func sanitizeHistory(msgs []providers.Message) ([]providers.Message, int) {
 }
 
 func (l *Loop) maybeSummarize(ctx context.Context, sessionKey string) {
-	history := l.sessions.GetHistory(sessionKey)
+	history := l.sessions.GetHistory(ctx, sessionKey)
 
 	// Use calibrated token estimation when available.
-	lastPT, lastMC := l.sessions.GetLastPromptTokens(sessionKey)
+	lastPT, lastMC := l.sessions.GetLastPromptTokens(ctx, sessionKey)
 	tokenEstimate := EstimateTokensWithCalibration(history, lastPT, lastMC)
 
 	// Resolve compaction thresholds from config with sensible defaults.
@@ -455,7 +484,7 @@ func (l *Loop) maybeSummarize(ctx context.Context, sessionKey string) {
 	if l.compactionCfg != nil && l.compactionCfg.MaxHistoryShare > 0 {
 		historyShare = l.compactionCfg.MaxHistoryShare
 	}
-	minMessages := 50
+	minMessages := 200
 	if l.compactionCfg != nil && l.compactionCfg.MinMessages > 0 {
 		minMessages = l.compactionCfg.MinMessages
 	}
@@ -478,7 +507,7 @@ func (l *Loop) maybeSummarize(ctx context.Context, sessionKey string) {
 	// Memory flush runs synchronously INSIDE the guard
 	// (so concurrent runs don't both trigger flush for the same compaction cycle).
 	flushSettings := ResolveMemoryFlushSettings(l.compactionCfg)
-	if l.shouldRunMemoryFlush(sessionKey, tokenEstimate, flushSettings) {
+	if l.shouldRunMemoryFlush(ctx, sessionKey, tokenEstimate, flushSettings) {
 		l.runMemoryFlush(ctx, sessionKey, flushSettings)
 	}
 
@@ -491,18 +520,19 @@ func (l *Loop) maybeSummarize(ctx context.Context, sessionKey string) {
 	// Summarize in background (holds the per-session lock until done)
 	go func() {
 		defer sessionMu.Unlock()
+		defer safego.Recover(nil, "session", sessionKey)
 
 		// Re-check: history may have been truncated by a concurrent summarize
 		// that finished between our threshold check and acquiring the lock.
-		history := l.sessions.GetHistory(sessionKey)
+		sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 120*time.Second)
+		defer cancel()
+
+		history := l.sessions.GetHistory(sctx, sessionKey)
 		if len(history) <= keepLast {
 			return
 		}
 
-		sctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-		defer cancel()
-
-		summary := l.sessions.GetSummary(sessionKey)
+		summary := l.sessions.GetSummary(sctx, sessionKey)
 		toSummarize := history[:len(history)-keepLast]
 
 		var sb strings.Builder
@@ -552,10 +582,10 @@ func (l *Loop) maybeSummarize(ctx context.Context, sessionKey string) {
 			return
 		}
 
-		l.sessions.SetSummary(sessionKey, SanitizeAssistantContent(resp.Content))
-		l.sessions.TruncateHistory(sessionKey, keepLast)
-		l.sessions.IncrementCompaction(sessionKey)
-		l.sessions.Save(sessionKey)
+		l.sessions.SetSummary(sctx, sessionKey, SanitizeAssistantContent(resp.Content))
+		l.sessions.TruncateHistory(sctx, sessionKey, keepLast)
+		l.sessions.IncrementCompaction(sctx, sessionKey)
+		l.sessions.Save(sctx, sessionKey)
 	}()
 }
 
@@ -563,7 +593,34 @@ func (l *Loop) maybeSummarize(ctx context.Context, sessionKey string) {
 // For non-writers: injects refusal instructions + removes SOUL.md/AGENTS.md from context files.
 func (l *Loop) buildGroupWriterPrompt(ctx context.Context, groupID, senderID string, files []bootstrap.ContextFile) (string, []bootstrap.ContextFile) {
 	writers, err := l.configPermStore.ListFileWriters(ctx, l.agentUUID, groupID)
-	if err != nil || len(writers) == 0 {
+	if err != nil {
+		return "", files // fail-open
+	}
+
+	// Discord guilds: also fetch guild-wide wildcard writers (guild:{guildID}:*).
+	// Per-user scope (guild:{guildID}:user:{userID}) won't find guild-wide grants
+	// because ListFileWriters uses exact SQL match.
+	if strings.HasPrefix(groupID, "guild:") {
+		parts := strings.SplitN(groupID, ":", 3) // ["guild", "{guildID}", "user:..."]
+		if len(parts) >= 2 {
+			guildWildcard := parts[0] + ":" + parts[1] + ":*"
+			if guildWriters, gErr := l.configPermStore.ListFileWriters(ctx, l.agentUUID, guildWildcard); gErr == nil {
+				writers = append(writers, guildWriters...)
+			}
+			// Deduplicate by UserID (user may have both guild-wide and per-user grants).
+			seen := make(map[string]bool, len(writers))
+			deduped := writers[:0]
+			for _, w := range writers {
+				if !seen[w.UserID] {
+					seen[w.UserID] = true
+					deduped = append(deduped, w)
+				}
+			}
+			writers = deduped
+		}
+	}
+
+	if len(writers) == 0 {
 		return "", files // fail-open
 	}
 

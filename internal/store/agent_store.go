@@ -3,10 +3,26 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 )
+
+// sanitizeToolCallPrefix strips characters not in [a-z0-9_{}] from the prefix.
+// This matches the UI-side regex and prevents injection via direct API calls.
+func sanitizeToolCallPrefix(s string) string {
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '{' || r == '}' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
 
 // Agent type constants.
 const (
@@ -25,7 +41,8 @@ const (
 // AgentData represents an agent in the database.
 type AgentData struct {
 	BaseModel
-	AgentKey            string `json:"agent_key"`
+	TenantID            uuid.UUID `json:"tenant_id"`
+	AgentKey            string    `json:"agent_key"`
 	DisplayName         string `json:"display_name,omitempty"`
 	Frontmatter         string `json:"frontmatter,omitempty"` // short expertise summary (NOT other_config.description which is the summoning prompt)
 	OwnerID             string `json:"owner_id"`
@@ -61,6 +78,20 @@ func (a *AgentData) ParseToolsConfig() *config.ToolPolicySpec {
 	if json.Unmarshal(a.ToolsConfig, &c) != nil {
 		return nil
 	}
+	// Backward compat: migrate old "toolPrefix" key to "toolCallPrefix"
+	if c.ToolCallPrefix == "" {
+		var raw map[string]json.RawMessage
+		if json.Unmarshal(a.ToolsConfig, &raw) == nil {
+			if v, ok := raw["toolPrefix"]; ok {
+				var s string
+				if json.Unmarshal(v, &s) == nil && s != "" {
+					c.ToolCallPrefix = s
+				}
+			}
+		}
+	}
+	// Sanitize: only allow [a-z0-9_{}] to prevent injection via API bypass.
+	c.ToolCallPrefix = sanitizeToolCallPrefix(c.ToolCallPrefix)
 	return &c
 }
 
@@ -211,7 +242,8 @@ type WorkspaceSharingConfig struct {
 	SharedDM    bool     `json:"shared_dm"`
 	SharedGroup bool     `json:"shared_group"`
 	SharedUsers []string `json:"shared_users,omitempty"`
-	ShareMemory bool     `json:"share_memory"`
+	ShareMemory         bool `json:"share_memory"`
+	ShareKnowledgeGraph bool `json:"share_knowledge_graph"`
 }
 
 // ParseWorkspaceSharing extracts workspace_sharing from other_config JSONB.
@@ -226,7 +258,7 @@ func (a *AgentData) ParseWorkspaceSharing() *WorkspaceSharingConfig {
 	if json.Unmarshal(a.OtherConfig, &cfg) != nil || cfg.WS == nil {
 		return nil
 	}
-	if !cfg.WS.SharedDM && !cfg.WS.SharedGroup && len(cfg.WS.SharedUsers) == 0 && !cfg.WS.ShareMemory {
+	if !cfg.WS.SharedDM && !cfg.WS.SharedGroup && len(cfg.WS.SharedUsers) == 0 && !cfg.WS.ShareMemory && !cfg.WS.ShareKnowledgeGraph {
 		return nil
 	}
 	return cfg.WS
@@ -279,40 +311,56 @@ type UserAgentOverrideData struct {
 	Model    string    `json:"model,omitempty"`
 }
 
-// AgentStore manages agents and access control.
-type AgentStore interface {
+// AgentCRUDStore manages core agent CRUD operations.
+type AgentCRUDStore interface {
 	Create(ctx context.Context, agent *AgentData) error
 	GetByKey(ctx context.Context, agentKey string) (*AgentData, error)
 	GetByID(ctx context.Context, id uuid.UUID) (*AgentData, error)
+	GetByIDUnscoped(ctx context.Context, id uuid.UUID) (*AgentData, error)
+	GetByKeys(ctx context.Context, keys []string) ([]AgentData, error)
+	GetByIDs(ctx context.Context, ids []uuid.UUID) ([]AgentData, error)
 	Update(ctx context.Context, id uuid.UUID, updates map[string]any) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, ownerID string) ([]AgentData, error)
 	GetDefault(ctx context.Context) (*AgentData, error) // agent with is_default=true, or first available
+}
 
-	// Access control
+// AgentAccessStore manages agent sharing and access control.
+type AgentAccessStore interface {
 	ShareAgent(ctx context.Context, agentID uuid.UUID, userID, role, grantedBy string) error
 	RevokeShare(ctx context.Context, agentID uuid.UUID, userID string) error
 	ListShares(ctx context.Context, agentID uuid.UUID) ([]AgentShareData, error)
 	CanAccess(ctx context.Context, agentID uuid.UUID, userID string) (bool, string, error) // (allowed, role, err)
 	ListAccessible(ctx context.Context, userID string) ([]AgentData, error)
+}
 
-	// Agent-level context files
+// AgentContextStore manages agent-level and per-user context files and overrides.
+type AgentContextStore interface {
 	GetAgentContextFiles(ctx context.Context, agentID uuid.UUID) ([]AgentContextFileData, error)
 	SetAgentContextFile(ctx context.Context, agentID uuid.UUID, fileName, content string) error
-
-	// Per-user context files + overrides
+	PropagateContextFile(ctx context.Context, agentID uuid.UUID, fileName string) (int, error)
 	GetUserContextFiles(ctx context.Context, agentID uuid.UUID, userID string) ([]UserContextFileData, error)
 	SetUserContextFile(ctx context.Context, agentID uuid.UUID, userID, fileName, content string) error
 	DeleteUserContextFile(ctx context.Context, agentID uuid.UUID, userID, fileName string) error
 	GetUserOverride(ctx context.Context, agentID uuid.UUID, userID string) (*UserAgentOverrideData, error)
 	SetUserOverride(ctx context.Context, override *UserAgentOverrideData) error
+}
 
-	// User-agent profiles + instances
+// AgentProfileStore manages user-agent profiles and instances.
+type AgentProfileStore interface {
 	GetOrCreateUserProfile(ctx context.Context, agentID uuid.UUID, userID, workspace, channel string) (isNew bool, effectiveWorkspace string, err error)
 	EnsureUserProfile(ctx context.Context, agentID uuid.UUID, userID string) error
 	ListUserInstances(ctx context.Context, agentID uuid.UUID) ([]UserInstanceData, error)
 	UpdateUserProfileMetadata(ctx context.Context, agentID uuid.UUID, userID string, metadata map[string]string) error
+}
 
+// AgentStore composes all agent sub-interfaces for backward compatibility.
+// New code should depend on the specific sub-interface it needs.
+type AgentStore interface {
+	AgentCRUDStore
+	AgentAccessStore
+	AgentContextStore
+	AgentProfileStore
 }
 
 // UserInstanceData represents a user instance for a predefined agent.

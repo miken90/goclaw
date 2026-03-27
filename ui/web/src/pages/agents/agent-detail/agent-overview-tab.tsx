@@ -10,6 +10,7 @@ import { SkillsSection } from "./overview-sections/skills-section";
 import { EvolutionSection } from "./overview-sections/evolution-section";
 import { CapabilitiesSection } from "./overview-sections/capabilities-section";
 import { HeartbeatCard } from "./overview-sections/heartbeat-card";
+import { MemorySection } from "./config-sections";
 import type { UseAgentHeartbeatReturn } from "../hooks/use-agent-heartbeat";
 
 interface AgentOverviewTabProps {
@@ -45,9 +46,10 @@ export function AgentOverviewTab({ agent, onUpdate, heartbeat }: AgentOverviewTa
     typeof otherCfg.skill_nudge_interval === "number" ? otherCfg.skill_nudge_interval : 15,
   );
 
-  // Capabilities
-  const [memEnabled, setMemEnabled] = useState(agent.memory_config != null);
+  // Memory (always shown — per-agent overrides, empty = use system defaults)
   const [mem, setMem] = useState<MemoryConfig>(agent.memory_config ?? {});
+
+  // Capabilities (subagents + tool policy)
   const [subEnabled, setSubEnabled] = useState(agent.subagents_config != null);
   const [sub, setSub] = useState<SubagentsConfig>(agent.subagents_config ?? {});
   const [toolsEnabled, setToolsEnabled] = useState(agent.tools_config != null);
@@ -55,14 +57,10 @@ export function AgentOverviewTab({ agent, onUpdate, heartbeat }: AgentOverviewTa
 
   // Save state
   const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
   const [llmSaveBlocked, setLlmSaveBlocked] = useState(false);
 
   const handleSave = async () => {
     setSaving(true);
-    setSaveError(null);
-    setSaved(false);
     try {
       const updatedOtherConfig = {
         ...otherCfg,
@@ -83,16 +81,14 @@ export function AgentOverviewTab({ agent, onUpdate, heartbeat }: AgentOverviewTa
         is_default: isDefault,
         other_config: updatedOtherConfig,
         budget_monthly_cents: budgetCents,
-        memory_config: memEnabled ? mem : null,
+        memory_config: mem,
         subagents_config: subEnabled ? sub : null,
         tools_config: toolsEnabled
           ? { profile: tools.profile, allow: tools.allow, deny: tools.deny, alsoAllow: tools.alsoAllow, byProvider: tools.byProvider }
           : {},
       });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
-    } catch (err) {
-      setSaveError(err instanceof Error ? err.message : t("general.failedToSave"));
+    } catch {
+      // toast shown by hook
     } finally {
       setSaving(false);
     }
@@ -130,6 +126,12 @@ export function AgentOverviewTab({ agent, onUpdate, heartbeat }: AgentOverviewTa
         onSaveBlockedChange={setLlmSaveBlocked}
       />
 
+      {/* Memory — always visible, per-agent overrides */}
+      <MemorySection
+        value={mem}
+        onChange={setMem}
+      />
+
       <HeartbeatCard heartbeat={heartbeat} />
 
       <SkillsSection agentId={agent.id} />
@@ -146,10 +148,6 @@ export function AgentOverviewTab({ agent, onUpdate, heartbeat }: AgentOverviewTa
       )}
 
       <CapabilitiesSection
-        memEnabled={memEnabled}
-        mem={mem}
-        onMemToggle={setMemEnabled}
-        onMemChange={setMem}
         subEnabled={subEnabled}
         sub={sub}
         onSubToggle={setSubEnabled}
@@ -163,12 +161,9 @@ export function AgentOverviewTab({ agent, onUpdate, heartbeat }: AgentOverviewTa
       <StickySaveBar
         onSave={handleSave}
         saving={saving}
-        saved={saved}
-        error={saveError}
         disabled={llmSaveBlocked}
         label={t("general.saveChanges")}
         savingLabel={t("general.saving")}
-        savedLabel={t("general.saved")}
       />
     </div>
   );

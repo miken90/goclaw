@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
+	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/i18n"
 	"github.com/nextlevelbuilder/goclaw/internal/oauth"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
@@ -20,24 +21,29 @@ import (
 type ProvidersHandler struct {
 	store           store.ProviderStore
 	secretStore     store.ConfigSecretsStore
-	token           string
 	providerReg     *providers.Registry
 	gatewayAddr     string                         // for injecting MCP bridge into Claude CLI providers
 	mcpLookup       providers.MCPServerLookup       // optional: resolves per-agent MCP servers
 	apiBaseFallback func(providerType string) string // optional: config/env fallback for api_base
 	cliMu           sync.Mutex                      // serializes Claude CLI provider create to prevent duplicates
 	msgBus          *bus.MessageBus
+	sysConfigStore  store.SystemConfigStore
 }
 
 // NewProvidersHandler creates a handler for provider management endpoints.
-func NewProvidersHandler(s store.ProviderStore, secretStore store.ConfigSecretsStore, token string, providerReg *providers.Registry, gatewayAddr string) *ProvidersHandler {
-	return &ProvidersHandler{store: s, secretStore: secretStore, token: token, providerReg: providerReg, gatewayAddr: gatewayAddr}
+func NewProvidersHandler(s store.ProviderStore, secretStore store.ConfigSecretsStore, providerReg *providers.Registry, gatewayAddr string) *ProvidersHandler {
+	return &ProvidersHandler{store: s, secretStore: secretStore, providerReg: providerReg, gatewayAddr: gatewayAddr}
 }
 
 // SetMessageBus sets the message bus for audit event broadcasting.
 // Must be called before serving requests (not thread-safe).
 func (h *ProvidersHandler) SetMessageBus(msgBus *bus.MessageBus) {
 	h.msgBus = msgBus
+}
+
+// SetSystemConfigStore sets the system config store for embedding status checks.
+func (h *ProvidersHandler) SetSystemConfigStore(s store.SystemConfigStore) {
+	h.sysConfigStore = s
 }
 
 // SetMCPServerLookup sets the per-agent MCP server lookup for Claude CLI providers.
@@ -89,13 +95,17 @@ func (h *ProvidersHandler) RegisterRoutes(mux *http.ServeMux) {
 
 	// Provider + model verification (pre-flight check)
 	mux.HandleFunc("POST /v1/providers/{id}/verify", h.auth(h.handleVerifyProvider))
+	mux.HandleFunc("POST /v1/providers/{id}/verify-embedding", h.auth(h.handleVerifyEmbedding))
+
+	// Embedding system status
+	mux.HandleFunc("GET /v1/embedding/status", h.auth(h.handleEmbeddingStatus))
 
 	// Claude CLI auth status (global — not per-provider)
 	mux.HandleFunc("GET /v1/providers/claude-cli/auth-status", h.auth(h.handleClaudeCLIAuthStatus))
 }
 
 func (h *ProvidersHandler) auth(next http.HandlerFunc) http.HandlerFunc {
-	return requireAuth(h.token, "", next)
+	return requireAuth("", next)
 }
 
 // maskAPIKey replaces non-empty API keys with "***".
@@ -125,11 +135,21 @@ func (h *ProvidersHandler) registerInMemory(p *store.LLMProviderData) {
 		var cliOpts []providers.ClaudeCLIOption
 		cliOpts = append(cliOpts, providers.WithClaudeCLISecurityHooks("", true))
 		if h.gatewayAddr != "" {
-			mcpData := providers.BuildCLIMCPConfigData(nil, h.gatewayAddr, h.token)
+			mcpData := providers.BuildCLIMCPConfigData(nil, h.gatewayAddr, pkgGatewayToken)
 			mcpData.AgentMCPLookup = h.mcpLookup
 			cliOpts = append(cliOpts, providers.WithClaudeCLIMCPConfigData(mcpData))
 		}
-		h.providerReg.Register(providers.NewClaudeCLIProvider(cliPath, cliOpts...))
+		h.providerReg.RegisterForTenant(p.TenantID, providers.NewClaudeCLIProvider(cliPath, cliOpts...))
+		return
+	}
+	// Ollama doesn't need an API key — handle before the key guard (same as startup).
+	// In Docker, swap localhost → host.docker.internal so the container can reach the host.
+	if p.ProviderType == store.ProviderOllama {
+		host := p.APIBase
+		if host == "" {
+			host = "http://localhost:11434"
+		}
+		h.providerReg.RegisterForTenant(p.TenantID, providers.NewOpenAIProvider(p.Name, "ollama", config.DockerLocalhost(host+"/v1"), "llama3.3"))
 		return
 	}
 	if p.APIKey == "" {
@@ -138,25 +158,25 @@ func (h *ProvidersHandler) registerInMemory(p *store.LLMProviderData) {
 	apiBase := h.resolveAPIBase(p)
 	switch p.ProviderType {
 	case store.ProviderChatGPTOAuth:
-		ts := oauth.NewDBTokenSource(h.store, h.secretStore, p.Name)
-		h.providerReg.Register(providers.NewCodexProvider(p.Name, ts, apiBase, ""))
+		ts := oauth.NewDBTokenSource(h.store, h.secretStore, p.Name).WithTenantID(p.TenantID)
+		h.providerReg.RegisterForTenant(p.TenantID, providers.NewCodexProvider(p.Name, ts, apiBase, ""))
 	case store.ProviderAnthropicNative:
-		h.providerReg.Register(providers.NewAnthropicProvider(p.APIKey,
+		h.providerReg.RegisterForTenant(p.TenantID, providers.NewAnthropicProvider(p.APIKey,
 			providers.WithAnthropicBaseURL(apiBase)))
 	case store.ProviderDashScope:
-		h.providerReg.Register(providers.NewDashScopeProvider(p.Name, p.APIKey, apiBase, ""))
+		h.providerReg.RegisterForTenant(p.TenantID, providers.NewDashScopeProvider(p.Name, p.APIKey, apiBase, ""))
 	case store.ProviderBailian:
 		base := apiBase
 		if base == "" {
 			base = "https://coding-intl.dashscope.aliyuncs.com/v1"
 		}
-		h.providerReg.Register(providers.NewOpenAIProvider(p.Name, p.APIKey, base, "qwen3.5-plus"))
+		h.providerReg.RegisterForTenant(p.TenantID, providers.NewOpenAIProvider(p.Name, p.APIKey, base, "qwen3.5-plus"))
 	default:
 		prov := providers.NewOpenAIProvider(p.Name, p.APIKey, apiBase, "")
 		if p.ProviderType == store.ProviderMiniMax {
 			prov.WithChatPath("/text/chatcompletion_v2")
 		}
-		h.providerReg.Register(prov)
+		h.providerReg.RegisterForTenant(p.TenantID, prov)
 	}
 }
 
@@ -311,10 +331,10 @@ func (h *ProvidersHandler) handleUpdateProvider(w http.ResponseWriter, r *http.R
 		if updated, err := h.store.GetProvider(r.Context(), id); err == nil {
 			// Unregister old name if renamed to prevent ghost entries
 			if oldName != "" && oldName != updated.Name {
-				h.providerReg.Unregister(oldName)
+				h.providerReg.UnregisterForTenant(updated.TenantID, oldName)
 			}
 			if !updated.Enabled {
-				h.providerReg.Unregister(updated.Name)
+				h.providerReg.UnregisterForTenant(updated.TenantID, updated.Name)
 			} else {
 				h.registerInMemory(updated)
 			}
@@ -341,10 +361,12 @@ func (h *ProvidersHandler) handleDeleteProvider(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// Read provider name before deleting so we can unregister it
+	// Read provider before deleting so we can unregister it
 	var providerName string
+	var providerTenantID uuid.UUID
 	if p, err := h.store.GetProvider(r.Context(), id); err == nil {
 		providerName = p.Name
+		providerTenantID = p.TenantID
 	}
 
 	if err := h.store.DeleteProvider(r.Context(), id); err != nil {
@@ -354,7 +376,7 @@ func (h *ProvidersHandler) handleDeleteProvider(w http.ResponseWriter, r *http.R
 	}
 
 	if h.providerReg != nil && providerName != "" {
-		h.providerReg.Unregister(providerName)
+		h.providerReg.UnregisterForTenant(providerTenantID, providerName)
 	}
 	if providerName != "" {
 		h.emitProviderCacheInvalidate(providerName)

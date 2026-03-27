@@ -24,6 +24,7 @@ type telegramInstanceConfig struct {
 	DMPolicy        string   `json:"dm_policy,omitempty"`
 	GroupPolicy     string   `json:"group_policy,omitempty"`
 	RequireMention  *bool    `json:"require_mention,omitempty"`
+	MentionMode     string   `json:"mention_mode,omitempty"`
 	HistoryLimit    int      `json:"history_limit,omitempty"`
 	DMStream        *bool    `json:"dm_stream,omitempty"`
 	GroupStream     *bool    `json:"group_stream,omitempty"`
@@ -34,6 +35,7 @@ type telegramInstanceConfig struct {
 	MediaMaxBytes   int64    `json:"media_max_bytes,omitempty"` // deprecated: use media_max_mb
 	LinkPreview     *bool    `json:"link_preview,omitempty"`
 	BlockReply      *bool    `json:"block_reply,omitempty"`
+	ForceIPv4       bool     `json:"force_ipv4,omitempty"`
 	AllowFrom       []string `json:"allow_from,omitempty"`
 }
 
@@ -90,6 +92,7 @@ func buildChannel(name string, creds json.RawMessage, cfg json.RawMessage,
 		DMPolicy:       ic.DMPolicy,
 		GroupPolicy:    ic.GroupPolicy,
 		RequireMention: ic.RequireMention,
+		MentionMode:    ic.MentionMode,
 		HistoryLimit:   ic.HistoryLimit,
 		DMStream:        ic.DMStream,
 		GroupStream:     ic.GroupStream,
@@ -99,6 +102,7 @@ func buildChannel(name string, creds json.RawMessage, cfg json.RawMessage,
 		MediaMaxBytes:  resolveMediaMaxBytes(ic),
 		LinkPreview:    ic.LinkPreview,
 		BlockReply:     ic.BlockReply,
+		ForceIPv4:      ic.ForceIPv4,
 	}
 
 	// DB instances default to "pairing" for groups (secure by default).

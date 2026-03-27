@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mymmrac/telego"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
@@ -24,6 +26,8 @@ type Channel struct {
 	bot              *telego.Bot
 	config           config.TelegramConfig
 	httpClient       *http.Client
+	transport        *http.Transport
+	ipv4Once         sync.Once          // guards enableIPv4Only to prevent data race
 	pairingService   store.PairingStore
 	agentStore      store.AgentStore              // for agent key lookup (nil if not configured)
 	configPermStore store.ConfigPermissionStore   // for group file writer management (nil if not configured)
@@ -38,8 +42,12 @@ type Channel struct {
 	groupHistory     *channels.PendingHistory
 	historyLimit     int
 	requireMention   bool
+	mentionMode      string // "strict" (default) or "yield"
 	pollCancel       context.CancelFunc // cancels the long polling context
 	pollDone         chan struct{}       // closed when polling goroutine exits
+	handlerWg        sync.WaitGroup     // tracks in-flight handler goroutines for graceful shutdown
+	handlerSem       chan struct{}       // bounded semaphore for concurrent handler goroutines
+	pendingDraftID   sync.Map           // localKey string → int (draftID)
 }
 
 type thinkingCancel struct {
@@ -64,19 +72,29 @@ func New(cfg config.TelegramConfig, msgBus *bus.MessageBus, pairingSvc store.Pai
 		opts = append(opts, telego.WithAPIServer(cfg.APIServer))
 	}
 
-	httpClient := &http.Client{
-		Timeout: 30 * time.Second,
-	}
+	// Isolate transport per account: prevents cross-bot connection pool contention
+	// and allows per-account IPv4 fallback without affecting other bots.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConnsPerHost = 64 // default 2 is too low for high-concurrency bots
 
 	if cfg.Proxy != "" {
 		proxyURL, parseErr := url.Parse(cfg.Proxy)
 		if parseErr != nil {
 			return nil, fmt.Errorf("invalid proxy URL %q: %w", cfg.Proxy, parseErr)
 		}
-		transport := http.DefaultTransport.(*http.Transport).Clone()
 		transport.Proxy = http.ProxyURL(proxyURL)
-		httpClient.Transport = transport
 	}
+
+	httpClient := &http.Client{
+		Timeout:   60 * time.Second, // Must exceed getUpdates Timeout to avoid long-poll race (#361)
+		Transport: transport,
+	}
+	// Apply ForceIPv4 at init if configured (explicit, predictable, no runtime heuristic).
+	if cfg.ForceIPv4 {
+		applyIPv4Dialer(transport)
+		slog.Info("telegram: forced IPv4 for account via config")
+	}
+
 	opts = append(opts, telego.WithHTTPClient(httpClient))
 
 	bot, err := telego.NewBot(cfg.Token, opts...)
@@ -97,18 +115,29 @@ func New(cfg config.TelegramConfig, msgBus *bus.MessageBus, pairingSvc store.Pai
 		historyLimit = channels.DefaultGroupHistoryLimit
 	}
 
+	mentionMode := cfg.MentionMode
+	if mentionMode == "" {
+		mentionMode = "strict"
+	}
+	if mentionMode != "strict" && mentionMode != "yield" {
+		slog.Warn("telegram: unknown mention_mode, defaulting to strict", "value", mentionMode)
+		mentionMode = "strict"
+	}
+
 	return &Channel{
 		BaseChannel:     base,
 		bot:             bot,
 		config:          cfg,
 		httpClient:      httpClient,
+		transport:       transport,
 		pairingService:  pairingSvc,
 		agentStore:      agentStore,
 		configPermStore: configPermStore,
 		teamStore:       teamStore,
-		groupHistory:    channels.MakeHistory(channels.TypeTelegram, pendingStore),
+		groupHistory:    channels.MakeHistory(channels.TypeTelegram, pendingStore, base.TenantID()),
 		historyLimit:    historyLimit,
 		requireMention:  requireMention,
+		mentionMode:     mentionMode,
 	}, nil
 }
 
@@ -123,7 +152,7 @@ func (c *Channel) Start(ctx context.Context) error {
 	c.pollDone = make(chan struct{})
 
 	updates, err := c.bot.UpdatesViaLongPolling(pollCtx, &telego.GetUpdatesParams{
-		Timeout: 30,
+		Timeout: 25, // Long-poll seconds; keep below HTTP client Timeout (#361)
 		AllowedUpdates: []string{
 			"message",
 			"edited_message",
@@ -138,17 +167,21 @@ func (c *Channel) Start(ctx context.Context) error {
 
 	c.SetRunning(true)
 	c.groupHistory.StartFlusher()
+	c.handlerSem = make(chan struct{}, 20) // limit concurrent message handlers
 	slog.Info("telegram bot connected", "username", c.bot.Username())
 
 	// Register bot menu commands with retry.
 	go func() {
 		commands := DefaultMenuCommands()
+		syncCtx, cancel := context.WithTimeout(pollCtx, probeOverallTimeout)
+		defer cancel()
+
 		for attempt := 1; attempt <= 3; attempt++ {
-			if err := c.SyncMenuCommands(pollCtx, commands); err != nil {
+			if err := c.SyncMenuCommands(syncCtx, commands); err != nil {
 				slog.Warn("failed to sync telegram menu commands", "error", err, "attempt", attempt)
 				if attempt < 3 {
 					select {
-					case <-pollCtx.Done():
+					case <-syncCtx.Done():
 						return
 					case <-time.After(time.Duration(attempt*5) * time.Second):
 					}
@@ -172,9 +205,29 @@ func (c *Channel) Start(ctx context.Context) error {
 					return
 				}
 				if update.Message != nil {
-					c.handleMessage(pollCtx, update)
+					select {
+					case c.handlerSem <- struct{}{}:
+						c.handlerWg.Add(1)
+						go func(u telego.Update) {
+							defer c.handlerWg.Done()
+							defer func() { <-c.handlerSem }()
+							c.handleMessage(pollCtx, u)
+						}(update)
+					case <-pollCtx.Done():
+						return
+					}
 				} else if update.CallbackQuery != nil {
-					c.handleCallbackQuery(pollCtx, update.CallbackQuery)
+					select {
+					case c.handlerSem <- struct{}{}:
+						c.handlerWg.Add(1)
+						go func(q *telego.CallbackQuery) {
+							defer c.handlerWg.Done()
+							defer func() { <-c.handlerSem }()
+							c.handleCallbackQuery(pollCtx, q)
+						}(update.CallbackQuery)
+					case <-pollCtx.Done():
+						return
+					}
 				} else {
 					// Log non-message updates for delivery diagnostics
 					updateType := "unknown"
@@ -237,6 +290,9 @@ func (c *Channel) SetPendingCompaction(cfg *channels.CompactionConfig) {
 	c.groupHistory.SetCompactionConfig(cfg)
 }
 
+// SetPendingHistoryTenantID propagates tenant_id to the pending history for DB operations.
+func (c *Channel) SetPendingHistoryTenantID(id uuid.UUID) { c.groupHistory.SetTenantID(id) }
+
 // Stop shuts down the Telegram bot by cancelling the long polling context
 // and waiting for the polling goroutine to exit.
 func (c *Channel) Stop(_ context.Context) error {
@@ -253,13 +309,51 @@ func (c *Channel) Stop(_ context.Context) error {
 	if c.pollDone != nil {
 		select {
 		case <-c.pollDone:
-			slog.Info("telegram bot stopped")
+			slog.Info("telegram polling goroutine stopped")
 		case <-time.After(10 * time.Second):
 			slog.Warn("telegram polling goroutine did not exit within timeout")
 		}
 	}
 
+	// Wait for in-flight handler goroutines to finish processing.
+	handlerDone := make(chan struct{})
+	go func() {
+		c.handlerWg.Wait()
+		close(handlerDone)
+	}()
+	select {
+	case <-handlerDone:
+		slog.Info("telegram bot stopped")
+	case <-time.After(15 * time.Second):
+		slog.Warn("telegram handler goroutines did not drain within timeout")
+	}
 	return nil
+}
+
+// applyIPv4Dialer forces a transport to use IPv4 only by overriding DialContext.
+func applyIPv4Dialer(t *http.Transport) {
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+	t.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if network == "tcp" {
+			network = "tcp4"
+		}
+		return dialer.DialContext(ctx, network, addr)
+	}
+}
+
+// enableIPv4Only forces the bot's transport to use IPv4 only for all future
+// requests. Safe to call from multiple goroutines concurrently (uses sync.Once).
+func (c *Channel) enableIPv4Only() {
+	if c == nil || c.transport == nil {
+		return
+	}
+	c.ipv4Once.Do(func() {
+		applyIPv4Dialer(c.transport)
+		slog.Info("telegram: enabled sticky IPv4 fallback", "bot", c.bot.Username())
+	})
 }
 
 // parseChatID converts a string chat ID to int64.

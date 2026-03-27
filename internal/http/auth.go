@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/crypto"
 	"github.com/nextlevelbuilder/goclaw/internal/i18n"
@@ -75,8 +76,17 @@ func extractAgentID(r *http.Request, model string) string {
 
 // --- Package-level API key cache for shared auth ---
 
+var pkgGatewayToken string
 var pkgAPIKeyCache *apiKeyCache
 var pkgPairingStore store.PairingStore
+var pkgTenantCache *tenantCache
+var pkgOwnerIDs []string
+
+// InitGatewayToken sets the gateway bearer token for HTTP auth.
+// Must be called once during server startup before handling requests.
+func InitGatewayToken(token string) {
+	pkgGatewayToken = token
+}
 
 // InitAPIKeyCache initializes the shared API key cache with TTL and pubsub invalidation.
 // Must be called once during server startup before handling requests.
@@ -97,6 +107,42 @@ func InitPairingAuth(ps store.PairingStore) {
 	pkgPairingStore = ps
 }
 
+// InitOwnerIDs sets the configured owner user IDs for HTTP auth.
+// Owners get RoleOwner with gateway token; others get RoleAdmin scoped to their tenant.
+func InitOwnerIDs(ids []string) {
+	pkgOwnerIDs = ids
+}
+
+// isHTTPOwnerID checks if the user ID is a configured owner.
+// If no owner IDs configured, only "system" is treated as owner (fail-closed).
+func isHTTPOwnerID(userID string, ownerIDs []string) bool {
+	if userID == "" {
+		return false
+	}
+	if len(ownerIDs) == 0 {
+		return userID == "system"
+	}
+	for _, id := range ownerIDs {
+		if id == userID {
+			return true
+		}
+	}
+	return false
+}
+
+// InitTenantStore sets the tenant cache for HTTP auth with TTL and pubsub invalidation.
+// Allows gateway token requests to scope to a specific tenant via X-GoClaw-Tenant-Id header.
+func InitTenantStore(ts store.TenantStore, mb *bus.MessageBus) {
+	pkgTenantCache = newTenantCache(ts, 5*time.Minute)
+	if mb != nil {
+		mb.Subscribe("http-tenant-cache", func(e bus.Event) {
+			if p, ok := e.Payload.(bus.CacheInvalidatePayload); ok && p.Kind == bus.CacheKindTenants {
+				pkgTenantCache.invalidateAll()
+			}
+		})
+	}
+}
+
 // ResolveAPIKey checks if the bearer token is a valid API key using the shared cache.
 // Returns the key data and derived role, or nil if not found/expired/revoked.
 func ResolveAPIKey(ctx context.Context, token string) (*store.APIKeyData, permissions.Role) {
@@ -111,30 +157,72 @@ func ResolveAPIKey(ctx context.Context, token string) (*store.APIKeyData, permis
 type authResult struct {
 	Role          permissions.Role
 	Authenticated bool
+	KeyData       *store.APIKeyData // non-nil when authenticated via API key
+	TenantID      uuid.UUID         // resolved tenant; always concrete after resolution
+	TenantSlug    string            // resolved tenant slug for filesystem paths
 }
 
 // resolveAuth determines the caller's role from the request.
 // Priority: gateway token → API key → no-auth fallback.
-func resolveAuth(r *http.Request, gatewayToken string) authResult {
-	return resolveAuthBearer(r, gatewayToken, extractBearerToken(r))
+func resolveAuth(r *http.Request) authResult {
+	return resolveAuthWithBearer(r, extractBearerToken(r))
 }
 
-// resolveAuthBearer is like resolveAuth but accepts a pre-extracted bearer token.
+// resolveAuthWithBearer is like resolveAuth but accepts a pre-extracted bearer token.
 // Useful for handlers that also accept tokens from query params.
-func resolveAuthBearer(r *http.Request, gatewayToken, bearer string) authResult {
+func resolveAuthWithBearer(r *http.Request, bearer string) authResult {
 	// Gateway token → admin
-	if gatewayToken != "" && tokenMatch(bearer, gatewayToken) {
-		return authResult{Role: permissions.RoleAdmin, Authenticated: true}
+	// Only owner IDs get cross-tenant access; others are tenant-scoped.
+	// If no owner IDs configured, all gateway token users get cross-tenant (backward compat).
+	if pkgGatewayToken != "" && tokenMatch(bearer, pkgGatewayToken) {
+		userID := extractUserID(r)
+		isOwner := isHTTPOwnerID(userID, pkgOwnerIDs)
+		role := permissions.RoleAdmin
+		if isOwner {
+			role = permissions.RoleOwner
+		}
+		res := authResult{Role: role, Authenticated: true}
+		tenantVal := r.Header.Get("X-GoClaw-Tenant-Id")
+		if pkgTenantCache != nil && tenantVal != "" {
+			// Resolve tenant from header (works for both owner and non-owner)
+			if tid, err := uuid.Parse(tenantVal); err == nil {
+				if t, err := pkgTenantCache.GetTenant(r.Context(), tid); err == nil && t != nil {
+					res.TenantID = t.ID
+					res.TenantSlug = t.Slug
+				}
+			} else if t, err := pkgTenantCache.GetTenantBySlug(r.Context(), tenantVal); err == nil && t != nil {
+				res.TenantID = t.ID
+				res.TenantSlug = t.Slug
+			}
+		}
+		if res.TenantID == uuid.Nil {
+			res.TenantID = store.MasterTenantID
+		}
+		return res
 	}
 	// API key → role from scopes
-	if _, role := ResolveAPIKey(r.Context(), bearer); role != "" {
-		return authResult{Role: role, Authenticated: true}
+	if keyData, role := ResolveAPIKey(r.Context(), bearer); role != "" {
+		res := authResult{Role: role, Authenticated: true, KeyData: keyData}
+		if keyData.TenantID == uuid.Nil {
+			// API key with no tenant → owner scope, default to master
+			res.Role = permissions.RoleOwner
+			res.TenantID = store.MasterTenantID
+		} else {
+			res.TenantID = keyData.TenantID
+			// Resolve tenant slug for filesystem path scoping.
+			if pkgTenantCache != nil {
+				if t, err := pkgTenantCache.GetTenant(r.Context(), keyData.TenantID); err == nil && t != nil {
+					res.TenantSlug = t.Slug
+				}
+			}
+		}
+		return res
 	}
 	// Browser pairing → operator (via X-GoClaw-Sender-Id header)
 	if senderID := r.Header.Get("X-GoClaw-Sender-Id"); senderID != "" && pkgPairingStore != nil {
-		paired, err := pkgPairingStore.IsPaired(senderID, "browser")
+		paired, err := pkgPairingStore.IsPaired(r.Context(), senderID, "browser")
 		if err == nil && paired {
-			return authResult{Role: permissions.RoleOperator, Authenticated: true}
+			return authResult{Role: permissions.RoleOperator, Authenticated: true, TenantID: store.MasterTenantID}
 		}
 		if err != nil {
 			slog.Warn("security.http_pairing_check_failed", "sender_id", senderID, "error", err)
@@ -143,8 +231,8 @@ func resolveAuthBearer(r *http.Request, gatewayToken, bearer string) authResult 
 		}
 	}
 	// No auth configured → admin (no token = dev/single-user mode, full access)
-	if gatewayToken == "" {
-		return authResult{Role: permissions.RoleAdmin, Authenticated: true}
+	if pkgGatewayToken == "" {
+		return authResult{Role: permissions.RoleAdmin, Authenticated: true, TenantID: store.MasterTenantID}
 	}
 	return authResult{}
 }
@@ -159,13 +247,48 @@ func httpMinRole(method string) permissions.Role {
 	}
 }
 
+// enrichContext injects locale, role, userID, and tenantID from authResult into ctx.
+// Used by requireAuth middleware and ServeHTTP handlers that do their own auth checks.
+func enrichContext(ctx context.Context, r *http.Request, auth authResult) context.Context {
+	ctx = store.WithLocale(ctx, extractLocale(r))
+	ctx = store.WithRole(ctx, string(auth.Role))
+	userID := extractUserID(r)
+	// If the API key has a bound owner, force user_id to owner regardless of header.
+	if auth.KeyData != nil && auth.KeyData.OwnerID != "" {
+		if userID != "" && userID != auth.KeyData.OwnerID {
+			slog.Warn("security.api_key_owner_override",
+				"header_user_id", userID,
+				"owner_id", auth.KeyData.OwnerID,
+			)
+		}
+		userID = auth.KeyData.OwnerID
+	}
+	if userID != "" {
+		ctx = store.WithUserID(ctx, userID)
+	}
+	tenantID := auth.TenantID
+	if tenantID == uuid.Nil {
+		tenantID = store.MasterTenantID
+	}
+	ctx = store.WithTenantID(ctx, tenantID)
+	if auth.TenantSlug != "" {
+		ctx = store.WithTenantSlug(ctx, auth.TenantSlug)
+	}
+	slog.Debug("security.http_auth_resolved",
+		"path", r.URL.Path,
+		"role", string(auth.Role),
+		"tenant_id", tenantID.String(),
+	)
+	return ctx
+}
+
 // requireAuth is a middleware that checks authentication and minimum role.
 // Pass "" for minRole to auto-detect from HTTP method (GET→Viewer, POST→Operator).
-// Injects locale and userID into request context.
-func requireAuth(token string, minRole permissions.Role, next http.HandlerFunc) http.HandlerFunc {
+// Injects locale, role, userID and tenantID into request context.
+func requireAuth(minRole permissions.Role, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		locale := extractLocale(r)
-		auth := resolveAuth(r, token)
+		auth := resolveAuth(r)
 
 		if !auth.Authenticated {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{
@@ -186,25 +309,23 @@ func requireAuth(token string, minRole permissions.Role, next http.HandlerFunc) 
 			return
 		}
 
-		ctx := store.WithLocale(r.Context(), locale)
-		if userID := extractUserID(r); userID != "" {
-			ctx = store.WithUserID(ctx, userID)
-		}
+		ctx := enrichContext(r.Context(), r, auth)
 		next(w, r.WithContext(ctx))
 	}
 }
 
 // requireAuthBearer is like requireAuth but accepts a pre-extracted bearer token.
 // Used by handlers that accept tokens from query params (files, media).
-func requireAuthBearer(token string, minRole permissions.Role, bearer string, w http.ResponseWriter, r *http.Request) bool {
+// Returns the authenticated request with user context applied (owner_id enforcement included).
+func requireAuthBearer(minRole permissions.Role, bearer string, w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
 	locale := extractLocale(r)
-	auth := resolveAuthBearer(r, token, bearer)
+	auth := resolveAuthWithBearer(r, bearer)
 
 	if !auth.Authenticated {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{
 			"error": i18n.T(locale, i18n.MsgUnauthorized),
 		})
-		return false
+		return r, false
 	}
 
 	required := minRole
@@ -216,9 +337,11 @@ func requireAuthBearer(token string, minRole permissions.Role, bearer string, w 
 		writeJSON(w, http.StatusForbidden, map[string]string{
 			"error": i18n.T(locale, i18n.MsgPermissionDenied, r.URL.Path),
 		})
-		return false
+		return r, false
 	}
-	return true
+
+	ctx := enrichContext(r.Context(), r, auth)
+	return r.WithContext(ctx), true
 }
 
 // extractLocale parses the Accept-Language header and returns a supported locale.

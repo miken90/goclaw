@@ -1,15 +1,19 @@
 import { useState, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Network } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/shared/empty-state";
 import { useAgents } from "@/pages/agents/hooks/use-agents";
+import { useEmbeddingStatus } from "@/hooks/use-embedding-status";
 import { useSessions } from "@/pages/sessions/hooks/use-sessions";
 import { parseSessionKey } from "@/lib/session-key";
 import { KGEntitiesTab } from "@/pages/memory/kg-entities-tab";
 
 export function KnowledgeGraphPage() {
   const { t } = useTranslation("memory");
+  const { t: to } = useTranslation("overview");
   const { agents } = useAgents();
+  const { status: embStatus } = useEmbeddingStatus();
   const [agentId, setAgentId] = useState("");
   const [userIdFilter, setUserIdFilter] = useState("");
 
@@ -43,13 +47,20 @@ export function KnowledgeGraphPage() {
       <div className="flex flex-wrap items-center gap-3">
         <div className="mr-auto">
           <h1 className="text-lg font-semibold">{t("kg.pageTitle")}</h1>
-          <p className="text-xs text-muted-foreground">{t("kg.pageDescription")}</p>
+          <p className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
+            {t("kg.pageDescription")}
+            {embStatus && (
+              <Badge variant={embStatus.configured ? "outline" : "secondary"} className="text-xs font-normal">
+                {embStatus.configured ? `${to("embedding.title")}: ${embStatus.model}` : `${to("embedding.title")}: ${to("embedding.notConfigured")}`}
+              </Badge>
+            )}
+          </p>
         </div>
         <select
           id="kg-agent"
           value={agentId}
           onChange={(e) => { setAgentId(e.target.value); setUserIdFilter(""); }}
-          className="h-8 rounded-md border bg-background px-2 text-sm"
+          className="h-8 rounded-md border bg-background px-2 text-base md:text-sm"
         >
           <option value="">{t("filters.selectAgent")}</option>
           {agents.map((a) => (
@@ -63,7 +74,7 @@ export function KnowledgeGraphPage() {
             id="kg-scope"
             value={userIdFilter}
             onChange={(e) => setUserIdFilter(e.target.value)}
-            className="h-8 rounded-md border bg-background px-2 text-sm max-w-[240px]"
+            className="h-8 rounded-md border bg-background px-2 text-base md:text-sm max-w-[240px]"
           >
             <option value="">{t("filters.allScope")}</option>
             {scopeOptions.map((o) => (
@@ -84,7 +95,7 @@ export function KnowledgeGraphPage() {
               <select
                 value={agentId}
                 onChange={(e) => { setAgentId(e.target.value); setUserIdFilter(""); }}
-                className="mt-2 h-9 rounded-md border bg-background px-3 text-sm"
+                className="mt-2 h-9 rounded-md border bg-background px-3 text-base md:text-sm"
               >
                 <option value="">{t("filters.selectAgent")}</option>
                 {agents.map((a) => (

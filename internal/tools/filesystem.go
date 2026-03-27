@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bootstrap"
 	"github.com/nextlevelbuilder/goclaw/internal/sandbox"
@@ -180,9 +179,15 @@ func (t *ReadFileTool) executeInSandbox(ctx context.Context, path, sandboxKey st
 		return ErrorResult(fmt.Sprintf("sandbox error: %v", err))
 	}
 
-	data, err := bridge.ReadFile(ctx, path)
+	containerCwd, cwdErr := SandboxCwd(ctx, t.workspace, sandbox.DefaultContainerWorkdir)
+	if cwdErr != nil {
+		return ErrorResult(fmt.Sprintf("sandbox path mapping: %v", cwdErr))
+	}
+	containerPath := ResolveSandboxPath(path, containerCwd)
+
+	data, err := bridge.ReadFile(ctx, containerPath)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("failed to read file: %v", err))
+		return ErrorResult(fmt.Sprintf("failed to read file: %v", err) + MaybeFsBridgeHint(err))
 	}
 
 	return SilentResult(data)
@@ -193,7 +198,7 @@ func (t *ReadFileTool) getFsBridge(ctx context.Context, sandboxKey string) (*san
 	if err != nil {
 		return nil, err
 	}
-	return sandbox.NewFsBridge(sb.ID(), "/workspace"), nil
+	return sandbox.NewFsBridge(sb.ID(), sandbox.DefaultContainerWorkdir), nil
 }
 
 // allowedWithTeamWorkspace returns the allowed prefixes with team workspace appended
@@ -422,49 +427,3 @@ func resolveThroughExistingAncestors(target string) (string, error) {
 	return filepath.Clean(target), nil
 }
 
-// hasMutableSymlinkParent checks if any component of the resolved path is a symlink
-// whose parent directory is writable by the current process. A writable parent means
-// the symlink could be replaced between path resolution and actual file operation
-// (TOCTOU symlink rebind attack).
-func hasMutableSymlinkParent(path string) bool {
-	clean := filepath.Clean(path)
-	components := strings.Split(clean, string(filepath.Separator))
-	current := string(filepath.Separator)
-	for _, comp := range components {
-		if comp == "" {
-			continue
-		}
-		current = filepath.Join(current, comp)
-		info, err := os.Lstat(current)
-		if err != nil {
-			break // non-existent — stop checking
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			// Symlink found — check if its parent dir is writable
-			parentDir := filepath.Dir(current)
-			if syscall.Access(parentDir, 0x2 /* W_OK */) == nil {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// checkHardlink rejects regular files with nlink > 1 (hardlink attack prevention).
-// Directories naturally have nlink > 1 and are exempt.
-func checkHardlink(path string) error {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return nil // non-existent files are OK — will fail at read/write
-	}
-	if info.IsDir() {
-		return nil
-	}
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-		if stat.Nlink > 1 {
-			slog.Warn("security.hardlink_rejected", "path", path, "nlink", stat.Nlink)
-			return fmt.Errorf("access denied: hardlinked file not allowed")
-		}
-	}
-	return nil
-}

@@ -73,6 +73,13 @@
     "disable": "禁用Skill",
     "disabled": "已禁用"
   },
+  "tenant": {
+    "enabled": "已启用",
+    "disabled": "已禁用",
+    "default": "默认",
+    "overrideHint": "此租户的技能覆盖设置",
+    "resetDefault": "恢复默认"
+  },
   "deps": {
     "rescan": "Rescan Deps",
     "rescanning": "Scanning...",
@@ -102,5 +109,14 @@
     "version": "版本：",
     "current": "（当前）",
     "noContent": "无可用内容。"
+  },
+  "toast": {
+    "updated": "技能已更新",
+    "updateFailed": "更新技能失败",
+    "deleted": "技能已删除",
+    "deleteFailed": "删除技能失败",
+    "rescanUpdated": "已更新 {{count}} 个技能",
+    "rescanNoChanges": "所有技能已是最新",
+    "rescanFailed": "重新扫描依赖失败"
   }
 }

@@ -4,8 +4,8 @@ package config
 // When a group accumulates more than Threshold pending messages, older messages are
 // summarized by an LLM and replaced with a compact summary, keeping KeepRecent raw messages.
 type PendingCompactionConfig struct {
-	Threshold  int    `json:"threshold,omitempty"`   // trigger compaction when entries exceed this (default 50)
-	KeepRecent int    `json:"keep_recent,omitempty"` // keep this many recent raw messages after compaction (default 15)
+	Threshold  int    `json:"threshold,omitempty"`   // trigger compaction when entries exceed this (default 200)
+	KeepRecent int    `json:"keep_recent,omitempty"` // keep this many recent raw messages after compaction (default 40)
 	MaxTokens  int    `json:"max_tokens,omitempty"`  // max output tokens for LLM summarization (default 4096)
 	Provider   string `json:"provider,omitempty"`    // LLM provider name (e.g. "openai"); empty = use agent's provider
 	Model      string `json:"model,omitempty"`       // model for summarization; empty = use agent's model
@@ -32,6 +32,7 @@ type TelegramConfig struct {
 	DMPolicy       string              `json:"dm_policy,omitempty"`       // "pairing" (default), "allowlist", "open", "disabled"
 	GroupPolicy    string              `json:"group_policy,omitempty"`    // "open" (default), "allowlist", "disabled"
 	RequireMention *bool               `json:"require_mention,omitempty"` // require @bot mention in groups (default true)
+	MentionMode    string              `json:"mention_mode,omitempty"`    // "strict" (default) = only respond when mentioned; "yield" = respond unless another bot is mentioned
 	HistoryLimit   int                 `json:"history_limit,omitempty"`   // max pending group messages for context (default 50, 0=disabled)
 	DMStream         *bool               `json:"dm_stream,omitempty"`          // enable streaming for DMs (default false) — edits placeholder progressively
 	GroupStream      *bool               `json:"group_stream,omitempty"`      // enable streaming for groups (default false) — sends new message, edits progressively
@@ -41,6 +42,7 @@ type TelegramConfig struct {
 	MediaMaxBytes  int64               `json:"media_max_bytes,omitempty"` // max media download size in bytes (default 20MB)
 	LinkPreview    *bool               `json:"link_preview,omitempty"`    // enable URL previews in messages (default true)
 	BlockReply     *bool               `json:"block_reply,omitempty"`     // override gateway block_reply (nil = inherit)
+	ForceIPv4      bool                `json:"force_ipv4,omitempty"`      // force IPv4 for all Telegram API requests (use when IPv6 routing is broken)
 
 	// Optional STT (Speech-to-Text) pipeline for voice/audio inbound messages.
 	// When stt_proxy_url is set, audio/voice messages are transcribed before being forwarded to the agent.
@@ -53,6 +55,12 @@ type TelegramConfig struct {
 	// agent instead of the default channel agent. Requires the named agent to exist in the config.
 	VoiceAgentID string `json:"voice_agent_id,omitempty"` // agent ID to route voice inbound to (e.g. "speaking-agent")
 
+	// Audio guard: intercept technical errors in voice agent replies and replace with friendly fallbacks.
+	// Only active when VoiceAgentID is set. Custom error markers replace built-in defaults when provided.
+	AudioGuardFallbackTranscript   string   `json:"audio_guard_fallback_transcript,omitempty"`    // fallback with %s for transcript (e.g. "I heard: \"%s\". Try again!")
+	AudioGuardFallbackNoTranscript string   `json:"audio_guard_fallback_no_transcript,omitempty"` // fallback when no transcript available
+	AudioGuardErrorMarkers         []string `json:"audio_guard_error_markers,omitempty"`          // custom error detection markers (replaces defaults)
+
 	// Per-group (and per-topic) overrides. Key is chat ID string (e.g. "-100123456") or "*" for wildcard.
 	// TS ref: channels.telegram.groups in src/config/types.telegram.ts.
 	Groups map[string]*TelegramGroupConfig `json:"groups,omitempty"`
@@ -63,6 +71,7 @@ type TelegramConfig struct {
 type TelegramGroupConfig struct {
 	GroupPolicy    string                          `json:"group_policy,omitempty"`    // override group policy for this group
 	RequireMention *bool                           `json:"require_mention,omitempty"` // override require_mention for this group
+	MentionMode    string                          `json:"mention_mode,omitempty"`    // override mention_mode for this group
 	AllowFrom      FlexibleStringSlice             `json:"allow_from,omitempty"`      // override allow_from for this group
 	Enabled        *bool                           `json:"enabled,omitempty"`         // disable bot for this group (default: true)
 	Skills         []string                        `json:"skills,omitempty"`          // skill whitelist (nil = all, [] = none)
@@ -76,6 +85,7 @@ type TelegramGroupConfig struct {
 // Matching TS TelegramTopicConfig in src/config/types.telegram.ts.
 type TelegramTopicConfig struct {
 	RequireMention *bool               `json:"require_mention,omitempty"`
+	MentionMode    string              `json:"mention_mode,omitempty"`
 	GroupPolicy    string              `json:"group_policy,omitempty"`
 	Skills         []string            `json:"skills,omitempty"`
 	Tools          []string            `json:"tools,omitempty"` // tool allow list (nil = inherit, supports "group:xxx")
@@ -387,9 +397,12 @@ type WebFetchPolicyConfig struct {
 
 // BrowserToolConfig controls the browser automation tool.
 type BrowserToolConfig struct {
-	Enabled   bool   `json:"enabled"`              // enable the browser tool (default false)
-	Headless  bool   `json:"headless,omitempty"`   // run Chrome in headless mode (ignored when RemoteURL is set)
-	RemoteURL string `json:"remote_url,omitempty"` // CDP endpoint for remote Chrome sidecar, e.g. "ws://chrome:9222"
+	Enabled         bool   `json:"enabled"`                    // enable the browser tool (default false)
+	Headless        bool   `json:"headless,omitempty"`         // run Chrome in headless mode (ignored when RemoteURL is set)
+	RemoteURL       string `json:"remote_url,omitempty"`       // CDP endpoint for remote Chrome sidecar, e.g. "ws://chrome:9222"
+	ActionTimeoutMs int    `json:"action_timeout_ms,omitempty"` // per-action timeout in ms (default 30000)
+	IdleTimeoutMs   int    `json:"idle_timeout_ms,omitempty"`   // idle page auto-close in ms (default 600000, 0=disabled)
+	MaxPages        int    `json:"max_pages,omitempty"`         // max open pages per tenant (default 5)
 }
 
 // ToolPolicySpec defines a tool policy at any level (global, per-agent, per-provider).
@@ -399,6 +412,7 @@ type ToolPolicySpec struct {
 	Deny       []string                   `json:"deny,omitempty"`
 	AlsoAllow  []string                   `json:"alsoAllow,omitempty"`
 	ByProvider map[string]*ToolPolicySpec `json:"byProvider,omitempty"`
+	ToolCallPrefix string `json:"toolCallPrefix,omitempty"` // prefix to strip from model's tool call names before registry lookup
 }
 
 type WebToolsConfig struct {

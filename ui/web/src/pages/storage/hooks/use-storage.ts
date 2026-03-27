@@ -1,5 +1,8 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useHttp } from "@/hooks/use-ws";
+import { toast } from "@/stores/use-toast-store";
+import i18next from "i18next";
+import { userFriendlyError } from "@/lib/error-utils";
 
 export interface StorageFile {
   path: string;
@@ -27,14 +30,14 @@ export function useStorage() {
   const [baseDir, setBaseDir] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const listFiles = useCallback(async () => {
-    setLoading(true);
+  const listFiles = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
     try {
       const res = await http.get<StorageListResponse>("/v1/storage/files");
       setFiles(res.files ?? []);
       setBaseDir(res.baseDir ?? "");
     } finally {
-      setLoading(false);
+      if (!opts?.silent) setLoading(false);
     }
   }, [http]);
 
@@ -54,9 +57,15 @@ export function useStorage() {
 
   const deleteFile = useCallback(
     async (path: string) => {
-      await http.delete<{ status: string }>(
-        `/v1/storage/files/${encodeURIComponent(path)}`,
-      );
+      try {
+        await http.delete<{ status: string }>(
+          `/v1/storage/files/${encodeURIComponent(path)}`,
+        );
+        toast.success(i18next.t("storage:toast.deleted"));
+      } catch (err) {
+        toast.error(i18next.t("storage:toast.deleteFailed"), userFriendlyError(err));
+        throw err;
+      }
     },
     [http],
   );

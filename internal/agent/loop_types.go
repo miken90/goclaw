@@ -40,6 +40,7 @@ type BootstrapCleanupFunc func(ctx context.Context, agentID uuid.UUID, userID st
 type Loop struct {
 	id            string
 	agentUUID     uuid.UUID // set for context propagation
+	tenantID      uuid.UUID // agent's owning tenant
 	agentType     string    // "open" or "predefined"
 	provider      providers.Provider
 	model         string
@@ -108,6 +109,9 @@ type Loop struct {
 	// Global builtin tool settings (from builtin_tools table)
 	builtinToolSettings tools.BuiltinToolSettings
 
+	// Per-tenant disabled tools (tool name → true means excluded from LLM)
+	disabledTools map[string]bool
+
 	// Thinking level for extended thinking support
 	thinkingLevel string
 
@@ -136,7 +140,10 @@ type Loop struct {
 
 	// Budget enforcement: monthly spending limit in cents (0 = unlimited)
 	budgetMonthlyCents int
-	tracingStore       store.TracingStore
+	tracingStore store.TracingStore
+
+	// Memory store for extractive memory fallback (writes directly when LLM flush fails)
+	memStore store.MemoryStore
 }
 
 // AgentEvent is emitted during agent execution for WS broadcasting.
@@ -153,10 +160,14 @@ type AgentEvent struct {
 	TeamTaskID    string `json:"teamTaskId,omitempty"`
 	ParentAgentID string `json:"parentAgentId,omitempty"`
 
-	// Routing context (helps WS clients filter by user/channel)
-	UserID  string `json:"userId,omitempty"`
-	Channel string `json:"channel,omitempty"`
-	ChatID  string `json:"chatId,omitempty"`
+	// Routing context (helps WS clients filter by user/channel/session)
+	UserID     string `json:"userId,omitempty"`
+	Channel    string `json:"channel,omitempty"`
+	ChatID     string `json:"chatId,omitempty"`
+	SessionKey string `json:"sessionKey,omitempty"`
+
+	// TenantID scopes this event to a specific tenant for filtering (not serialized).
+	TenantID uuid.UUID `json:"-"`
 }
 
 // LoopConfig configures a new Loop.
@@ -206,9 +217,10 @@ type LoopConfig struct {
 	// Shell deny group overrides (nil = all defaults)
 	ShellDenyGroups map[string]bool
 
-	// Agent UUID for context propagation to tools
+	// Agent UUID + tenant for context propagation to tools
 	AgentUUID uuid.UUID
-	AgentType string // "open" or "predefined"
+	TenantID  uuid.UUID // agent's owning tenant — injected into execution context
+	AgentType string    // "open" or "predefined"
 
 	// Per-user file seeding + dynamic context loading
 	EnsureUserFiles   EnsureUserFilesFunc
@@ -225,6 +237,9 @@ type LoopConfig struct {
 
 	// Global builtin tool settings (from builtin_tools table)
 	BuiltinToolSettings tools.BuiltinToolSettings
+
+	// Per-tenant disabled tools (tool name → true means excluded)
+	DisabledTools map[string]bool
 
 	// Thinking level: "off", "low", "medium", "high" (from agent other_config)
 	ThinkingLevel string
@@ -253,7 +268,10 @@ type LoopConfig struct {
 
 	// Budget enforcement
 	BudgetMonthlyCents int
-	TracingStore       store.TracingStore
+	TracingStore store.TracingStore
+
+	// Memory store for extractive memory fallback (writes directly when LLM flush fails)
+	MemoryStore store.MemoryStore
 }
 
 const defaultMaxTokens = config.DefaultMaxTokens
@@ -292,6 +310,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 	return &Loop{
 		id:                     cfg.ID,
 		agentUUID:              cfg.AgentUUID,
+		tenantID:               cfg.TenantID,
 		agentType:              cfg.AgentType,
 		provider:               cfg.Provider,
 		model:                  cfg.Model,
@@ -331,6 +350,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		injectionAction:        action,
 		maxMessageChars:        cfg.MaxMessageChars,
 		builtinToolSettings:    cfg.BuiltinToolSettings,
+		disabledTools:          cfg.DisabledTools,
 		thinkingLevel:          cfg.ThinkingLevel,
 		selfEvolve:             cfg.SelfEvolve,
 		skillEvolve:            cfg.SkillEvolve,
@@ -342,6 +362,7 @@ func NewLoop(cfg LoopConfig) *Loop {
 		modelPricing:           cfg.ModelPricing,
 		budgetMonthlyCents:     cfg.BudgetMonthlyCents,
 		tracingStore:           cfg.TracingStore,
+		memStore:               cfg.MemoryStore,
 	}
 }
 
@@ -413,5 +434,47 @@ type RunResult struct {
 type MediaResult struct {
 	Path        string `json:"path"`                   // local file path
 	ContentType string `json:"content_type,omitempty"` // MIME type
+	Size        int64  `json:"size,omitempty"`          // file size in bytes
 	AsVoice     bool   `json:"as_voice,omitempty"`     // send as voice message (Telegram OGG)
+}
+
+// runState encapsulates all mutable state for a single runLoop execution.
+// Grouping these fields enables extracting loop sub-operations into methods
+// on *runState without passing 20+ individual variables.
+type runState struct {
+	// Loop control
+	loopDetector toolLoopState
+	totalUsage   providers.Usage
+	iteration    int
+	totalToolCalls int
+
+	// Output accumulators
+	finalContent   string
+	finalThinking  string
+	asyncToolCalls []string    // async spawn tool names for fallback
+	mediaResults   []MediaResult
+	deliverables   []string   // tool output content for team task results
+	pendingMsgs    []providers.Message
+
+	// Event state
+	blockReplies   int
+	lastBlockReply string
+
+	// Crash safety
+	checkpointFlushedMsgs int
+
+	// Mid-loop compaction
+	midLoopCompacted bool
+
+	// Bootstrap detection
+	bootstrapWriteDetected bool
+
+	// Team task orphan detection
+	teamTaskCreates int
+	teamTaskSpawns  int
+
+	// Skill evolution nudge state
+	skillNudge70Sent    bool
+	skillNudge90Sent    bool
+	skillPostscriptSent bool
 }

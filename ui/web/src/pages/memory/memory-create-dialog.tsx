@@ -96,7 +96,7 @@ export function MemoryCreateDialog({ open, onOpenChange, agentId: parentAgentId,
 
   return (
     <Dialog open={open} onOpenChange={(v) => !loading && onOpenChange(v)}>
-      <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col">
+      <DialogContent aria-describedby={undefined} className="max-w-3xl max-h-[85vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>{t("createDialog.title")}</DialogTitle>
         </DialogHeader>
@@ -109,7 +109,7 @@ export function MemoryCreateDialog({ open, onOpenChange, agentId: parentAgentId,
               id="mc-agent"
               value={selectedAgentId || parentAgentId || ""}
               onChange={(e) => setSelectedAgentId(e.target.value)}
-              className="h-9 rounded-md border bg-background px-3 text-sm"
+              className="h-9 rounded-md border bg-background px-3 text-base md:text-sm"
             >
               <option value="">{t("createDialog.agentIdPlaceholder")}</option>
               {agents.map((a) => (
@@ -158,7 +158,7 @@ export function MemoryCreateDialog({ open, onOpenChange, agentId: parentAgentId,
               <select
                 value={selectedUserId}
                 onChange={(e) => setSelectedUserId(e.target.value)}
-                className="h-9 rounded-md border bg-background px-3 text-sm"
+                className="h-9 rounded-md border bg-background px-3 text-base md:text-sm"
               >
                 <option value="">{t("createDialog.selectGroupUser")}</option>
                 {knownUserIds.map((uid) => (

@@ -8,6 +8,7 @@ export interface ToolPolicyConfig {
   deny?: string[];
   alsoAllow?: string[];
   byProvider?: Record<string, { profile?: string; allow?: string[]; deny?: string[]; alsoAllow?: string[] }>;
+  toolCallPrefix?: string; // prefix to strip from model's tool call names
 }
 
 export interface SubagentsConfig {
@@ -63,8 +64,10 @@ export interface MemoryConfig {
   embedding_model?: string;
   max_results?: number;
   max_chunk_len?: number;
+  chunk_overlap?: number;
   vector_weight?: number;
   text_weight?: number;
+  min_score?: number;
 }
 
 export interface WorkspaceSharingConfig {
@@ -101,6 +104,7 @@ export interface AgentData {
   context_pruning?: ContextPruningConfig | null;
   other_config?: Record<string, unknown> | null;
   budget_monthly_cents?: number | null;
+  tenant_id?: string;
 }
 
 export interface AgentShareData {

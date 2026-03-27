@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Save, ChevronDown, ChevronRight, AlertCircle } from "lucide-react";
+import { Save, ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,13 +25,11 @@ export function AiDefaultsSection({ data, onSave, saving }: Props) {
   const { t } = useTranslation("config");
   const [draft, setDraft] = useState<AgentsData>(data ?? DEFAULT);
   const [dirty, setDirty] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
   const [openSubs, setOpenSubs] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     setDraft(data ?? DEFAULT);
     setDirty(false);
-    setSaveError(null);
   }, [data]);
 
   const defaults = draft.defaults ?? {};
@@ -182,6 +180,10 @@ export function AiDefaultsSection({ data, onSave, saving }: Props) {
             <Field label={t("agents.memory.maxResults")} tip={t("agents.memory.maxResultsTip")} type="number" value={memory.max_results} onChange={(v) => updateNested("memory", { max_results: Number(v) })} placeholder="6" />
             <Field label={t("agents.memory.minScore")} tip={t("agents.memory.minScoreTip")} type="number" step="0.01" value={memory.min_score} onChange={(v) => updateNested("memory", { min_score: Number(v) })} placeholder="0.35" />
           </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <Field label={t("agents.memory.maxChunkLen")} tip={t("agents.memory.maxChunkLenTip")} type="number" value={memory.max_chunk_len} onChange={(v) => updateNested("memory", { max_chunk_len: Number(v) })} placeholder="1000" />
+            <Field label={t("agents.memory.chunkOverlap")} tip={t("agents.memory.chunkOverlapTip")} type="number" value={memory.chunk_overlap} onChange={(v) => updateNested("memory", { chunk_overlap: Number(v) })} placeholder="200" />
+          </div>
         </SubSection>
 
         <SubSection
@@ -246,19 +248,13 @@ export function AiDefaultsSection({ data, onSave, saving }: Props) {
           </div>
         </SubSection>
 
-        {saveError && (
-          <div className="flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            <AlertCircle className="h-4 w-4 shrink-0" />
-            {saveError}
-          </div>
-        )}
         {dirty && (
           <div className="flex justify-end pt-2">
             <Button size="sm" onClick={async () => {
-              setSaveError(null);
-              try { await onSave(draft); } catch (err) { setSaveError(err instanceof Error ? err.message : t("agents.saveError")); }
+              try { await onSave(draft); } catch { /* toast shown by hook */ }
             }} disabled={saving} className="gap-1.5">
-              <Save className="h-3.5 w-3.5" /> {saving ? t("saving") : t("save")}
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+              {saving ? t("saving") : t("save")}
             </Button>
           </div>
         )}

@@ -73,6 +73,13 @@
     "disable": "Disable skill",
     "disabled": "Disabled"
   },
+  "tenant": {
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "default": "Default",
+    "overrideHint": "Per-tenant override for this skill",
+    "resetDefault": "Reset to default"
+  },
   "deps": {
     "rescan": "Rescan Deps",
     "rescanning": "Scanning...",
@@ -102,5 +109,14 @@
     "version": "Version:",
     "current": "(current)",
     "noContent": "No content available."
+  },
+  "toast": {
+    "updated": "Skill updated",
+    "updateFailed": "Failed to update skill",
+    "deleted": "Skill deleted",
+    "deleteFailed": "Failed to delete skill",
+    "rescanUpdated": "{{count}} skill(s) updated",
+    "rescanNoChanges": "All skills up to date",
+    "rescanFailed": "Failed to rescan dependencies"
   }
 }

@@ -21,10 +21,6 @@ export const queryKeys = {
     all: ["traces"] as const,
     list: (params: Record<string, unknown>) => ["traces", params] as const,
   },
-  customTools: {
-    all: ["customTools"] as const,
-    list: (params: Record<string, unknown>) => ["customTools", params] as const,
-  },
   cliCredentials: {
     all: ["cliCredentials"] as const,
   },
@@ -39,6 +35,7 @@ export const queryKeys = {
   contacts: {
     all: ["contacts"] as const,
     list: (params: Record<string, unknown>) => ["contacts", params] as const,
+    search: (params: Record<string, unknown>) => ["contacts", "search", params] as const,
     resolve: (ids: string) => ["contacts", "resolve", ids] as const,
   },
   skills: {
@@ -73,6 +70,14 @@ export const queryKeys = {
   packages: {
     all: ["packages"] as const,
     runtimes: ["packages", "runtimes"] as const,
+  },
+  tenantUsers: {
+    all: ["tenantUsers"] as const,
+  },
+  tenants: {
+    all: ["tenants"] as const,
+    detail: (tenantId: string) => ["tenants", tenantId] as const,
+    users: (tenantId: string) => ["tenants", tenantId, "users"] as const,
   },
   kg: {
     all: ["kg"] as const,

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"syscall"
@@ -19,6 +20,11 @@ import (
 )
 
 const socketPath = "/tmp/pkg.sock"
+
+// goclawGID is the group ID of the goclaw process.
+// Persist files and sockets are chowned to root:goclaw so the
+// unprivileged app process (uid 1000, gid 1000) can read them.
+const goclawGID = 1000
 
 // validPkgName allows alphanumeric, hyphens, underscores, dots, @, / (scoped npm).
 // Rejects names starting with - to prevent argument injection.
@@ -54,13 +60,16 @@ func main() {
 	// Chown requires CAP_CHOWN; if missing (misconfigured container), warn but continue
 	// since umask already set restrictive permissions.
 	if os.Getuid() == 0 {
-		if err := os.Chown(socketPath, 0, 1000); err != nil {
+		if err := os.Chown(socketPath, 0, goclawGID); err != nil {
 			slog.Warn("pkg-helper: chown socket failed (missing CAP_CHOWN?)", "error", err)
 		}
 	}
 	if err := os.Chmod(socketPath, 0660); err != nil {
 		slog.Warn("pkg-helper: chmod socket failed", "error", err)
 	}
+
+	// Ensure persist directory is writable by root (self-healing for upgrades).
+	ensurePersistDir()
 
 	// Graceful shutdown on SIGTERM/SIGINT.
 	sigCh := make(chan os.Signal, 1)
@@ -179,6 +188,10 @@ func persistAdd(pkg string) {
 		}
 	}
 
+	created := false
+	if _, err := os.Stat(listFile); os.IsNotExist(err) {
+		created = true
+	}
 	f, err := os.OpenFile(listFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0640)
 	if err != nil {
 		slog.Warn("pkg-helper: persist add failed", "error", err)
@@ -186,6 +199,12 @@ func persistAdd(pkg string) {
 	}
 	defer f.Close()
 	fmt.Fprintln(f, pkg)
+	// Ensure group ownership allows the goclaw process to read the file.
+	if created {
+		if err := os.Chown(listFile, 0, goclawGID); err != nil {
+			slog.Warn("pkg-helper: chown persist file failed", "file", listFile, "error", err)
+		}
+	}
 }
 
 // persistRemove removes a package name from the apk persist file.
@@ -213,6 +232,13 @@ func persistRemove(pkg string) {
 	if err := os.Rename(tmpFile, listFile); err != nil {
 		slog.Warn("pkg-helper: persist remove rename failed", "error", err)
 		os.Remove(tmpFile) //nolint:errcheck
+		return
+	}
+	// Restore group ownership so the goclaw process (gid 1000) can read the file.
+	// Without this, the renamed file inherits root:root from the temp file,
+	// causing ListInstalledPackages to return nil for system packages.
+	if err := os.Chown(listFile, 0, goclawGID); err != nil {
+		slog.Warn("pkg-helper: chown persist file failed", "file", listFile, "error", err)
 	}
 }
 
@@ -222,4 +248,30 @@ func apkListFile() string {
 		runtimeDir = "/app/data/.runtime"
 	}
 	return runtimeDir + "/apk-packages"
+}
+
+// ensurePersistDir ensures the apk persist file's parent directory is writable by root.
+// On existing volumes the directory may be goclaw-owned (from older images); fix ownership
+// using CAP_CHOWN so pkg-helper can create/write the persist file.
+func ensurePersistDir() {
+	dir := filepath.Dir(apkListFile())
+	fi, err := os.Stat(dir)
+	if err != nil {
+		// Directory doesn't exist — entrypoint should have created it.
+		return
+	}
+	if !fi.IsDir() {
+		return
+	}
+
+	// Try to fix ownership to root:goclaw (gid 1000) if not already root-owned.
+	// CAP_CHOWN is available even when CAP_DAC_OVERRIDE is dropped.
+	if stat, ok := fi.Sys().(*syscall.Stat_t); ok && stat.Uid != 0 {
+		if err := os.Chown(dir, 0, goclawGID); err != nil {
+			slog.Warn("pkg-helper: cannot fix persist dir ownership", "dir", dir, "error", err)
+		} else {
+			os.Chmod(dir, 0750) //nolint:errcheck
+			slog.Info("pkg-helper: fixed persist dir ownership", "dir", dir)
+		}
+	}
 }
