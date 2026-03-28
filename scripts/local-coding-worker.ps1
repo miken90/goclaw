@@ -1,4 +1,4 @@
-# GoClaw Local Coding Worker
+﻿# GoClaw Local Coding Worker
 # Polls VPS for coding tasks and executes them locally via Claude Code
 #
 # Usage:
@@ -9,9 +9,24 @@
 # Logs:   $env:USERPROFILE\.goclaw-worker\logs\
 # Runs:   $env:USERPROFILE\.goclaw-worker\runs\
 
-#Requires -Version 7.0
+#Requires -Version 5.1
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+# ── Safe property access (PS5 strict mode compat) ─────────────
+function Get-SafeProp {
+    param([object]$Obj, [string]$Name, $Default = $null)
+    if ($null -eq $Obj) { return $Default }
+    if ($Obj -is [hashtable]) {
+        if ($Obj.ContainsKey($Name)) { return $Obj[$Name] }
+        return $Default
+    }
+    if ($Obj.PSObject.Properties.Match($Name).Count -gt 0) {
+        $val = $Obj.PSObject.Properties[$Name].Value
+        if ($null -ne $val) { return $val }
+    }
+    return $Default
+}
 
 # ── Color helpers ──────────────────────────────────────────────
 function Write-Info    { param([string]$Msg) Write-Host "[✓] $Msg" -ForegroundColor Green }
@@ -33,9 +48,13 @@ Create $configPath with:
   "vps_url": "https://goclaw.example.com",
   "team_id": "uuid-of-team",
   "worker_id": "windows-pc-01",
-  "repo_key": "goclaw",
-  "repo_path": "D:\\WORKSPACES\\PERSONAL\\goclaw",
-  "worktree_base": "D:\\WORKSPACES\\PERSONAL\\goclaw-worktrees",
+  "default_repo": "goclaw",
+  "allowed_repos": {
+    "goclaw": {
+      "path": "D:\\WORKSPACES\\PERSONAL\\goclaw",
+      "worktree_base": "D:\\WORKSPACES\\PERSONAL\\goclaw-worktrees"
+    }
+  },
   "poll_interval_seconds": 10,
   "stale_worktree_ttl_hours": 24,
   "allowed_job_types": ["implement", "debug", "test", "review"],
@@ -62,7 +81,6 @@ $logsDir = Join-Path $configDir "logs"
 $runsDir = Join-Path $configDir "runs"
 New-Item -ItemType Directory -Path $logsDir -Force | Out-Null
 New-Item -ItemType Directory -Path $runsDir -Force | Out-Null
-New-Item -ItemType Directory -Path $config.worktree_base -Force | Out-Null
 
 # ── Log file ───────────────────────────────────────────────────
 $logFile = Join-Path $logsDir "worker-$(Get-Date -Format 'yyyyMMdd-HHmmss').log"
@@ -70,6 +88,25 @@ function Write-Log {
     param([string]$Level, [string]$Msg)
     $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     "$ts [$Level] $Msg" | Out-File -FilePath $logFile -Append -Encoding UTF8
+}
+
+# ── Repo resolver ──────────────────────────────────────────────
+function Resolve-Repo {
+    param([string]$RepoKey)
+    if (-not $RepoKey) { $RepoKey = $config.default_repo }
+    if (-not $RepoKey) { return $null }
+
+    $repos = $config.allowed_repos
+    if (-not $repos) { return $null }
+
+    $repo = $repos.$RepoKey
+    if (-not $repo) { return $null }
+
+    return @{
+        Key          = $RepoKey
+        Path         = $repo.path
+        WorktreeBase = $repo.worktree_base
+    }
 }
 
 # ── Validate prerequisites ─────────────────────────────────────
@@ -83,9 +120,16 @@ try { $null = & git --version 2>&1 } catch {
     Write-Err "git not found in PATH"
     exit 1
 }
-if (-not (Test-Path $config.repo_path)) {
-    Write-Err "Repo path not found: $($config.repo_path)"
-    exit 1
+
+# Validate all allowed repos exist
+$repoNames = @()
+foreach ($prop in $config.allowed_repos.PSObject.Properties) {
+    $repoNames += $prop.Name
+    if (-not (Test-Path $prop.Value.path)) {
+        Write-Err "Repo '$($prop.Name)' path not found: $($prop.Value.path)"
+        exit 1
+    }
+    New-Item -ItemType Directory -Path $prop.Value.worktree_base -Force | Out-Null
 }
 
 # Set long paths support
@@ -95,7 +139,7 @@ Write-Info "Prerequisites OK"
 Write-Info "VPS: $($config.vps_url)"
 Write-Info "Team: $($config.team_id)"
 Write-Info "Worker: $($config.worker_id)"
-Write-Info "Repo: $($config.repo_path)"
+Write-Info "Repos: $($repoNames -join ', ') (default: $($config.default_repo))"
 Write-Info "Log: $logFile"
 
 # ── HTTP helper ────────────────────────────────────────────────
@@ -170,57 +214,64 @@ function Send-Heartbeat {
 # ── Stale worktree recovery ───────────────────────────────────
 function Remove-StaleWorktrees {
     Write-Step "Checking for stale worktrees..."
-    $base = $config.worktree_base
-    if (-not (Test-Path $base)) { return }
 
     $ttlHours = $config.stale_worktree_ttl_hours
     if (-not $ttlHours) { $ttlHours = 24 }
     $cutoff = (Get-Date).AddHours(-$ttlHours)
 
-    $dirs = Get-ChildItem -Path $base -Directory -ErrorAction SilentlyContinue
-    foreach ($dir in $dirs) {
-        if ($dir.LastWriteTime -lt $cutoff) {
-            $taskNum = $dir.Name -replace '^task-', ''
-            Write-Warn "Removing stale worktree: $($dir.Name)"
-            try {
-                git -C $config.repo_path worktree remove $dir.FullName --force 2>$null
-                git -C $config.repo_path branch -D "task/$taskNum" 2>$null
-            } catch { }
-            if (Test-Path $dir.FullName) {
-                Remove-Item -Recurse -Force $dir.FullName -ErrorAction SilentlyContinue
+    foreach ($prop in $config.allowed_repos.PSObject.Properties) {
+        $repoPath = $prop.Value.path
+        $base = $prop.Value.worktree_base
+        if (-not (Test-Path $base)) { continue }
+
+        $dirs = Get-ChildItem -Path $base -Directory -ErrorAction SilentlyContinue
+        foreach ($dir in $dirs) {
+            if ($dir.LastWriteTime -lt $cutoff) {
+                $taskNum = $dir.Name -replace '^task-', ''
+                Write-Warn "Removing stale worktree: $($prop.Name)/$($dir.Name)"
+                try {
+                    git -C $repoPath worktree remove $dir.FullName --force 2>$null
+                    git -C $repoPath branch -D "task/$taskNum" 2>$null
+                } catch { }
+                if (Test-Path $dir.FullName) {
+                    Remove-Item -Recurse -Force $dir.FullName -ErrorAction SilentlyContinue
+                }
+                Write-Log "INFO" "Removed stale worktree: $($prop.Name)/$($dir.Name)"
             }
-            Write-Log "INFO" "Removed stale worktree: $($dir.Name)"
         }
+        git -C $repoPath worktree prune 2>$null
     }
-    # Also prune any git worktree metadata
-    git -C $config.repo_path worktree prune 2>$null
 }
 
 # ── Trusted-task validation ───────────────────────────────────
 function Test-TrustedTask {
     param([object]$Task)
 
-    $meta = $Task.metadata
+    $meta = Get-SafeProp $Task 'metadata'
     if (-not $meta) {
         return "Task has no metadata"
     }
 
     # Job type check
-    $jobType = $meta.job_type
-    if (-not $jobType) { $jobType = "implement" }
+    $jobType = Get-SafeProp $meta 'job_type' 'implement'
     if ($jobType -notin $config.allowed_job_types) {
         return "Job type '$jobType' not in allowed list: $($config.allowed_job_types -join ', ')"
     }
 
-    # Repo path check (case-insensitive on Windows)
-    $repoPath = $meta.repo_path
-    if ($repoPath -and ($repoPath.ToLower() -ne $config.repo_path.ToLower())) {
-        return "Repo path '$repoPath' does not match configured: $($config.repo_path)"
+    # Repo key check — resolve from task metadata or default
+    $repoKey = Get-SafeProp $meta 'repo_key'
+    $repo = Resolve-Repo -RepoKey $repoKey
+    if (-not $repo) {
+        $attempted = "(none)"
+        if ($repoKey) { $attempted = $repoKey }
+        $available = @()
+        foreach ($p in $config.allowed_repos.PSObject.Properties) { $available += $p.Name }
+        return "Repo key '$attempted' not in allowed repos: $($available -join ', ')"
     }
 
     # Brief check
-    $brief = $meta.brief_markdown
-    if (-not $brief) { $brief = $Task.description }
+    $brief = Get-SafeProp $meta 'brief_markdown'
+    if (-not $brief) { $brief = Get-SafeProp $Task 'description' }
     if (-not $brief) {
         return "No brief_markdown or description found"
     }
@@ -231,8 +282,8 @@ function Test-TrustedTask {
         return "Brief size ($briefBytes bytes) exceeds max ($maxBytes bytes)"
     }
 
-    # Disk space check
-    $repoDrive = (Split-Path $config.repo_path -Qualifier) -replace ':', ''
+    # Disk space check (use resolved repo drive)
+    $repoDrive = (Split-Path $repo.Path -Qualifier) -replace ':', ''
     $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='${repoDrive}:'" -ErrorAction SilentlyContinue
     if ($disk) {
         $freeGB = [math]::Round($disk.FreeSpace / 1GB, 2)
@@ -248,19 +299,20 @@ function Test-TrustedTask {
 
 # ── Git worktree lifecycle ────────────────────────────────────
 function New-TaskWorktree {
-    param([int]$TaskNumber)
-    $wtPath = Join-Path $config.worktree_base "task-$TaskNumber"
+    param([int]$TaskNumber, [hashtable]$Repo)
+    $wtPath = Join-Path $Repo.WorktreeBase "task-$TaskNumber"
     $branch = "task/$TaskNumber"
+    $repoPath = $Repo.Path
 
     # Pre-create cleanup
-    git -C $config.repo_path branch -D $branch 2>$null
+    git -C $repoPath branch -D $branch 2>$null
     if (Test-Path $wtPath) {
-        git -C $config.repo_path worktree remove $wtPath --force 2>$null
+        git -C $repoPath worktree remove $wtPath --force 2>$null
         Remove-Item -Recurse -Force $wtPath -ErrorAction SilentlyContinue
     }
 
     # Create worktree
-    git -C $config.repo_path worktree add $wtPath -b $branch 2>&1
+    git -C $repoPath worktree add $wtPath -b $branch 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to create worktree at $wtPath"
     }
@@ -268,16 +320,17 @@ function New-TaskWorktree {
 }
 
 function Remove-TaskWorktree {
-    param([int]$TaskNumber)
-    $wtPath = Join-Path $config.worktree_base "task-$TaskNumber"
+    param([int]$TaskNumber, [hashtable]$Repo)
+    $wtPath = Join-Path $Repo.WorktreeBase "task-$TaskNumber"
     $branch = "task/$TaskNumber"
+    $repoPath = $Repo.Path
 
     for ($i = 0; $i -lt 3; $i++) {
         try {
             if (Test-Path $wtPath) {
-                git -C $config.repo_path worktree remove $wtPath --force 2>$null
+                git -C $repoPath worktree remove $wtPath --force 2>$null
             }
-            git -C $config.repo_path branch -D $branch 2>$null
+            git -C $repoPath branch -D $branch 2>$null
             if (Test-Path $wtPath) {
                 Remove-Item -Recurse -Force $wtPath -ErrorAction SilentlyContinue
             }
@@ -294,23 +347,36 @@ function Remove-TaskWorktree {
 function Invoke-CodingTask {
     param([object]$Task)
 
-    $taskId = $Task.id
-    $taskNumber = $Task.task_number
-    $meta = $Task.metadata
-    $jobType = if ($meta.job_type) { $meta.job_type } else { "implement" }
-    $brief = if ($meta.brief_markdown) { $meta.brief_markdown } else { $Task.description }
-    $agentId = if ($Task.owner_agent_id) { $Task.owner_agent_id } else { "" }
+    $taskId = Get-SafeProp $Task 'id'
+    $taskNumber = Get-SafeProp $Task 'task_number'
+    $meta = Get-SafeProp $Task 'metadata'
+    $jobType = Get-SafeProp $meta 'job_type' 'implement'
+    $brief = Get-SafeProp $meta 'brief_markdown'
+    if (-not $brief) { $brief = Get-SafeProp $Task 'description' }
+    $agentId = Get-SafeProp $Task 'owner_agent_id' ''
+
+    # Resolve repo from task metadata
+    $repoKey = Get-SafeProp $meta 'repo_key'
+    $repo = Resolve-Repo -RepoKey $repoKey
+    if (-not $repo) {
+        Write-Err "Cannot resolve repo for task #$taskNumber (repo_key: $repoKey)"
+        Invoke-WorkerAPI -Method POST -Path "/tasks/$taskId/fail" -Body @{
+            reason   = "Unknown repo_key: $repoKey"
+            agent_id = $agentId
+        } -AllowError | Out-Null
+        return
+    }
 
     $runDir = Join-Path $runsDir "task-$taskNumber"
     New-Item -ItemType Directory -Path $runDir -Force | Out-Null
 
     $startTime = Get-Date
-    Write-Step "Executing task #$taskNumber ($jobType): $($Task.subject)"
-    Write-Log "INFO" "Starting task #$taskNumber ($jobType): $($Task.subject)"
+    Write-Step "Executing task #$taskNumber ($jobType) on repo '$($repo.Key)': $($Task.subject)"
+    Write-Log "INFO" "Starting task #$taskNumber ($jobType) repo=$($repo.Key): $($Task.subject)"
 
     # 1. Create worktree
     try {
-        $wtPath = New-TaskWorktree -TaskNumber $taskNumber
+        $wtPath = New-TaskWorktree -TaskNumber $taskNumber -Repo $repo
         Write-Info "Worktree created: $wtPath"
     } catch {
         Write-Err "Worktree creation failed: $_"
@@ -416,15 +482,24 @@ function Invoke-CodingTask {
     $duration = [int]((Get-Date) - $startTime).TotalSeconds
 
     # 7. Build and post result
+    $taskStatus = "fail"
+    if (-not $timedOut -and $claudeExitCode -eq 0) { $taskStatus = "pass" }
+
+    $taskSummary = "(no output captured)"
+    if ($claudeOutput) { $taskSummary = $claudeOutput }
+
+    $blockerReason = ""
+    if ($timedOut) { $blockerReason = "Claude Code timed out after ${maxSeconds}s" }
+
     $resultPayload = @{
         task_id           = $taskId
-        status            = if ($timedOut) { "fail" } elseif ($claudeExitCode -eq 0) { "pass" } else { "fail" }
-        summary           = if ($claudeOutput) { $claudeOutput } else { "(no output captured)" }
+        status            = $taskStatus
+        summary           = $taskSummary
         changed_files     = $changedFiles
         commands_executed  = @("claude --print --dangerously-skip-permissions --prompt-file ...")
         test_results      = ""
         branch            = "task/$taskNumber"
-        blocker_reason    = if ($timedOut) { "Claude Code timed out after ${maxSeconds}s" } else { "" }
+        blocker_reason    = $blockerReason
         duration_seconds  = $duration
     }
 
@@ -435,7 +510,8 @@ function Invoke-CodingTask {
     $resultJson = $resultPayload | ConvertTo-Json -Depth 5 -Compress
 
     if ($timedOut -or $claudeExitCode -ne 0) {
-        $reason = if ($timedOut) { "Timeout after ${maxSeconds}s" } else { "Claude exit code: $claudeExitCode" }
+        $reason = "Claude exit code: $claudeExitCode"
+        if ($timedOut) { $reason = "Timeout after ${maxSeconds}s" }
         Write-Err "Task #$taskNumber FAILED: $reason"
         for ($i = 0; $i -lt 3; $i++) {
             try {
@@ -477,7 +553,7 @@ function Invoke-CodingTask {
 
     # 8. Cleanup
     Remove-Item -Path $promptFile -Force -ErrorAction SilentlyContinue
-    Remove-TaskWorktree -TaskNumber $taskNumber
+    Remove-TaskWorktree -TaskNumber $taskNumber -Repo $repo
 
     Write-Info "Worktree cleaned up for task #$taskNumber"
 }
@@ -531,33 +607,37 @@ while ($script:running) {
 
         # Pick first pending task
         $task = $response.tasks[0]
-        Write-Step "Found task #$($task.task_number): $($task.subject)"
+        $tNum = Get-SafeProp $task 'task_number'
+        $tId = Get-SafeProp $task 'id'
+        $tSubject = Get-SafeProp $task 'subject'
+        Write-Step "Found task #${tNum}: $tSubject"
 
         # Validate trusted-task policy
         $validationError = Test-TrustedTask -Task $task
         if ($validationError) {
-            Write-Err "Task #$($task.task_number) rejected: $validationError"
-            Write-Log "WARN" "Rejected task #$($task.task_number): $validationError"
-            Invoke-WorkerAPI -Method POST -Path "/tasks/$($task.id)/fail" -Body @{
+            Write-Err "Task #$tNum rejected: $validationError"
+            Write-Log "WARN" "Rejected task #${tNum}: $validationError"
+            $failAgentId = Get-SafeProp $task 'owner_agent_id' ''
+            Invoke-WorkerAPI -Method POST -Path "/tasks/$tId/fail" -Body @{
                 reason   = "Worker validation failed: $validationError"
-                agent_id = if ($task.owner_agent_id) { $task.owner_agent_id } else { "" }
+                agent_id = $failAgentId
             } -AllowError | Out-Null
             Start-Sleep -Seconds $pollInterval
             continue
         }
 
         # Claim the task
-        $agentId = if ($task.owner_agent_id) { $task.owner_agent_id } else { "" }
+        $agentId = Get-SafeProp $task 'owner_agent_id' ''
         try {
-            $claimed = Invoke-WorkerAPI -Method POST -Path "/tasks/$($task.id)/claim" -Body @{
+            $claimed = Invoke-WorkerAPI -Method POST -Path "/tasks/$tId/claim" -Body @{
                 agent_id  = $agentId
                 worker_id = $config.worker_id
             }
-            Write-Info "Claimed task #$($task.task_number)"
+            Write-Info "Claimed task #$tNum"
         } catch {
             $status = $_.Exception.Response.StatusCode.value__
             if ($status -eq 409) {
-                Write-Warn "Task #$($task.task_number) already claimed by another worker"
+                Write-Warn "Task #$tNum already claimed by another worker"
                 Start-Sleep -Seconds $pollInterval
                 continue
             }
@@ -565,7 +645,9 @@ while ($script:running) {
         }
 
         # Execute the task
-        $taskData = if ($claimed.task) { $claimed.task } else { $task }
+        $taskData = $task
+        $claimedTask = Get-SafeProp $claimed 'task'
+        if ($claimedTask) { $taskData = $claimedTask }
         Invoke-CodingTask -Task $taskData
 
         Write-Host ""

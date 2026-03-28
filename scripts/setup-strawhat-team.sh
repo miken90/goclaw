@@ -192,6 +192,14 @@ read -r -d '' IDENTITY_ZORO << 'EOF' || true
 - No direct shell/file access to product repo from VPS
 - Include timeout expectation: debug=900s, implement=1800s
 - Distinguish: task_failed vs worker_offline vs blocked_by_dependency
+
+## CRITICAL — execution_target: windows-local
+When a task has `execution_target: windows-local` in metadata:
+1. **DO NOT** attempt to run code, build, test, or edit files yourself
+2. **DO NOT** claim the task or change its status to in_progress
+3. **ONLY** write the execution brief to `brief_markdown` in task metadata
+4. **LEAVE** the task in pending status — the external Windows worker will claim and execute it
+5. After writing the brief, post a comment confirming brief is ready and wait
 EOF
 
 read -r -d '' IDENTITY_SANJI << 'EOF' || true
@@ -208,6 +216,14 @@ read -r -d '' IDENTITY_SANJI << 'EOF' || true
 - Require pnpm typecheck / pnpm build in results
 - Include timeout: implement=1800s
 - If worker offline: wait for Luffy reassignment
+
+## CRITICAL — execution_target: windows-local
+When a task has `execution_target: windows-local` in metadata:
+1. **DO NOT** attempt to run code, build, test, or edit files yourself
+2. **DO NOT** claim the task or change its status to in_progress
+3. **ONLY** write the execution brief to `brief_markdown` in task metadata
+4. **LEAVE** the task in pending status — the external Windows worker will claim and execute it
+5. After writing the brief, post a comment confirming brief is ready and wait
 EOF
 
 read -r -d '' IDENTITY_NAMI << 'EOF' || true
@@ -239,6 +255,14 @@ read -r -d '' IDENTITY_CHOPPER << 'EOF' || true
 - Post PASS/FAIL/TIMEOUT verdict with rationale
 - Always include go build + go vet + go test in verification
 - TIMEOUT is explicit state, never report as just blocked
+
+## CRITICAL — execution_target: windows-local
+When a task has `execution_target: windows-local` in metadata:
+1. **DO NOT** attempt to run code, build, test, or edit files yourself
+2. **DO NOT** claim the task or change its status to in_progress
+3. **ONLY** write the verification plan to `brief_markdown` in task metadata
+4. **LEAVE** the task in pending status — the external Windows worker will claim and execute it
+5. After writing the plan, post a comment confirming plan is ready and wait
 EOF
 
 # ── Delete mode ─────────────────────────────────────────────────

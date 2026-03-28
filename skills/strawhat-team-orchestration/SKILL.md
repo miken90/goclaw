@@ -40,11 +40,13 @@ Subject: [concise imperative] (e.g., "Fix WebSocket reconnect on timeout")
 Description: [detailed context]
 Metadata:
   execution_target: windows-local
-  repo_key: goclaw
+  repo_key: [key from worker's allowed_repos — ask user if multiple repos configured]
   job_type: [implement|debug|test|review]
   brief_markdown: [will be filled by assigned agent]
   max_runtime_seconds: [1800|900|900|600]
 ```
+
+> **repo_key** is resolved by the Windows worker against its `allowed_repos` config. If the user's request doesn't specify a repo, use the worker's `default_repo`. Ask the user which repo if ambiguous.
 
 ## Workflow Templates
 
