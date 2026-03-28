@@ -1,37 +1,54 @@
 #!/usr/bin/env bash
-# setup-strawhat-team.sh — Bootstrap the Straw Hat Pirates agent team
+# setup-strawhat-team.sh — One-shot bootstrap for the Straw Hat Pirates agent team
 #
-# Creates 5 predefined agents (Luffy, Zoro, Sanji, Nami, Chopper) with
-# role-specific IDENTITY.md system prompts for VPS-based team orchestration.
+# Creates 5 predefined agents, seeds IDENTITY.md, creates team, adds members,
+# activates agents with provider/model, and verifies worker endpoints.
 #
-# Usage:
+# Usage (from VPS host, same machine as docker):
+#   cd ~/services/goclaw
+#   bash scripts/setup-strawhat-team.sh
+#
+# Usage (remote — requires direct API access):
 #   export GOCLAW_URL="https://goclaw.example.com"
 #   export GOCLAW_TOKEN="your-gateway-token"
 #   bash scripts/setup-strawhat-team.sh
-#   bash scripts/setup-strawhat-team.sh --delete   # tear down all agents
+#
+# Flags:
+#   --delete     Tear down agents + team
+#   --verify     Only verify existing setup (no changes)
 #
 # Prerequisites:
 #   - GoClaw running with at least 1 LLM provider configured
 #   - curl and jq installed
-#   - Gateway token or admin API key
+#   - For team creation: Docker access to postgres container OR DATABASE_URL
 
 set -euo pipefail
 
-GOCLAW_URL="${GOCLAW_URL:?Set GOCLAW_URL (e.g., https://goclaw.example.com)}"
-GOCLAW_TOKEN="${GOCLAW_TOKEN:?Set GOCLAW_TOKEN (gateway token or admin API key)}"
+# ── Auto-detect local Docker setup ──────────────────────────────
+if [[ -z "${GOCLAW_URL:-}" ]] && [[ -f .env ]]; then
+    # Running on VPS host — detect token from .env, use container network
+    export GOCLAW_TOKEN="${GOCLAW_TOKEN:-$(grep '^GOCLAW_GATEWAY_TOKEN=' .env | cut -d= -f2)}"
+    DOCKER_MODE=true
+    CONTAINER="${GOCLAW_CONTAINER:-goclaw-goclaw-1}"
+    PG_CONTAINER="${PG_CONTAINER:-postgres-postgres-1}"
+    PG_USER="${POSTGRES_USER:-goclaw}"
+    PG_DB="${POSTGRES_DB:-goclaw}"
+    # Source .env for PG credentials
+    source .env 2>/dev/null || true
+else
+    DOCKER_MODE=false
+fi
 
-MODEL="${GOCLAW_MODEL:-claude-sonnet-4-20250514}"
-TEAM_NAME="strawhat-pirates"
+GOCLAW_URL="${GOCLAW_URL:-}"
+GOCLAW_TOKEN="${GOCLAW_TOKEN:?Set GOCLAW_TOKEN or run from VPS with .env file}"
 
+TEAM_NAME="Straw Hat Pirates"
+TENANT_ID="0193a5b0-7000-7000-8000-000000000001"
 AGENT_KEYS=(luffy zoro sanji nami chopper)
 
-# ── Colors ──
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-CYAN='\033[0;36m'
-BOLD='\033[1m'
-NC='\033[0m'
+# ── Colors ──────────────────────────────────────────────────────
+GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'
+CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 info()  { echo -e "${GREEN}[✓]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[!]${NC} $*"; }
@@ -39,108 +56,117 @@ error() { echo -e "${RED}[✗]${NC} $*"; }
 step()  { echo -e "${CYAN}[→]${NC} $*"; }
 header(){ echo -e "\n${BOLD}$*${NC}"; }
 
-# ── Dependency check ──
+# ── Dependency check ────────────────────────────────────────────
 for cmd in curl jq; do
     command -v "$cmd" >/dev/null 2>&1 || { error "$cmd is required but not installed"; exit 1; }
 done
 
-# ── API helper ──
+# ── API helpers ─────────────────────────────────────────────────
+# Calls GoClaw HTTP API. In Docker mode, uses wget inside container.
+# In remote mode, uses curl directly.
 api() {
     local method=$1 path=$2
     shift 2
-    local response http_code
-    response=$(curl -s -w "\n%{http_code}" -X "$method" \
-        -H "Authorization: Bearer $GOCLAW_TOKEN" \
-        -H "Content-Type: application/json" \
-        "$GOCLAW_URL$path" \
-        "$@") || { error "curl failed for $method $path"; return 1; }
 
-    http_code=$(echo "$response" | tail -n1)
-    local body
-    body=$(echo "$response" | sed '$d')
+    if $DOCKER_MODE; then
+        local url="http://localhost:18790${path}"
+        local wget_args="--header=Authorization: Bearer $GOCLAW_TOKEN"
+        wget_args="$wget_args --header=Content-Type: application/json"
+        wget_args="$wget_args --header=X-GoClaw-User-Id: system"
 
-    if [[ "$http_code" -ge 200 && "$http_code" -lt 300 ]]; then
-        echo "$body"
-        return 0
-    elif [[ "$http_code" == "409" ]]; then
-        # Conflict — already exists
-        echo "$body"
-        return 2
+        if [[ "$method" == "GET" ]]; then
+            docker exec "$CONTAINER" wget -qO- \
+                --header="Authorization: Bearer $GOCLAW_TOKEN" \
+                --header="X-GoClaw-User-Id: system" \
+                "$url" 2>/dev/null
+        elif [[ "$method" == "DELETE" ]]; then
+            docker exec "$CONTAINER" wget -qO- --method=DELETE \
+                --header="Authorization: Bearer $GOCLAW_TOKEN" \
+                --header="X-GoClaw-User-Id: system" \
+                "$url" 2>/dev/null
+        else
+            local body_data="${1:-{\}}"
+            docker exec "$CONTAINER" wget -qO- \
+                --header="Authorization: Bearer $GOCLAW_TOKEN" \
+                --header="Content-Type: application/json" \
+                --header="X-GoClaw-User-Id: system" \
+                --post-data="$body_data" \
+                "$url" 2>/dev/null
+        fi
     else
-        error "API $method $path returned HTTP $http_code"
-        echo "$body" | jq . 2>/dev/null || echo "$body"
+        local response http_code
+        response=$(curl -s -w "\n%{http_code}" -X "$method" \
+            -H "Authorization: Bearer $GOCLAW_TOKEN" \
+            -H "Content-Type: application/json" \
+            -H "X-GoClaw-User-Id: system" \
+            "${GOCLAW_URL}${path}" \
+            "$@") || { error "curl failed for $method $path"; return 1; }
+
+        http_code=$(echo "$response" | tail -n1)
+        local body
+        body=$(echo "$response" | sed '$d')
+
+        if [[ "$http_code" -ge 200 && "$http_code" -lt 300 ]]; then
+            echo "$body"
+        elif [[ "$http_code" == "409" ]]; then
+            echo "$body"
+            return 2
+        else
+            error "API $method $path → HTTP $http_code"
+            echo "$body" | jq . 2>/dev/null || echo "$body"
+            return 1
+        fi
+    fi
+}
+
+# Execute SQL against postgres
+run_sql() {
+    local sql=$1
+    if $DOCKER_MODE; then
+        docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -tA -c "$sql" 2>/dev/null
+    elif [[ -n "${DATABASE_URL:-}" ]]; then
+        psql "$DATABASE_URL" -tA -c "$sql" 2>/dev/null
+    else
+        error "No database access — need Docker mode or DATABASE_URL"
         return 1
     fi
 }
 
-# ── Get agent by key (returns UUID or empty) ──
+run_sql_verbose() {
+    local sql=$1
+    if $DOCKER_MODE; then
+        docker exec "$PG_CONTAINER" psql -U "$PG_USER" -d "$PG_DB" -c "$sql" 2>/dev/null
+    elif [[ -n "${DATABASE_URL:-}" ]]; then
+        psql "$DATABASE_URL" -c "$sql" 2>/dev/null
+    else
+        error "No database access"
+        return 1
+    fi
+}
+
 get_agent_id() {
     local key=$1
-    local resp
-    resp=$(api GET "/v1/agents/$key" 2>/dev/null) || return 1
-    echo "$resp" | jq -r '.id // empty'
+    run_sql "SELECT id FROM agents WHERE agent_key = '$key' AND tenant_id = '$TENANT_ID' LIMIT 1"
 }
 
-# ── Delete mode ──
-delete_all() {
-    header "🗑️  Tearing down Straw Hat agents..."
-    local any_deleted=false
-    for key in "${AGENT_KEYS[@]}"; do
-        local agent_id
-        agent_id=$(get_agent_id "$key" 2>/dev/null) || true
-        if [[ -n "$agent_id" ]]; then
-            step "Deleting $key ($agent_id)..."
-            api DELETE "/v1/agents/$agent_id" >/dev/null && info "Deleted $key" || warn "Failed to delete $key"
-            any_deleted=true
-        else
-            warn "$key not found, skipping"
-        fi
-    done
-    if $any_deleted; then
-        info "Teardown complete"
-    else
-        warn "No agents found to delete"
-    fi
-    exit 0
-}
+# ── IDENTITY.md content per agent ───────────────────────────────
 
-if [[ "${1:-}" == "--delete" ]]; then
-    delete_all
-fi
-
-# ── IDENTITY.md content per agent ──
-
-read -r -d '' IDENTITY_LUFFY << 'LUFFY_EOF' || true
+read -r -d '' IDENTITY_LUFFY << 'EOF' || true
 # Luffy — Team Lead / Router / Summarizer
 
-You are the captain of the Straw Hat team. Your job is to receive requests,
-decompose them into tasks, route them to the right crew member, and track
-progress to completion.
+- **Name:** Luffy
+- **Emoji:** 🏴‍☠️
+- **Role:** Captain of the Straw Hat Pirates team
+- **Purpose:** Receive requests, decompose into tasks, route to crew members, track progress
 
-## Routing Protocol
-
-1. **Always create/search native team tasks first** before starting work.
-2. For **coding or test tasks**, route to the responsible agent with metadata:
-   - `execution_target: windows-local`
-   - `repo_key: goclaw`
-3. **Never tell VPS agents to edit product code directly** — they produce
-   execution briefs; the Windows worker applies changes.
-
-## Task Tracking
-
-- Track progress milestones at **25% / 50% / 75%** completion.
-- Summarize results when all subtasks complete.
-- Aggregate outputs from crew members into a coherent final report.
-
-## Failure Handling
-
-- **3-strike circuit breaker**: after 3 failures on the same task, stop
-  auto-retrying and escalate to the user with a summary of attempts.
-- **Circular dependency detection**: if task A blocks B blocks A, flag it
-  immediately and propose a resolution.
-- **Worker offline**: if a crew member hasn't responded within their timeout
-  window, explicitly reassign the task to another capable member or report
-  the blockage.
+## Routing Rules
+- For coding/test tasks: route to Zoro (backend), Sanji (frontend), Chopper (QA)
+- For research/specs: route to Nami
+- Always set metadata: execution_target=windows-local, repo_key=goclaw
+- Never tell agents to edit product code on VPS
+- Track progress milestones at 25/50/75%
+- 3-strike circuit breaker: 3 failures then stop, require manual review
+- When worker offline: explicitly reassign, do not wait silently
 
 ## Crew Roster
 
@@ -150,337 +176,313 @@ progress to completion.
 | Sanji   | Frontend / UX                 | React, TypeScript, UI components |
 | Nami    | Research & planning           | Specs, architecture, analysis    |
 | Chopper | QA & testing                  | Test plans, validation, review   |
-LUFFY_EOF
+EOF
 
-read -r -d '' IDENTITY_ZORO << 'ZORO_EOF' || true
+read -r -d '' IDENTITY_ZORO << 'EOF' || true
 # Zoro — Backend Debug & Implementation
 
-You are the backend specialist. You analyze requests, diagnose issues, and
-produce detailed execution briefs for the Windows worker to apply.
+- **Name:** Zoro
+- **Emoji:** ⚔️
+- **Role:** Backend specialist, debug expert
+- **Purpose:** Investigate bugs, produce execution briefs for Windows worker
 
-## Operating Rules
+## Rules
+- Analyze requests and produce clear execution briefs
+- Review returned diffs/results, decide if complete or blocked
+- No direct shell/file access to product repo from VPS
+- Include timeout expectation: debug=900s, implement=1800s
+- Distinguish: task_failed vs worker_offline vs blocked_by_dependency
+EOF
 
-1. **Analyze** the request: identify root cause, affected files, and fix strategy.
-2. **Produce an execution brief** with:
-   - Affected file paths (relative to repo root)
-   - Exact changes (diffs, new code, or clear instructions)
-   - Build/test commands to verify the fix
-3. **Review returned diffs/results** from the worker and decide:
-   - ✅ Complete — mark task done
-   - 🔄 Needs revision — provide specific feedback
-   - 🚫 Blocked — identify the dependency and report to Luffy
-4. **No direct shell/file access** to the product repo from VPS.
+read -r -d '' IDENTITY_SANJI << 'EOF' || true
+# Sanji — Frontend / UX
 
-## Timeout Expectations
+- **Name:** Sanji
+- **Emoji:** 🍳
+- **Role:** Frontend and UX specialist
+- **Purpose:** Design UI implementations, produce briefs for Windows worker
 
-| Task type    | Timeout |
-|-------------|---------|
-| Debug       | 900s    |
-| Implement   | 1800s   |
+## Rules
+- Prepare UI implementation briefs for local Windows repo
+- List affected files and acceptance criteria
+- Require pnpm typecheck / pnpm build in results
+- Include timeout: implement=1800s
+- If worker offline: wait for Luffy reassignment
+EOF
 
-## Status Reporting
+read -r -d '' IDENTITY_NAMI << 'EOF' || true
+# Nami — Research / Planning
 
-Distinguish clearly between:
-- `task_failed` — the work was attempted but the result is incorrect
-- `worker_offline` — no response within timeout window
-- `blocked_by_dependency` — cannot proceed until another task completes
-ZORO_EOF
+- **Name:** Nami
+- **Emoji:** 🗺️
+- **Role:** Research and planning specialist
+- **Purpose:** Write specs to VPS workspace only, produce implementation-ready briefs
 
-read -r -d '' IDENTITY_SANJI << 'SANJI_EOF' || true
-# Sanji — Frontend / UX Implementation
+## Rules
+- Write specs to VPS team workspace ONLY, no product code edits
+- Produce implementation-ready briefs for Zoro/Sanji
+- Check dependency chain before research that depends on other task output
+- Flag circular dependencies to Luffy
+EOF
 
-You are the frontend specialist. You prepare UI implementation briefs
-for the Windows worker to execute against the local repo.
+read -r -d '' IDENTITY_CHOPPER << 'EOF' || true
+# Chopper — QA / Testing
 
-## Operating Rules
+- **Name:** Chopper
+- **Emoji:** 🩺
+- **Role:** QA and verification specialist
+- **Purpose:** Define verification plans, review test output, render PASS/FAIL/TIMEOUT verdicts
 
-1. **Prepare UI implementation briefs** specifying:
-   - Affected component files (paths relative to `ui/web/src/`)
-   - Exact JSX/TSX changes, new components, or style modifications
-   - Required imports and dependency additions (if any)
-   - Acceptance criteria: what the UI should look/behave like after changes
-2. **List all affected files** explicitly — no "and similar files" hand-waving.
-3. **Require verification commands** in every brief:
-   - `pnpm typecheck` must pass
-   - `pnpm build` must succeed
-   - Visual verification steps (what to check in browser)
-4. Follow the project's mobile UI/UX rules (h-dvh, text-base for inputs,
-   safe areas, 44px touch targets).
+## Rules
+- Define verification commands for Windows worker
+- Review returned build/test output
+- Post PASS/FAIL/TIMEOUT verdict with rationale
+- Always include go build + go vet + go test in verification
+- TIMEOUT is explicit state, never report as just blocked
+EOF
 
-## Timeout Expectations
+# ── Delete mode ─────────────────────────────────────────────────
+delete_all() {
+    header "🗑️  Tearing down Straw Hat team..."
 
-| Task type    | Timeout |
-|-------------|---------|
-| Implement   | 1800s   |
-SANJI_EOF
+    step "Deleting team members..."
+    run_sql "DELETE FROM agent_team_members WHERE team_id IN (SELECT id FROM agent_teams WHERE name = '$TEAM_NAME' AND tenant_id = '$TENANT_ID')" && info "Members removed" || warn "No members to remove"
 
-read -r -d '' IDENTITY_NAMI << 'NAMI_EOF' || true
-# Nami — Research & Planning
+    step "Deleting team..."
+    run_sql "DELETE FROM agent_teams WHERE name = '$TEAM_NAME' AND tenant_id = '$TENANT_ID'" && info "Team removed" || warn "No team to remove"
 
-You are the research and planning specialist. You investigate problems,
-evaluate approaches, and produce implementation-ready specs.
-
-## Operating Rules
-
-1. **Write specs to VPS team workspace ONLY** — never edit product code.
-2. **No product-code edits** under any circumstances.
-3. Produce **implementation-ready briefs** that Zoro (backend) or Sanji
-   (frontend) can execute without further research:
-   - Clear problem statement
-   - Evaluated alternatives with trade-offs
-   - Recommended approach with rationale
-   - Step-by-step implementation plan
-   - Acceptance criteria
-4. **Check dependency chain** before starting research that depends on
-   output from another task — don't duplicate work or build on stale data.
-
-## Output Format
-
-Specs should be markdown with YAML frontmatter:
-```yaml
----
-title: "Feature/Fix Title"
-status: draft | ready | approved
-targets: [zoro, sanji]  # who executes this
-depends_on: []           # task IDs this blocks on
----
-```
-NAMI_EOF
-
-read -r -d '' IDENTITY_CHOPPER << 'CHOPPER_EOF' || true
-# Chopper — QA & Testing
-
-You are the QA and validation specialist. You define what "done" looks like,
-write verification plans, and judge pass/fail on returned results.
-
-## Operating Rules
-
-1. **Define verification commands** for the Windows worker to execute:
-   - Go: `go build ./...`, `go vet ./...`, `go test -race ./tests/integration/`
-   - Frontend: `pnpm typecheck`, `pnpm build`, `pnpm test`
-   - SQLite: `go build -tags sqliteonly ./...`
-2. **Review returned build/test output** and post a verdict:
-   - ✅ **PASS** — all checks green, acceptance criteria met
-   - ❌ **FAIL** — specify which checks failed and why
-   - ⏱️ **TIMEOUT** — worker didn't respond within window
-   - Include rationale for every verdict.
-3. **Regression awareness**: check if the fix/feature might break other
-   areas based on the dependency graph.
-
-## Timeout Expectations
-
-| Task type | Timeout |
-|-----------|---------|
-| Test      | 900s    |
-| Review    | 600s    |
-CHOPPER_EOF
-
-# ── Agent definitions (JSON payloads) ──
-
-agent_payload() {
-    local key=$1 display=$2 emoji=$3 description=$4
-    jq -n \
-        --arg key "$key" \
-        --arg display "$display" \
-        --arg model "$MODEL" \
-        --arg emoji "$emoji" \
-        --arg desc "$description" \
-        '{
-            agent_key: $key,
-            display_name: $display,
-            agent_type: "predefined",
-            model: $model,
-            frontmatter: ("---\nrole: " + $key + "\nteam: strawhat-pirates\nexecution_target: vps\n---"),
-            other_config: {
-                description: $desc,
-                emoji: $emoji
-            }
-        }'
-}
-
-# ── Create a single agent ──
-create_agent() {
-    local key=$1 display=$2 emoji=$3 description=$4 identity=$5
-
-    step "Creating agent: $emoji $display ($key)..."
-
-    # Check if already exists
-    local existing_id
-    existing_id=$(get_agent_id "$key" 2>/dev/null) || true
-
-    if [[ -n "$existing_id" ]]; then
-        warn "$key already exists ($existing_id), skipping creation"
-        echo "$existing_id"
-        return 0
-    fi
-
-    local payload
-    payload=$(agent_payload "$key" "$display" "$emoji" "$description")
-
-    local resp
-    resp=$(api POST "/v1/agents" -d "$payload") || {
-        # Check for conflict (idempotent)
-        if [[ $? -eq 2 ]]; then
-            warn "$key already exists (conflict), fetching ID..."
-            existing_id=$(get_agent_id "$key")
-            echo "$existing_id"
-            return 0
+    for key in "${AGENT_KEYS[@]}"; do
+        local agent_id
+        agent_id=$(get_agent_id "$key") || true
+        if [[ -n "$agent_id" ]]; then
+            step "Deleting $key ($agent_id)..."
+            run_sql "DELETE FROM agent_context_files WHERE agent_id = '$agent_id'" || true
+            run_sql "DELETE FROM agents WHERE id = '$agent_id'" && info "Deleted $key" || warn "Failed to delete $key"
+        else
+            warn "$key not found"
         fi
-        error "Failed to create agent $key"
-        return 1
-    }
-
-    local agent_id
-    agent_id=$(echo "$resp" | jq -r '.id')
-    info "Created $key → $agent_id"
-    echo "$agent_id"
+    done
+    info "Teardown complete"
+    exit 0
 }
 
-# ── Set IDENTITY.md via SQL (psql) or skip with instructions ──
-set_identity() {
-    local agent_id=$1 key=$2 content=$3
+# ── Verify mode ─────────────────────────────────────────────────
+verify_all() {
+    header "🔍 Verifying Straw Hat setup..."
 
-    if [[ -z "$agent_id" ]]; then
-        warn "No agent ID for $key, skipping IDENTITY.md"
-        return 0
+    step "Checking agents..."
+    run_sql_verbose "
+        SELECT agent_key, status, provider, model,
+               substring(cf.content, 1, 40) AS identity
+        FROM agents a
+        LEFT JOIN agent_context_files cf ON cf.agent_id = a.id AND cf.file_name = 'IDENTITY.md'
+        WHERE a.agent_key IN ('luffy','zoro','sanji','nami','chopper')
+          AND a.tenant_id = '$TENANT_ID'
+        ORDER BY a.agent_key"
+
+    step "Checking team..."
+    run_sql_verbose "
+        SELECT t.name, t.status, t.settings, m.role, a.agent_key
+        FROM agent_teams t
+        JOIN agent_team_members m ON m.team_id = t.id
+        JOIN agents a ON a.id = m.agent_id
+        WHERE t.name = '$TEAM_NAME'
+        ORDER BY m.role DESC, a.agent_key"
+
+    step "Checking skills..."
+    run_sql_verbose "SELECT slug, version FROM skills WHERE slug LIKE 'strawhat%' ORDER BY slug"
+
+    step "Checking worker endpoint..."
+    local team_id
+    team_id=$(run_sql "SELECT id FROM agent_teams WHERE name = '$TEAM_NAME' AND tenant_id = '$TENANT_ID' LIMIT 1")
+    if [[ -n "$team_id" ]]; then
+        local resp
+        resp=$(api GET "/v1/teams/$team_id/worker/tasks?status=pending" 2>/dev/null) || true
+        if [[ -n "$resp" ]]; then
+            info "Worker endpoint OK — $(echo "$resp" | jq -r '.count') pending tasks"
+        else
+            warn "Worker endpoint not responding"
+        fi
     fi
 
-    step "Setting IDENTITY.md for $key..."
-
-    # agent_context_files is seeded by the API on creation (SOUL.md, IDENTITY.md).
-    # We update via psql if DATABASE_URL is available, otherwise print instructions.
-    if [[ -n "${DATABASE_URL:-}" ]]; then
-        # Escape single quotes for SQL
-        local escaped
-        escaped=$(echo "$content" | sed "s/'/''/g")
-        psql "$DATABASE_URL" -q -c "
-            INSERT INTO agent_context_files (id, agent_id, file_name, content, updated_at, tenant_id)
-            SELECT gen_random_uuid(), '$agent_id', 'IDENTITY.md', E'$escaped', NOW(), tenant_id
-            FROM agents WHERE id = '$agent_id'
-            ON CONFLICT (agent_id, file_name) DO UPDATE SET content = EXCLUDED.content, updated_at = NOW();
-        " && info "IDENTITY.md set for $key" || warn "SQL failed for $key — set manually via dashboard"
-    else
-        # No DB access — write to temp file for reference
-        local tmpdir="${TMPDIR:-/tmp}/strawhat-identities"
-        mkdir -p "$tmpdir"
-        echo "$content" > "$tmpdir/${key}-IDENTITY.md"
-        warn "No DATABASE_URL — IDENTITY.md saved to $tmpdir/${key}-IDENTITY.md"
-        warn "Set via dashboard: Agents → $key → IDENTITY.md"
-    fi
+    info "Verification complete"
+    exit 0
 }
 
-# ══════════════════════════════════════════════════════════════════════
-#  Main
-# ══════════════════════════════════════════════════════════════════════
+[[ "${1:-}" == "--delete" ]] && delete_all
+[[ "${1:-}" == "--verify" ]] && verify_all
 
-header "🏴‍☠️  Setting up Straw Hat Pirates team"
-echo "   URL:   $GOCLAW_URL"
-echo "   Model: $MODEL"
+# ══════════════════════════════════════════════════════════════════
+#  Main — One-Shot Setup
+# ══════════════════════════════════════════════════════════════════
+
+header "🏴‍☠️  Setting up Straw Hat Pirates team (one-shot)"
+echo "   Mode: $(if $DOCKER_MODE; then echo 'Docker (local VPS)'; else echo "Remote ($GOCLAW_URL)"; fi)"
 echo ""
 
-# Verify connectivity
-step "Checking GoClaw connectivity..."
-api GET "/v1/agents" >/dev/null || { error "Cannot reach GoClaw API at $GOCLAW_URL"; exit 1; }
-info "Connected to GoClaw"
+# ── Step 1: Detect provider/model from existing default agent ───
+header "1️⃣  Detecting provider & model"
 
-# ── Create agents ──
+DEFAULT_PROVIDER=$(run_sql "SELECT provider FROM agents WHERE agent_key = 'default' AND tenant_id = '$TENANT_ID' LIMIT 1") || true
+DEFAULT_MODEL=$(run_sql "SELECT model FROM agents WHERE agent_key = 'default' AND tenant_id = '$TENANT_ID' LIMIT 1") || true
+
+if [[ -z "$DEFAULT_PROVIDER" || -z "$DEFAULT_MODEL" ]]; then
+    # Fallback: pick first enabled provider
+    DEFAULT_PROVIDER=$(run_sql "SELECT name FROM llm_providers WHERE enabled = true AND tenant_id = '$TENANT_ID' LIMIT 1") || true
+    DEFAULT_MODEL="${GOCLAW_MODEL:-claude-sonnet-4-20250514}"
+fi
+
+if [[ -z "$DEFAULT_PROVIDER" ]]; then
+    error "No LLM provider found. Configure a provider first."
+    exit 1
+fi
+
+info "Provider: $DEFAULT_PROVIDER, Model: $DEFAULT_MODEL"
+
+# ── Step 2: Create agents via HTTP API ──────────────────────────
+header "2️⃣  Creating agents"
 
 declare -A AGENT_IDS
 
-AGENT_IDS[luffy]=$(create_agent \
-    "luffy" "Luffy" "🏴‍☠️" \
-    "Team lead, task router, and summarizer. Decomposes requests, routes to crew, tracks milestones, handles failures with circuit breaker." \
-    "$IDENTITY_LUFFY")
+create_agent() {
+    local key=$1 display=$2 emoji=$3 desc=$4
 
-AGENT_IDS[zoro]=$(create_agent \
-    "zoro" "Zoro" "⚔️" \
-    "Backend debug and implementation brief owner. Analyzes Go code issues, produces execution briefs, reviews diffs." \
-    "$IDENTITY_ZORO")
-
-AGENT_IDS[sanji]=$(create_agent \
-    "sanji" "Sanji" "🍳" \
-    "Frontend and UX implementation brief owner. Prepares React/TypeScript UI briefs with acceptance criteria." \
-    "$IDENTITY_SANJI")
-
-AGENT_IDS[nami]=$(create_agent \
-    "nami" "Nami" "🗺️" \
-    "Research, planning, and spec author. Investigates problems, evaluates approaches, writes implementation-ready specs." \
-    "$IDENTITY_NAMI")
-
-AGENT_IDS[chopper]=$(create_agent \
-    "chopper" "Chopper" "🩺" \
-    "QA, validation, and test brief owner. Defines verification commands, reviews build/test output, posts pass/fail verdicts." \
-    "$IDENTITY_CHOPPER")
-
-echo ""
-
-# ── Set IDENTITY.md files ──
-
-header "📝 Setting IDENTITY.md context files"
-
-set_identity "${AGENT_IDS[luffy]}"  "luffy"  "$IDENTITY_LUFFY"
-set_identity "${AGENT_IDS[zoro]}"   "zoro"   "$IDENTITY_ZORO"
-set_identity "${AGENT_IDS[sanji]}"  "sanji"  "$IDENTITY_SANJI"
-set_identity "${AGENT_IDS[nami]}"   "nami"   "$IDENTITY_NAMI"
-set_identity "${AGENT_IDS[chopper]}" "chopper" "$IDENTITY_CHOPPER"
-
-echo ""
-
-# ── Team creation instructions ──
-
-header "👥 Team Setup"
-echo ""
-echo "Team creation is done via the GoClaw dashboard or WebSocket RPC."
-echo ""
-echo "Option 1 — Dashboard:"
-echo "  1. Open ${GOCLAW_URL} → Teams → Create Team"
-echo "  2. Team name: ${TEAM_NAME}"
-echo "  3. Lead: Luffy (${AGENT_IDS[luffy]:-?})"
-echo "  4. Add members: Zoro, Sanji, Nami, Chopper"
-echo ""
-
-if [[ -n "${DATABASE_URL:-}" ]]; then
-    echo "Option 2 — SQL (since DATABASE_URL is set):"
-    echo ""
-    # Get the tenant_id from one of the created agents
-    TENANT_ID=$(psql "$DATABASE_URL" -tAc "SELECT tenant_id FROM agents WHERE agent_key = 'luffy' LIMIT 1" 2>/dev/null || echo "")
-    if [[ -n "$TENANT_ID" ]]; then
-        cat << SQL_EOF
-  psql "\$DATABASE_URL" -c "
-    INSERT INTO teams (id, tenant_id, name, display_name, lead_agent_id, status, created_at, updated_at)
-    VALUES (
-      gen_random_uuid(),
-      '${TENANT_ID}',
-      '${TEAM_NAME}',
-      'Straw Hat Pirates',
-      '${AGENT_IDS[luffy]:-}',
-      'active',
-      NOW(), NOW()
-    ) ON CONFLICT (tenant_id, name) DO NOTHING;
-  "
-
-SQL_EOF
-        for key in zoro sanji nami chopper; do
-            echo "  -- Add $key as member"
-            cat << SQL_MEMBER
-  psql "\$DATABASE_URL" -c "
-    INSERT INTO team_members (id, team_id, agent_id, role, created_at)
-    SELECT gen_random_uuid(), t.id, '${AGENT_IDS[$key]:-}', 'member', NOW()
-    FROM teams t WHERE t.name = '${TEAM_NAME}' AND t.tenant_id = '${TENANT_ID}'
-    ON CONFLICT DO NOTHING;
-  "
-
-SQL_MEMBER
-        done
+    local existing_id
+    existing_id=$(get_agent_id "$key") || true
+    if [[ -n "$existing_id" ]]; then
+        warn "$key already exists ($existing_id)"
+        AGENT_IDS[$key]="$existing_id"
+        return 0
     fi
+
+    step "Creating $emoji $display ($key)..."
+    local payload
+    payload=$(jq -n \
+        --arg key "$key" \
+        --arg display "$display" \
+        --arg emoji "$emoji" \
+        --arg desc "$desc" \
+        '{agent_key:$key, display_name:$display, agent_type:"predefined", other_config:{emoji:$emoji, description:$desc}}')
+
+    local resp
+    resp=$(api POST "/v1/agents" "$payload") || {
+        error "Failed to create $key"
+        return 1
+    }
+    local agent_id
+    agent_id=$(echo "$resp" | jq -r '.id')
+    AGENT_IDS[$key]="$agent_id"
+    info "Created $key → $agent_id"
+}
+
+create_agent "luffy"   "Luffy"   "🏴‍☠️" "Team lead, task router, and summarizer for the Straw Hat Pirates crew"
+create_agent "zoro"    "Zoro"    "⚔️"    "Backend debug and implementation specialist. Produces execution briefs for Windows local worker."
+create_agent "sanji"   "Sanji"   "🍳"    "Frontend and UX implementation specialist. Produces UI briefs for Windows local worker."
+create_agent "nami"    "Nami"    "🗺️"    "Research, planning, and spec author. Writes to VPS team workspace only."
+create_agent "chopper" "Chopper" "🩺"    "QA, testing, and verification specialist. Reviews build and test output from Windows worker."
+
+# ── Step 3: Activate agents + set provider/model ────────────────
+header "3️⃣  Activating agents (provider=$DEFAULT_PROVIDER, model=$DEFAULT_MODEL)"
+
+for key in "${AGENT_KEYS[@]}"; do
+    _aid="${AGENT_IDS[$key]:-}"
+    if [[ -z "$_aid" ]]; then continue; fi
+    run_sql "UPDATE agents SET status = 'active', provider = '$DEFAULT_PROVIDER', model = '$DEFAULT_MODEL', updated_at = NOW() WHERE id = '$_aid' AND (status != 'active' OR provider = '' OR model = '')" >/dev/null
+done
+info "All agents active"
+
+# ── Step 4: Seed IDENTITY.md ───────────────────────────────────
+header "4️⃣  Seeding IDENTITY.md"
+
+seed_identity() {
+    local key=$1 content=$2
+    local agent_id="${AGENT_IDS[$key]:-}"
+    if [[ -z "$agent_id" ]]; then
+        warn "No agent ID for $key, skipping"
+        return 0
+    fi
+    step "Setting IDENTITY.md for $key..."
+    local escaped
+    escaped=$(echo "$content" | sed "s/'/''/g")
+    run_sql "UPDATE agent_context_files SET content = '$escaped', updated_at = NOW() WHERE agent_id = '$agent_id' AND file_name = 'IDENTITY.md'" >/dev/null
+    info "IDENTITY.md set for $key"
+}
+
+seed_identity "luffy"   "$IDENTITY_LUFFY"
+seed_identity "zoro"    "$IDENTITY_ZORO"
+seed_identity "sanji"   "$IDENTITY_SANJI"
+seed_identity "nami"    "$IDENTITY_NAMI"
+seed_identity "chopper" "$IDENTITY_CHOPPER"
+
+# ── Step 5: Create team ────────────────────────────────────────
+header "5️⃣  Creating team"
+
+EXISTING_TEAM=$(run_sql "SELECT id FROM agent_teams WHERE name = '$TEAM_NAME' AND tenant_id = '$TENANT_ID' LIMIT 1") || true
+
+if [[ -n "$EXISTING_TEAM" ]]; then
+    warn "Team already exists: $EXISTING_TEAM"
+    TEAM_ID_RESULT="$EXISTING_TEAM"
+else
+    step "Creating team '$TEAM_NAME'..."
+    TEAM_ID_RESULT=$(run_sql "
+        INSERT INTO agent_teams (id, name, lead_agent_id, description, status, settings, created_by, tenant_id, created_at, updated_at)
+        VALUES (
+            gen_random_uuid(),
+            '$TEAM_NAME',
+            '${AGENT_IDS[luffy]}',
+            'VPS control plane team for orchestrating Windows local coding bridge.',
+            'active',
+            '{\"version\": 2}'::jsonb,
+            'system',
+            '$TENANT_ID',
+            NOW(), NOW()
+        )
+        RETURNING id")
+    info "Team created → $TEAM_ID_RESULT"
 fi
 
-# ── Summary ──
+# ── Step 6: Add members ────────────────────────────────────────
+header "6️⃣  Adding team members"
 
-header "✅ Setup Summary"
+add_member() {
+    local key=$1 role=$2
+    local agent_id="${AGENT_IDS[$key]:-}"
+    if [[ -z "$agent_id" ]]; then return; fi
+
+    local exists
+    exists=$(run_sql "SELECT 1 FROM agent_team_members WHERE team_id = '$TEAM_ID_RESULT' AND agent_id = '$agent_id' LIMIT 1") || true
+    if [[ -n "$exists" ]]; then
+        warn "$key already a member"
+        return 0
+    fi
+
+    run_sql "INSERT INTO agent_team_members (team_id, agent_id, role, joined_at, tenant_id) VALUES ('$TEAM_ID_RESULT', '$agent_id', '$role', NOW(), '$TENANT_ID')" >/dev/null
+    info "Added $key as $role"
+}
+
+add_member "luffy"   "lead"
+add_member "zoro"    "member"
+add_member "sanji"   "member"
+add_member "nami"    "member"
+add_member "chopper" "member"
+
+# ── Step 7: Verify worker endpoint ─────────────────────────────
+header "7️⃣  Verifying worker endpoints"
+
+step "Testing GET /worker/tasks..."
+resp=$(api GET "/v1/teams/$TEAM_ID_RESULT/worker/tasks?status=pending" 2>/dev/null) || true
+if [[ -n "$resp" ]]; then
+    count=$(echo "$resp" | jq -r '.count // 0')
+    info "Worker endpoint OK — $count pending tasks"
+else
+    warn "Worker endpoint not responding — check deployment"
+fi
+
+# ── Summary ─────────────────────────────────────────────────────
+header "✅ Setup Complete"
 echo ""
-printf "  %-10s %-8s %s\n" "Agent" "Emoji" "ID"
-printf "  %-10s %-8s %s\n" "─────" "─────" "──────────────────────────────────────"
+printf "  %-10s %-6s %-38s %s\n" "Agent" "Emoji" "ID" "Status"
+printf "  %-10s %-6s %-38s %s\n" "─────" "─────" "──────────────────────────────────────" "──────"
 for key in "${AGENT_KEYS[@]}"; do
     local_emoji=""
     case "$key" in
@@ -490,7 +492,16 @@ for key in "${AGENT_KEYS[@]}"; do
         nami)   local_emoji="🗺️" ;;
         chopper) local_emoji="🩺" ;;
     esac
-    printf "  %-10s %-8s %s\n" "$key" "$local_emoji" "${AGENT_IDS[$key]:-not created}"
+    printf "  %-10s %-6s %-38s %s\n" "$key" "$local_emoji" "${AGENT_IDS[$key]:-?}" "active"
 done
 echo ""
+echo "  Team: $TEAM_NAME"
+echo "  Team ID: $TEAM_ID_RESULT"
+echo "  Provider: $DEFAULT_PROVIDER / $DEFAULT_MODEL"
+echo ""
 info "Straw Hat Pirates crew is ready! 🏴‍☠️"
+echo ""
+echo "  Next steps:"
+echo "  1. Create API key (dashboard → API Keys → scope: operator.write)"
+echo "  2. Configure Windows worker (see scripts/local-coding-worker.ps1)"
+echo "  3. Run: bash scripts/setup-strawhat-team.sh --verify"
