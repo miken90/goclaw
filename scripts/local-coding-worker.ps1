@@ -151,26 +151,60 @@ function Invoke-WorkerAPI {
         [switch]$AllowError
     )
     $uri = "$($config.vps_url)/v1/teams/$($config.team_id)/worker$Path"
-    $headers = @{
-        "Authorization" = "Bearer $ApiKey"
-        "Content-Type"  = "application/json"
-    }
-    $params = @{
-        Uri     = $uri
-        Method  = $Method
-        Headers = $headers
-    }
+
+    $curlArgs = @(
+        "--silent", "--show-error"
+        "--max-time", "30"
+        "--write-out", "`n%{http_code}"
+        "-X", $Method
+        "-H", "Authorization: Bearer $ApiKey"
+        "-H", "Content-Type: application/json"
+    )
     if ($Body) {
-        $params.Body = ($Body | ConvertTo-Json -Depth 10 -Compress)
+        $jsonBody = ($Body | ConvertTo-Json -Depth 10 -Compress)
+        $curlArgs += @("-d", $jsonBody)
     }
-    try {
-        return Invoke-RestMethod @params
-    } catch {
+    $curlArgs += $uri
+
+    $ErrorActionPreference = "Continue"
+    $result = & curl.exe @curlArgs 2>&1
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+
+    if ($code -ne 0) {
         if ($AllowError) { return $null }
-        $status = $_.Exception.Response.StatusCode.value__
-        Write-Log "ERROR" "$Method $Path → HTTP $status"
-        throw
+        Write-Log "ERROR" "$Method $Path → curl exit $code"
+        throw "API call failed: $Method $Path (curl exit $code): $result"
     }
+
+    # Parse HTTP status code from last line (--write-out adds it)
+    $raw = "$result"
+    $lines = $raw -split "`n"
+    $httpStatus = 0
+    if ($lines.Count -ge 1) {
+        $lastLine = $lines[-1].Trim()
+        if ($lastLine -match '^\d{3}$') {
+            $httpStatus = [int]$lastLine
+            $raw = ($lines[0..($lines.Count - 2)]) -join "`n"
+        }
+    }
+
+    if ($httpStatus -ge 400) {
+        Write-Log "WARN" "$Method $Path → HTTP $httpStatus : $($raw.Substring(0, [math]::Min(200, $raw.Length)))"
+        if ($AllowError) { return $null }
+        $errObj = [PSCustomObject]@{ _httpStatus = $httpStatus; _raw = $raw }
+        $ex = [System.Exception]::new("HTTP $httpStatus : $raw")
+        $ex.Data["HttpStatus"] = $httpStatus
+        throw $ex
+    }
+
+    if ($raw) {
+        if ($Path -like "*/tasks*" -and $Method -eq "GET") {
+            Write-Log "DEBUG" "$Method $Path → HTTP $httpStatus : $($raw.Substring(0, [math]::Min(500, $raw.Length)))"
+        }
+        try { return ($raw | ConvertFrom-Json) } catch { return $raw }
+    }
+    return $null
 }
 
 # ── Heartbeat background job ──────────────────────────────────
@@ -182,10 +216,10 @@ function Start-Heartbeat {
         param($VpsUrl, $TeamId, $WorkerId, $Key, $Interval)
         while ($true) {
             try {
-                $headers = @{ "Authorization" = "Bearer $Key"; "Content-Type" = "application/json" }
-                $body = @{ worker_id = $WorkerId; current_task_id = "" } | ConvertTo-Json -Compress
-                Invoke-RestMethod -Uri "$VpsUrl/v1/teams/$TeamId/worker/heartbeat" `
-                    -Method POST -Body $body -Headers $headers -ContentType "application/json" | Out-Null
+                $body = "{`"worker_id`":`"$WorkerId`",`"current_task_id`":`"`"}"
+                & curl.exe --silent --show-error --max-time 10 -X POST `
+                    -H "Authorization: Bearer $Key" -H "Content-Type: application/json" `
+                    -d $body "$VpsUrl/v1/teams/$TeamId/worker/heartbeat" 2>&1 | Out-Null
             } catch { }
             Start-Sleep -Seconds $Interval
         }
@@ -304,17 +338,23 @@ function New-TaskWorktree {
     $branch = "task/$TaskNumber"
     $repoPath = $Repo.Path
 
-    # Pre-create cleanup
-    git -C $repoPath branch -D $branch 2>$null
+    # Pre-create cleanup (ignore errors — branch/worktree may not exist)
+    $ErrorActionPreference = "Continue"
+    git -C $repoPath branch -D $branch 2>&1 | Out-Null
     if (Test-Path $wtPath) {
-        git -C $repoPath worktree remove $wtPath --force 2>$null
+        git -C $repoPath worktree remove $wtPath --force 2>&1 | Out-Null
         Remove-Item -Recurse -Force $wtPath -ErrorAction SilentlyContinue
     }
+    git -C $repoPath worktree prune 2>&1 | Out-Null
+    $ErrorActionPreference = "Stop"
 
     # Create worktree
-    git -C $repoPath worktree add $wtPath -b $branch 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to create worktree at $wtPath"
+    $ErrorActionPreference = "Continue"
+    $output = git -C $repoPath worktree add $wtPath -b $branch 2>&1
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    if ($exitCode -ne 0) {
+        throw "Failed to create worktree at $wtPath : $output"
     }
     return $wtPath
 }
@@ -325,21 +365,24 @@ function Remove-TaskWorktree {
     $branch = "task/$TaskNumber"
     $repoPath = $Repo.Path
 
+    $ErrorActionPreference = "Continue"
     for ($i = 0; $i -lt 3; $i++) {
         try {
             if (Test-Path $wtPath) {
-                git -C $repoPath worktree remove $wtPath --force 2>$null
+                git -C $repoPath worktree remove $wtPath --force 2>&1 | Out-Null
             }
-            git -C $repoPath branch -D $branch 2>$null
+            git -C $repoPath branch -D $branch 2>&1 | Out-Null
             if (Test-Path $wtPath) {
                 Remove-Item -Recurse -Force $wtPath -ErrorAction SilentlyContinue
             }
+            $ErrorActionPreference = "Stop"
             return
         } catch {
             Write-Warn "Worktree cleanup attempt $($i+1) failed, retrying..."
             Start-Sleep -Seconds ([math]::Pow(2, $i))
         }
     }
+    $ErrorActionPreference = "Stop"
     Write-Err "Failed to cleanup worktree task-$TaskNumber after 3 attempts"
 }
 
@@ -406,12 +449,10 @@ function Invoke-CodingTask {
         $maxSeconds = $maxSecondsMap.$jobType
     }
 
-    $claudeArgs = @(
-        "--print"
-        "--dangerously-skip-permissions"
-        "--output-format", "text"
-        "--prompt-file", $promptFile
-    )
+    # Use cmd /c to pipe prompt file to claude via stdin (ADR-9: file-based prompt passing)
+    $escapedPromptFile = $promptFile -replace '"', '\"'
+    $escapedWtPath = $wtPath -replace '"', '\"'
+    $cmdArgs = "/c `"cd /d `"$escapedWtPath`" && type `"$escapedPromptFile`" | claude --print --dangerously-skip-permissions --output-format text`""
 
     Write-Debug2 "Claude timeout: ${maxSeconds}s"
     Write-Debug2 "Working dir: $wtPath"
@@ -419,7 +460,7 @@ function Invoke-CodingTask {
     $timedOut = $false
     $claudeExitCode = -1
     try {
-        $process = Start-Process -FilePath "claude" -ArgumentList $claudeArgs `
+        $process = Start-Process -FilePath "cmd.exe" -ArgumentList $cmdArgs `
             -WorkingDirectory $wtPath -PassThru -NoNewWindow `
             -RedirectStandardOutput $outFile -RedirectStandardError $errFile
 
@@ -451,7 +492,9 @@ function Invoke-CodingTask {
             }
         }
         if (-not $timedOut) {
+            $process.WaitForExit()
             $claudeExitCode = $process.ExitCode
+            if ($null -eq $claudeExitCode) { $claudeExitCode = 0 }
         }
     } catch {
         Write-Err "Claude launch failed: $_"
@@ -468,6 +511,7 @@ function Invoke-CodingTask {
     $claudeOutput = ""
     if (Test-Path $outFile) {
         $claudeOutput = Get-Content $outFile -Raw -ErrorAction SilentlyContinue
+        if (-not $claudeOutput) { $claudeOutput = "" }
         if ($claudeOutput.Length -gt 4000) {
             $claudeOutput = $claudeOutput.Substring(0, 4000) + "`n... (truncated)"
         }
@@ -475,9 +519,11 @@ function Invoke-CodingTask {
 
     $changedFiles = @()
     try {
-        $changedFiles = @(git -C $wtPath diff --name-only HEAD 2>$null)
+        $ErrorActionPreference = "Continue"
+        $changedFiles = @(git -C $wtPath diff --name-only HEAD 2>&1 | Where-Object { $_ -is [string] })
+        $ErrorActionPreference = "Stop"
         if (-not $changedFiles) { $changedFiles = @() }
-    } catch { }
+    } catch { $changedFiles = @() }
 
     $duration = [int]((Get-Date) - $startTime).TotalSeconds
 
@@ -496,7 +542,7 @@ function Invoke-CodingTask {
         status            = $taskStatus
         summary           = $taskSummary
         changed_files     = $changedFiles
-        commands_executed  = @("claude --print --dangerously-skip-permissions --prompt-file ...")
+        commands_executed  = @("type brief.md | claude --print --dangerously-skip-permissions --output-format text")
         test_results      = ""
         branch            = "task/$taskNumber"
         blocker_reason    = $blockerReason
@@ -519,9 +565,11 @@ function Invoke-CodingTask {
                     reason   = "$reason`n`nOutput:`n$claudeOutput"
                     agent_id = $agentId
                 }
+                Write-Debug2 "Fail POST succeeded"
                 break
             } catch {
                 $httpStatus = $_.Exception.Response.StatusCode.value__
+                Write-Warn "Fail POST attempt $($i+1) failed: HTTP $httpStatus - $_"
                 if ($httpStatus -eq 409) {
                     Write-Debug2 "Task already completed/failed — treating as success"
                     break
@@ -530,22 +578,25 @@ function Invoke-CodingTask {
             }
         }
     } else {
-        Write-Info "Task #$taskNumber PASSED ($duration`s, $($changedFiles.Count) files changed)"
+        Write-Info "Task #$taskNumber PASSED ($duration`s, $(@($changedFiles).Count) files changed)"
+        $completed = $false
         for ($i = 0; $i -lt 3; $i++) {
             try {
                 Invoke-WorkerAPI -Method POST -Path "/tasks/$taskId/complete" -Body @{
-                    result   = $resultJson
+                    result   = $taskSummary
                     agent_id = $agentId
                 }
+                Write-Info "Complete POST succeeded"
+                $completed = $true
                 break
             } catch {
-                $httpStatus = $_.Exception.Response.StatusCode.value__
-                if ($httpStatus -eq 409) {
-                    Write-Debug2 "Task already completed — treating as success"
-                    break
-                }
+                Write-Warn "Complete POST attempt $($i+1) failed: $_"
+                Write-Log "ERROR" "Complete POST attempt $($i+1): $_"
                 Start-Sleep -Seconds ([math]::Pow(2, $i))
             }
+        }
+        if (-not $completed) {
+            Write-Err "Failed to POST completion after 3 attempts"
         }
     }
 
@@ -598,19 +649,26 @@ Write-Host ""
 
 while ($script:running) {
     try {
-        # Poll for pending tasks
-        $response = Invoke-WorkerAPI -Method GET -Path "/tasks?status=pending" -AllowError
+        # Poll for pending tasks targeted at this worker
+        $response = Invoke-WorkerAPI -Method GET -Path "/tasks?status=pending&execution_target=windows-local" -AllowError
         if (-not $response -or -not $response.tasks -or $response.count -eq 0) {
             Start-Sleep -Seconds $pollInterval
             continue
         }
 
-        # Pick first pending task
-        $task = $response.tasks[0]
+        # Pick highest task_number (newest) to avoid stale tasks
+        $tasks = @($response.tasks)
+        $task = $tasks[0]
+        foreach ($t in $tasks) {
+            $n = Get-SafeProp $t 'task_number' 0
+            if ($n -gt (Get-SafeProp $task 'task_number' 0)) { $task = $t }
+        }
         $tNum = Get-SafeProp $task 'task_number'
         $tId = Get-SafeProp $task 'id'
         $tSubject = Get-SafeProp $task 'subject'
         Write-Step "Found task #${tNum}: $tSubject"
+        Write-Debug2 "Task ID: $tId (from $($tasks.Count) pending tasks)"
+        Write-Log "INFO" "Picked task #$tNum id=$tId from $($tasks.Count) pending tasks"
 
         # Validate trusted-task policy
         $validationError = Test-TrustedTask -Task $task
@@ -628,16 +686,26 @@ while ($script:running) {
 
         # Claim the task
         $agentId = Get-SafeProp $task 'owner_agent_id' ''
+        Write-Log "INFO" "Claiming task #$tNum id=$tId agent_id=$agentId"
         try {
             $claimed = Invoke-WorkerAPI -Method POST -Path "/tasks/$tId/claim" -Body @{
                 agent_id  = $agentId
                 worker_id = $config.worker_id
             }
-            Write-Info "Claimed task #$tNum"
+            Write-Info "Claimed task #$tNum (id=$tId)"
+            Write-Log "INFO" "Claim response: $(($claimed | ConvertTo-Json -Depth 3 -Compress -ErrorAction SilentlyContinue))"
         } catch {
-            $status = $_.Exception.Response.StatusCode.value__
-            if ($status -eq 409) {
+            $httpStatus = 0
+            if ($_.Exception.Data -and $_.Exception.Data.Contains("HttpStatus")) {
+                $httpStatus = $_.Exception.Data["HttpStatus"]
+            }
+            if ($httpStatus -eq 409) {
                 Write-Warn "Task #$tNum already claimed by another worker"
+                Start-Sleep -Seconds $pollInterval
+                continue
+            }
+            if ($httpStatus -eq 404) {
+                Write-Warn "Task #$tNum not found on server (stale task?)"
                 Start-Sleep -Seconds $pollInterval
                 continue
             }

@@ -91,6 +91,7 @@ func (h *TeamWorkerHandler) handleListTasks(w http.ResponseWriter, r *http.Reque
 	}
 
 	statusFilter := r.URL.Query().Get("status")
+	executionTarget := r.URL.Query().Get("execution_target")
 
 	// Use "active" filter to get pending+in_progress+blocked, then filter in handler
 	tasks, err := h.teamStore.ListTasks(r.Context(), teamID, "", store.TeamTaskFilterActive, "", "", "", 100, 0)
@@ -105,9 +106,16 @@ func (h *TeamWorkerHandler) handleListTasks(w http.ResponseWriter, r *http.Reque
 	}
 	filtered := make([]store.TeamTaskData, 0, len(tasks))
 	for _, t := range tasks {
-		if t.Status == statusFilter {
-			filtered = append(filtered, t)
+		if t.Status != statusFilter {
+			continue
 		}
+		// Optional execution_target filter: match metadata.execution_target
+		if executionTarget != "" {
+			if et, ok := t.Metadata["execution_target"].(string); !ok || et != executionTarget {
+				continue
+			}
+		}
+		filtered = append(filtered, t)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -181,7 +189,20 @@ func (h *TeamWorkerHandler) handleClaimTask(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	slog.Info("worker.claim_task", "task_id", taskID, "agent_id", agentID, "worker_id", req.WorkerID)
+	slog.Info("worker.claim_task", "task_id", taskID, "agent_id", agentID, "worker_id", req.WorkerID, "team_id", teamID)
+
+	// Pre-check: verify task exists and is pending (for better error messages)
+	task, err := h.teamStore.GetTask(r.Context(), taskID)
+	if err != nil {
+		slog.Warn("worker.claim_task_not_found", "task_id", taskID, "error", err)
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		return
+	}
+	if task.Status != store.TeamTaskStatusPending {
+		slog.Warn("worker.claim_task_wrong_status", "task_id", taskID, "status", task.Status, "task_number", task.TaskNumber)
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "task status is " + task.Status + ", not pending"})
+		return
+	}
 
 	if err := h.teamStore.ClaimTask(r.Context(), taskID, agentID, teamID); err != nil {
 		if isConflictError(err) {
@@ -192,7 +213,7 @@ func (h *TeamWorkerHandler) handleClaimTask(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	task, err := h.teamStore.GetTask(r.Context(), taskID)
+	task, err = h.teamStore.GetTask(r.Context(), taskID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
