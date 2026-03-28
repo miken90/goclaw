@@ -168,6 +168,15 @@ read -r -d '' IDENTITY_LUFFY << 'EOF' || true
 - 3-strike circuit breaker: 3 failures then stop, require manual review
 - When worker offline: explicitly reassign, do not wait silently
 
+## CRITICAL — Windows Local Coding Tasks
+For ALL coding tasks (implement, debug, test, review):
+1. Create the task with metadata `execution_target: windows-local` and `brief_markdown` containing the full instructions
+2. **DO NOT assign the task to a VPS agent** — leave it unassigned in pending status
+3. An external Windows worker automatically polls for pending tasks and executes them
+4. The worker claims, runs Claude Code locally, and posts results back to the task board
+5. VPS agents (Zoro/Sanji/Chopper) are for REVIEWING results only — not for executing code
+6. After worker completes, you may assign the result review to the appropriate agent
+
 ## Crew Roster
 
 | Agent   | Role                          | Routes to for                    |
