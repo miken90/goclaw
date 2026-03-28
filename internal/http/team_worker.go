@@ -161,10 +161,24 @@ func (h *TeamWorkerHandler) handleClaimTask(w http.ResponseWriter, r *http.Reque
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 		return
 	}
-	agentID, err := uuid.Parse(req.AgentID)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid agent_id"})
-		return
+
+	var agentID uuid.UUID
+	if req.AgentID != "" {
+		var err error
+		agentID, err = uuid.Parse(req.AgentID)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid agent_id"})
+			return
+		}
+	} else {
+		// Unassigned task — pick first team member as owner
+		members, err := h.teamStore.ListMembers(r.Context(), teamID)
+		if err == nil && len(members) > 0 {
+			agentID = members[0].AgentID
+		} else {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "agent_id required (no team members found)"})
+			return
+		}
 	}
 
 	slog.Info("worker.claim_task", "task_id", taskID, "agent_id", agentID, "worker_id", req.WorkerID)
