@@ -291,7 +291,7 @@ func (t *TaskTicker) processFollowups(ctx context.Context) {
 	}
 	for teamID, teamTasks := range byTeam {
 		team, err := t.teams.GetTeam(ctx, teamID)
-		if err != nil {
+		if err != nil || team == nil {
 			continue
 		}
 		interval := followupInterval(*team)
