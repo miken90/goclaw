@@ -160,9 +160,16 @@ function Invoke-WorkerAPI {
         "-H", "Authorization: Bearer $ApiKey"
         "-H", "Content-Type: application/json"
     )
+    $tmpBody = $null
     if ($Body) {
         $jsonBody = ($Body | ConvertTo-Json -Depth 10 -Compress)
-        $curlArgs += @("-d", $jsonBody)
+        # PS5: write JSON to temp file to avoid quote-mangling in native command args
+        # Use UTF8 without BOM — .NET Framework's Encoding.UTF8 includes BOM by default
+        $tmpBody = [System.IO.Path]::GetTempFileName()
+        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($tmpBody, $jsonBody, $utf8NoBom)
+        $curlArgs += @("-d", "@$tmpBody")
+        Write-Log "DEBUG" "$Method $Path body: $jsonBody"
     }
     $curlArgs += $uri
 
@@ -171,6 +178,9 @@ function Invoke-WorkerAPI {
     $code = $LASTEXITCODE
     $ErrorActionPreference = "Stop"
 
+    # Clean up temp body file
+    if ($tmpBody -and (Test-Path $tmpBody)) { Remove-Item $tmpBody -Force -ErrorAction SilentlyContinue }
+
     if ($code -ne 0) {
         if ($AllowError) { return $null }
         Write-Log "ERROR" "$Method $Path → curl exit $code"
@@ -178,15 +188,23 @@ function Invoke-WorkerAPI {
     }
 
     # Parse HTTP status code from last line (--write-out adds it)
-    $raw = "$result"
-    $lines = $raw -split "`n"
+    # PS5: $result is an array of strings (one per line), not a single string
+    $lines = @($result)
     $httpStatus = 0
     if ($lines.Count -ge 1) {
-        $lastLine = $lines[-1].Trim()
+        $lastLine = "$($lines[-1])".Trim()
         if ($lastLine -match '^\d{3}$') {
             $httpStatus = [int]$lastLine
-            $raw = ($lines[0..($lines.Count - 2)]) -join "`n"
+            if ($lines.Count -gt 1) {
+                $raw = ($lines[0..($lines.Count - 2)] | ForEach-Object { "$_" }) -join ""
+            } else {
+                $raw = ""
+            }
+        } else {
+            $raw = ($lines | ForEach-Object { "$_" }) -join ""
         }
+    } else {
+        $raw = ""
     }
 
     if ($httpStatus -ge 400) {
@@ -339,13 +357,14 @@ function New-TaskWorktree {
     $repoPath = $Repo.Path
 
     # Pre-create cleanup (ignore errors — branch/worktree may not exist)
+    # Must remove worktree BEFORE deleting branch (branch can't be deleted while worktree uses it)
     $ErrorActionPreference = "Continue"
-    git -C $repoPath branch -D $branch 2>&1 | Out-Null
     if (Test-Path $wtPath) {
         git -C $repoPath worktree remove $wtPath --force 2>&1 | Out-Null
         Remove-Item -Recurse -Force $wtPath -ErrorAction SilentlyContinue
     }
     git -C $repoPath worktree prune 2>&1 | Out-Null
+    git -C $repoPath branch -D $branch 2>&1 | Out-Null
     $ErrorActionPreference = "Stop"
 
     # Create worktree
@@ -579,24 +598,32 @@ function Invoke-CodingTask {
         }
     } else {
         Write-Info "Task #$taskNumber PASSED ($duration`s, $(@($changedFiles).Count) files changed)"
-        $completed = $false
+        # Sanitize summary for JSON: strip null bytes and limit size
+        $safeSummary = $taskSummary -replace '\x00', '' -replace '[^\x20-\x7E\x0A\x0D\t]', '?'
+        if ($safeSummary.Length -gt 2000) {
+            $safeSummary = $safeSummary.Substring(0, 2000) + "`n... (truncated for API)"
+        }
+        $submitted = $false
         for ($i = 0; $i -lt 3; $i++) {
             try {
-                Invoke-WorkerAPI -Method POST -Path "/tasks/$taskId/complete" -Body @{
-                    result   = $taskSummary
-                    agent_id = $agentId
+                Write-Debug2 "Submit POST attempt $($i+1)..."
+                Invoke-WorkerAPI -Method POST -Path "/tasks/$taskId/submit" -Body @{
+                    result        = $safeSummary
+                    agent_id      = $agentId
+                    worker_id     = $config.worker_id
+                    changed_files = $changedFiles
                 }
-                Write-Info "Complete POST succeeded"
-                $completed = $true
+                Write-Info "Submitted for review"
+                $submitted = $true
                 break
             } catch {
-                Write-Warn "Complete POST attempt $($i+1) failed: $_"
-                Write-Log "ERROR" "Complete POST attempt $($i+1): $_"
+                Write-Warn "Submit POST attempt $($i+1) failed: $_"
+                Write-Log "ERROR" "Submit POST attempt $($i+1): $_"
                 Start-Sleep -Seconds ([math]::Pow(2, $i))
             }
         }
-        if (-not $completed) {
-            Write-Err "Failed to POST completion after 3 attempts"
+        if (-not $submitted) {
+            Write-Err "Failed to POST submit after 3 attempts"
         }
     }
 
@@ -651,13 +678,15 @@ while ($script:running) {
     try {
         # Poll for pending tasks targeted at this worker
         $response = Invoke-WorkerAPI -Method GET -Path "/tasks?status=pending&execution_target=windows-local" -AllowError
-        if (-not $response -or -not $response.tasks -or $response.count -eq 0) {
+        $rTasks = Get-SafeProp $response 'tasks'
+        $rCount = Get-SafeProp $response 'count' 0
+        if (-not $rTasks -or $rCount -eq 0) {
             Start-Sleep -Seconds $pollInterval
             continue
         }
 
         # Pick highest task_number (newest) to avoid stale tasks
-        $tasks = @($response.tasks)
+        $tasks = @($rTasks)
         $task = $tasks[0]
         foreach ($t in $tasks) {
             $n = Get-SafeProp $t 'task_number' 0

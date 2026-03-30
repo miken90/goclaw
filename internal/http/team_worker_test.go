@@ -207,7 +207,7 @@ func setupWorkerTest(t *testing.T) (*mockWorkerTeamStore, *http.ServeMux) {
 	setupTestCache(t, nil)
 
 	ms := newMockWorkerTeamStore()
-	h := NewTeamWorkerHandler(ms)
+	h := NewTeamWorkerHandler(ms, nil, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	return ms, mux
@@ -219,7 +219,7 @@ func setupWorkerTestWithAuth(t *testing.T) (*mockWorkerTeamStore, *http.ServeMux
 	setupTestCache(t, nil)
 
 	ms := newMockWorkerTeamStore()
-	h := NewTeamWorkerHandler(ms)
+	h := NewTeamWorkerHandler(ms, nil, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 	return ms, mux
