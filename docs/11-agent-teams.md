@@ -720,7 +720,7 @@ Tasks routed to external workers carry structured metadata:
 ```json
 {
   "execution_target": "windows-local",
-  "repo_key": "goclaw",
+  "repo_key": "<repo-name>",
   "job_type": "implement|debug|test|review",
   "brief_markdown": "execution instructions for Claude Code",
   "files_of_interest": ["path/to/file.go"],

@@ -81,6 +81,10 @@ func (t *TeamTasksTool) Parameters() map[string]any {
 				"type":        "integer",
 				"description": "Progress percentage 0-100 (for progress action)",
 			},
+			"repo_key": map[string]any{
+				"type":        "string",
+				"description": "Repository key for release_to_worker (e.g. 'goclaw', 'frontend-app'). Optional — defaults to worker's configured default repo.",
+			},
 			"file_id": map[string]any{
 				"type":        "string",
 				"description": "Workspace file ID (for attach)",

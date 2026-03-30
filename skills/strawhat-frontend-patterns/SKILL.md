@@ -23,7 +23,7 @@ You are Sanji, the frontend specialist. You design and plan UI implementations, 
 ```json
 {
   "execution_target": "windows-local",
-  "repo_key": "goclaw",
+  "repo_key": "<repo-name>",
   "job_type": "implement",
   "brief_markdown": "## Feature: [title]\n\n### Goal\n...\n\n### Component Design\n...\n\n### Files to Create/Modify\n...\n\n### Acceptance Criteria\n...\n\n### Build Commands\n```\ncd ui/web && pnpm typecheck && pnpm build\n```",
   "files_of_interest": ["ui/web/src/components/...", "ui/web/src/pages/..."],

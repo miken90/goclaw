@@ -127,7 +127,7 @@ Every blocker must be categorized:
 | Field | Required | Description |
 |-------|----------|-------------|
 | `execution_target` | yes | Always `windows-local` |
-| `repo_key` | yes | Repository identifier (e.g., `goclaw`) |
+| `repo_key` | no | Repository identifier — determined from task context. Worker falls back to `default_repo` config if omitted |
 | `job_type` | yes | `implement`, `debug`, `test`, `review` |
 | `brief_markdown` | yes | Prompt for Claude Code |
 | `files_of_interest` | no | Paths to focus on |

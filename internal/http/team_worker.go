@@ -98,6 +98,7 @@ func (h *TeamWorkerHandler) handleListTasks(w http.ResponseWriter, r *http.Reque
 
 	statusFilter := r.URL.Query().Get("status")
 	executionTarget := r.URL.Query().Get("execution_target")
+	repoKey := r.URL.Query().Get("repo_key")
 
 	// Use "active" filter to get pending+in_progress+blocked, then filter in handler
 	tasks, err := h.teamStore.ListTasks(r.Context(), teamID, "", store.TeamTaskFilterActive, "", "", "", 100, 0)
@@ -118,6 +119,12 @@ func (h *TeamWorkerHandler) handleListTasks(w http.ResponseWriter, r *http.Reque
 		// Optional execution_target filter: match metadata.execution_target
 		if executionTarget != "" {
 			if et, ok := t.Metadata["execution_target"].(string); !ok || et != executionTarget {
+				continue
+			}
+		}
+		// Optional repo_key filter: match metadata.repo_key
+		if repoKey != "" {
+			if rk, ok := t.Metadata["repo_key"].(string); !ok || rk != repoKey {
 				continue
 			}
 		}

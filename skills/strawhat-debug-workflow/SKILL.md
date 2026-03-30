@@ -25,7 +25,7 @@ When creating a task for the Windows worker, use this metadata structure:
 ```json
 {
   "execution_target": "windows-local",
-  "repo_key": "goclaw",
+  "repo_key": "<repo-name>",
   "job_type": "debug",
   "brief_markdown": "## Bug: [title]\n\n### Symptoms\n...\n\n### Likely Root Cause\n...\n\n### Files to Investigate\n...\n\n### Fix Strategy\n...\n\n### Verification Commands\n```\ngo test -v -run TestXxx ./path/to/...\n```",
   "files_of_interest": ["path/to/file1.go", "path/to/file2.go"],

@@ -23,7 +23,7 @@ You are Chopper, the QA specialist. You define verification plans, produce test 
 ```json
 {
   "execution_target": "windows-local",
-  "repo_key": "goclaw",
+  "repo_key": "<repo-name>",
   "job_type": "test",
   "brief_markdown": "## Verify: [task subject]\n\n### Changed Files\n...\n\n### Tests to Run\n```\ngo test -v -race ./path/to/...\n```\n\n### Build Checks\n```\ngo build ./...\ngo vet ./...\n```\n\n### Manual Checks\n- [ ] Check 1\n- [ ] Check 2\n\n### Expected Results\nAll tests pass, no race conditions, build clean.",
   "files_of_interest": ["path/to/changed/files"],

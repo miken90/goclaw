@@ -348,12 +348,16 @@ func (t *TeamTasksTool) executeReleaseToWorker(ctx context.Context, args map[str
 	}
 
 	brief, _ := args["text"].(string)
+	repoKey, _ := args["repo_key"].(string)
 
 	meta := task.Metadata
 	if meta == nil {
 		meta = make(map[string]any)
 	}
 	meta["execution_target"] = "windows-local"
+	if repoKey != "" {
+		meta["repo_key"] = repoKey
+	}
 	meta["pre_audited"] = true
 	meta["pre_audit_agent"] = t.manager.AgentKeyFromID(ctx, agentID)
 	meta["pre_audit_at"] = time.Now().UTC().Format(time.RFC3339)
@@ -377,5 +381,9 @@ func (t *TeamTasksTool) executeReleaseToWorker(ctx context.Context, args map[str
 		WithContextInfo(ctx),
 	))
 
-	return NewResult(fmt.Sprintf("Task %s released to external worker. execution_target=windows-local, pre_audited=true.", taskID))
+	msg := fmt.Sprintf("Task %s released to external worker. execution_target=windows-local, pre_audited=true", taskID)
+	if repoKey != "" {
+		msg += fmt.Sprintf(", repo_key=%s", repoKey)
+	}
+	return NewResult(msg + ".")
 }
