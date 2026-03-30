@@ -1,7 +1,9 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -9,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/i18n"
 	"github.com/nextlevelbuilder/goclaw/internal/permissions"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
@@ -18,11 +21,13 @@ import (
 // to poll, claim, progress, and complete team tasks.
 // Auth bypasses the admin-only WS RPC policy — requires operator role.
 type TeamWorkerHandler struct {
-	teamStore store.TeamStore
+	teamStore  store.TeamStore
+	agentStore store.AgentStore
+	msgBus     *bus.MessageBus
 }
 
-func NewTeamWorkerHandler(teamStore store.TeamStore) *TeamWorkerHandler {
-	return &TeamWorkerHandler{teamStore: teamStore}
+func NewTeamWorkerHandler(teamStore store.TeamStore, agentStore store.AgentStore, msgBus *bus.MessageBus) *TeamWorkerHandler {
+	return &TeamWorkerHandler{teamStore: teamStore, agentStore: agentStore, msgBus: msgBus}
 }
 
 func (h *TeamWorkerHandler) RegisterRoutes(mux *http.ServeMux) {
@@ -32,6 +37,7 @@ func (h *TeamWorkerHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/teams/{teamId}/worker/tasks/{taskId}/progress", h.workerAuth(h.handleProgress))
 	mux.HandleFunc("POST /v1/teams/{teamId}/worker/tasks/{taskId}/comment", h.workerAuth(h.handleComment))
 	mux.HandleFunc("POST /v1/teams/{teamId}/worker/tasks/{taskId}/complete", h.workerAuth(h.handleComplete))
+	mux.HandleFunc("POST /v1/teams/{teamId}/worker/tasks/{taskId}/submit", h.workerAuth(h.handleSubmit))
 	mux.HandleFunc("POST /v1/teams/{teamId}/worker/tasks/{taskId}/fail", h.workerAuth(h.handleFail))
 	mux.HandleFunc("POST /v1/teams/{teamId}/worker/heartbeat", h.workerAuth(h.handleHeartbeat))
 }
@@ -343,6 +349,84 @@ func (h *TeamWorkerHandler) handleComplete(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"task": task})
 }
 
+// POST /v1/teams/{teamId}/worker/tasks/{taskId}/submit
+func (h *TeamWorkerHandler) handleSubmit(w http.ResponseWriter, r *http.Request) {
+	if !h.checkStore(w, r) {
+		return
+	}
+	teamID, ok := h.parseTeamID(w, r)
+	if !ok {
+		return
+	}
+	taskID, ok := h.parseTaskID(w, r)
+	if !ok {
+		return
+	}
+
+	var req struct {
+		Result       string   `json:"result"`
+		AgentID      string   `json:"agent_id"`
+		WorkerID     string   `json:"worker_id"`
+		ChangedFiles []string `json:"changed_files"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+
+	slog.Info("worker.submit_task", "task_id", taskID, "agent_id", req.AgentID, "worker_id", req.WorkerID)
+
+	// Fetch task and validate ownership
+	task, err := h.teamStore.GetTask(r.Context(), taskID)
+	if err != nil || task == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		return
+	}
+	if task.TeamID != teamID {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "task does not belong to this team"})
+		return
+	}
+
+	// Merge worker metadata into task
+	meta := task.Metadata
+	if meta == nil {
+		meta = make(map[string]any)
+	}
+	meta["changed_files"] = req.ChangedFiles
+	meta["worker_id"] = req.WorkerID
+	meta["submitted_at"] = time.Now().UTC().Format(time.RFC3339)
+
+	updates := map[string]any{"metadata": meta}
+	if req.Result != "" {
+		updates["result"] = req.Result
+	}
+	if err := h.teamStore.UpdateTask(r.Context(), taskID, updates); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Transition: in_progress → in_review
+	if err := h.teamStore.ReviewTask(r.Context(), taskID, teamID); err != nil {
+		if isConflictError(err) {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": "task not in progress"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Notify owner agent for external tasks (triggers a fresh agent session for review).
+	h.notifyOwnerAgentInReview(r.Context(), task, teamID)
+
+	// Return updated task
+	updated, err := h.teamStore.GetTask(r.Context(), taskID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"task": updated})
+}
+
 // POST /v1/teams/{teamId}/worker/tasks/{taskId}/fail
 func (h *TeamWorkerHandler) handleFail(w http.ResponseWriter, r *http.Request) {
 	if !h.checkStore(w, r) {
@@ -413,6 +497,55 @@ func (h *TeamWorkerHandler) handleHeartbeat(w http.ResponseWriter, r *http.Reque
 		"ok":          true,
 		"server_time": time.Now().UTC().Format(time.RFC3339),
 	})
+}
+
+// notifyOwnerAgentInReview wakes the owner agent when an external task enters in_review.
+// Publishes an InboundMessage so the agent starts a fresh session to review the worker output.
+func (h *TeamWorkerHandler) notifyOwnerAgentInReview(ctx context.Context, task *store.TeamTaskData, teamID uuid.UUID) {
+	if h.msgBus == nil || h.agentStore == nil || task.OwnerAgentID == nil {
+		return
+	}
+	// Only notify for external tasks (execution_target set).
+	et, _ := task.Metadata["execution_target"].(string)
+	if et == "" || et == "agent" {
+		return
+	}
+
+	team, err := h.teamStore.GetTeam(ctx, teamID)
+	if err != nil || team == nil {
+		return
+	}
+	ag, err := h.agentStore.GetByID(ctx, *task.OwnerAgentID)
+	if err != nil || ag == nil {
+		slog.Warn("worker.review_notify: cannot resolve owner agent", "task_id", task.ID, "error", err)
+		return
+	}
+
+	content := fmt.Sprintf("[Task #%d submitted by worker — review needed]\nTask: %s\nAction: Review the result and changed files, then approve or reject.\nUse team_tasks(action=\"get\", task_id=\"%s\") to see details.",
+		task.TaskNumber, task.Subject, task.ID)
+
+	channel := task.Channel
+	chatID := task.ChatID
+	if channel == "" || channel == "system" || channel == "teammate" {
+		channel = "dashboard"
+		chatID = team.ID.String()
+	}
+
+	userID := store.UserIDFromContext(ctx)
+	if userID == "" {
+		userID = chatID
+	}
+
+	h.msgBus.TryPublishInbound(bus.InboundMessage{
+		Channel:  channel,
+		SenderID: "notification:worker-submit",
+		ChatID:   chatID,
+		AgentID:  ag.AgentKey,
+		UserID:   userID,
+		TenantID: store.TenantIDFromContext(ctx),
+		Content:  content,
+	})
+	slog.Info("worker.review_notify: notified owner agent", "task_id", task.ID, "agent_key", ag.AgentKey)
 }
 
 // isConflictError checks if a store error indicates a CAS conflict (row not matched).

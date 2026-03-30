@@ -79,7 +79,7 @@ func wireHTTP(stores *store.Stores, defaultWorkspace, dataDir, bundledSkillsDir 
 
 	if stores != nil && stores.Teams != nil {
 		teamEventsH = httpapi.NewTeamEventsHandler(stores.Teams)
-		teamWorkerH = httpapi.NewTeamWorkerHandler(stores.Teams)
+		teamWorkerH = httpapi.NewTeamWorkerHandler(stores.Teams, stores.Agents, msgBus)
 	}
 
 	if stores != nil && stores.BuiltinTools != nil {
