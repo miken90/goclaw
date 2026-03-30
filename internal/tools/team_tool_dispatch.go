@@ -61,6 +61,12 @@ func (m *TeamToolManager) dispatchTaskToAgent(ctx context.Context, task *store.T
 		return
 	}
 
+	// Re-fetch authoritative task state before dispatch.
+	// Callers may pass stale in-memory objects (e.g. metadata updated mid-turn).
+	if fresh, err := m.teamStore.GetTask(ctx, task.ID); err == nil && fresh != nil {
+		task = fresh
+	}
+
 	// Skip external tasks — they're handled by external workers, not the agent loop.
 	if isExternalTask(task) {
 		slog.Warn("team_tasks.dispatch: blocked dispatch of external task",
