@@ -18,6 +18,7 @@ var fullActions = []string{
 	"list", "get", "create", "claim", "complete", "cancel",
 	"approve", "reject", "search", "review", "comment",
 	"progress", "attach", "update", "ask_user", "clear_ask_user", "retry",
+	"release_to_worker",
 }
 
 func (FullTeamPolicy) IsAllowed(string) bool       { return true }
