@@ -367,6 +367,7 @@ func (t *TeamTasksTool) executeReleaseToWorker(ctx context.Context, args map[str
 	if err := t.manager.Store().UpdateTask(ctx, taskID, map[string]any{"metadata": meta}); err != nil {
 		return ErrorResult("failed to update task metadata: " + err.Error())
 	}
+	recordTaskAction(ctx, func(f *TaskActionFlags) { f.ReleasedToWorker = true })
 
 	ownerKey := t.manager.AgentKeyFromID(ctx, agentID)
 	t.manager.BroadcastTeamEvent(ctx, protocol.EventTeamTaskUpdated, BuildTaskEventPayload(
