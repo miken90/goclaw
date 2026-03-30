@@ -361,7 +361,7 @@ func (t *TeamTasksTool) executeReleaseToWorker(ctx context.Context, args map[str
 		meta["brief_markdown"] = brief
 	}
 
-	if err := t.manager.Store().UpdateTask(ctx, taskID, map[string]any{"metadata": meta}); err != nil {
+	if err := t.manager.Store().UpdateTask(ctx, taskID, map[string]any{"metadata": meta, "owner_agent_id": nil}); err != nil {
 		return ErrorResult("failed to update task metadata: " + err.Error())
 	}
 	if err := t.manager.Store().ResetTaskStatus(ctx, taskID, team.ID); err != nil {

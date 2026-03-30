@@ -143,6 +143,7 @@ var allowedTaskUpdateCols = map[string]bool{
 	"description":      true,
 	"priority":         true,
 	"assignee_user_id": true,
+	"owner_agent_id":   true,
 	"metadata":         true,
 	"blocked_by":       true,
 	"updated_at":       true,
