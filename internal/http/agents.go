@@ -14,6 +14,7 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/config"
 	"github.com/nextlevelbuilder/goclaw/internal/i18n"
+	"github.com/nextlevelbuilder/goclaw/internal/permissions"
 	"github.com/nextlevelbuilder/goclaw/internal/providers"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 	"github.com/nextlevelbuilder/goclaw/pkg/protocol"
@@ -26,10 +27,13 @@ type AgentsHandler struct {
 	providerReg      *providers.Registry
 	db               *sql.DB
 	tracingStore     store.TracingStore
-	defaultWorkspace string            // default workspace path template (e.g. "~/.goclaw/workspace")
-	msgBus           *bus.MessageBus   // for cache invalidation events (nil = no events)
-	summoner         *AgentSummoner    // LLM-based agent setup (nil = disabled)
-	isOwner          func(string) bool // checks if user ID is a system owner (nil = no owners configured)
+	memoryStore      store.MemoryStore         // for import (nil = disabled)
+	kgStore          store.KnowledgeGraphStore // for import (nil = disabled)
+	defaultWorkspace string                   // default workspace path template (e.g. "~/.goclaw/workspace")
+	dataDir          string                   // resolved data directory (e.g. "~/.goclaw/data") — for team workspace export
+	msgBus           *bus.MessageBus          // for cache invalidation events (nil = no events)
+	summoner         *AgentSummoner           // LLM-based agent setup (nil = disabled)
+	isOwner          func(string) bool        // checks if user ID is a system owner (nil = no owners configured)
 }
 
 // NewAgentsHandler creates a handler for agent management endpoints.
@@ -46,6 +50,17 @@ func NewAgentsHandler(agents store.AgentStore, providers store.ProviderStore, pr
 		summoner:         summoner,
 		isOwner:          isOwner,
 	}
+}
+
+// SetDataDir sets the resolved data directory used for team workspace paths.
+func (h *AgentsHandler) SetDataDir(dataDir string) {
+	h.dataDir = dataDir
+}
+
+// SetImportStores attaches optional stores needed for agent import.
+func (h *AgentsHandler) SetImportStores(mem store.MemoryStore, kg store.KnowledgeGraphStore) {
+	h.memoryStore = mem
+	h.kgStore = kg
 }
 
 // isOwnerUser checks if the given user ID is a system owner.
@@ -66,25 +81,48 @@ func (h *AgentsHandler) emitCacheInvalidate(kind, key string) {
 
 // RegisterRoutes registers all agent management routes on the given mux.
 func (h *AgentsHandler) RegisterRoutes(mux *http.ServeMux) {
+	// Agent CRUD (reads: viewer+, writes: admin+)
 	mux.HandleFunc("GET /v1/agents", h.authMiddleware(h.handleList))
-	mux.HandleFunc("POST /v1/agents", h.authMiddleware(h.handleCreate))
+	mux.HandleFunc("POST /v1/agents", h.adminMiddleware(h.handleCreate))
 	mux.HandleFunc("GET /v1/agents/{id}", h.authMiddleware(h.handleGet))
-	mux.HandleFunc("PUT /v1/agents/{id}", h.authMiddleware(h.handleUpdate))
-	mux.HandleFunc("DELETE /v1/agents/{id}", h.authMiddleware(h.handleDelete))
+	mux.HandleFunc("PUT /v1/agents/{id}", h.adminMiddleware(h.handleUpdate))
+	mux.HandleFunc("DELETE /v1/agents/{id}", h.adminMiddleware(h.handleDelete))
+	// Sharing (admin+)
 	mux.HandleFunc("GET /v1/agents/{id}/shares", h.authMiddleware(h.handleListShares))
-	mux.HandleFunc("POST /v1/agents/{id}/shares", h.authMiddleware(h.handleShare))
-	mux.HandleFunc("DELETE /v1/agents/{id}/shares/{userID}", h.authMiddleware(h.handleRevokeShare))
-	mux.HandleFunc("POST /v1/agents/{id}/regenerate", h.authMiddleware(h.handleRegenerate))
-	mux.HandleFunc("POST /v1/agents/{id}/resummon", h.authMiddleware(h.handleResummon))
+	mux.HandleFunc("POST /v1/agents/{id}/shares", h.adminMiddleware(h.handleShare))
+	mux.HandleFunc("DELETE /v1/agents/{id}/shares/{userID}", h.adminMiddleware(h.handleRevokeShare))
+	// Agent operations (admin+)
+	mux.HandleFunc("POST /v1/agents/{id}/regenerate", h.adminMiddleware(h.handleRegenerate))
+	mux.HandleFunc("POST /v1/agents/{id}/resummon", h.adminMiddleware(h.handleResummon))
+	// Export (agent owner or system owner)
+	mux.HandleFunc("GET /v1/agents/{id}/export/preview", h.authMiddleware(h.handleExportPreview))
+	mux.HandleFunc("GET /v1/agents/{id}/export", h.authMiddleware(h.handleExport))
+	mux.HandleFunc("GET /v1/agents/{id}/export/download/{token}", h.authMiddleware(h.handleExportDownload))
+	// Shared download route for all export types (skills, MCP, teams use same token map)
+	mux.HandleFunc("GET /v1/export/download/{token}", h.authMiddleware(h.handleExportDownload))
+	// Import (admin only — system owner or tenant admin)
+	mux.HandleFunc("POST /v1/agents/import/preview", h.adminMiddleware(h.handleImportPreview))
+	mux.HandleFunc("POST /v1/agents/import", h.adminMiddleware(h.handleImport))
+	mux.HandleFunc("POST /v1/agents/{id}/import", h.adminMiddleware(h.handleMergeImport))
+	// Team export/import (system owner only)
+	mux.HandleFunc("GET /v1/teams/{id}/export/preview", h.adminMiddleware(h.handleTeamExportPreview))
+	mux.HandleFunc("GET /v1/teams/{id}/export", h.adminMiddleware(h.handleTeamExport))
+	mux.HandleFunc("POST /v1/teams/import", h.adminMiddleware(h.handleTeamImport))
+	// Read-only (viewer+)
 	mux.HandleFunc("GET /v1/agents/{id}/codex-pool-activity", h.authMiddleware(h.handleCodexPoolActivity))
 	mux.HandleFunc("GET /v1/agents/{id}/instances", h.authMiddleware(h.handleListInstances))
 	mux.HandleFunc("GET /v1/agents/{id}/instances/{userID}/files", h.authMiddleware(h.handleGetInstanceFiles))
-	mux.HandleFunc("PUT /v1/agents/{id}/instances/{userID}/files/{fileName}", h.authMiddleware(h.handleSetInstanceFile))
-	mux.HandleFunc("PATCH /v1/agents/{id}/instances/{userID}/metadata", h.authMiddleware(h.handleUpdateInstanceMetadata))
+	// Instance writes (admin+)
+	mux.HandleFunc("PUT /v1/agents/{id}/instances/{userID}/files/{fileName}", h.adminMiddleware(h.handleSetInstanceFile))
+	mux.HandleFunc("PATCH /v1/agents/{id}/instances/{userID}/metadata", h.adminMiddleware(h.handleUpdateInstanceMetadata))
 }
 
 func (h *AgentsHandler) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return requireAuth("", next)
+}
+
+func (h *AgentsHandler) adminMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return requireAuth(permissions.RoleAdmin, next)
 }
 
 func (h *AgentsHandler) handleList(w http.ResponseWriter, r *http.Request) {
