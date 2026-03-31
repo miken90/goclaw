@@ -59,12 +59,36 @@ func (h *TeamWorkerHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/teams/{teamId}/worker/tasks/{taskId}/fail", h.workerAuth(h.handleFail))
 	mux.HandleFunc("POST /v1/teams/{teamId}/worker/heartbeat", h.workerAuth(h.handleHeartbeat))
 	// WebSocket: Claude CLI connects via --sdk-url for real-time streaming
-	mux.HandleFunc("GET /v1/teams/{teamId}/worker/stream/{taskId}", h.workerAuth(h.handleStream))
+	// Uses dedicated auth that reads token from query param (Claude CLI doesn't send Authorization header on WS).
+	mux.HandleFunc("GET /v1/teams/{teamId}/worker/stream/{taskId}", h.workerAuthWS(h.handleStream))
 }
 
 func (h *TeamWorkerHandler) workerAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		auth := resolveAuth(r)
+		if !auth.Authenticated {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		if !permissions.HasMinRole(auth.Role, permissions.RoleOperator) {
+			slog.Warn("security.worker_insufficient_role", "role", auth.Role, "ip", r.RemoteAddr)
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "worker requires operator role"})
+			return
+		}
+		ctx := enrichContext(r.Context(), r, auth)
+		next(w, r.WithContext(ctx))
+	}
+}
+
+// workerAuthWS is like workerAuth but also reads token from query param ?token=.
+// Claude CLI --sdk-url sends auth via query param, not Authorization header.
+func (h *TeamWorkerHandler) workerAuthWS(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		bearer := extractBearerToken(r)
+		if bearer == "" {
+			bearer = r.URL.Query().Get("token")
+		}
+		auth := resolveAuthWithBearer(r, bearer)
 		if !auth.Authenticated {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
