@@ -84,6 +84,14 @@ api() {
                 --header="Authorization: Bearer $GOCLAW_TOKEN" \
                 --header="X-GoClaw-User-Id: system" \
                 "$url" 2>/dev/null
+        elif [[ "$method" == "PUT" ]]; then
+            local body_data="${1:-{\}}"
+            docker exec "$CONTAINER" wget -qO- --method=PUT \
+                --header="Authorization: Bearer $GOCLAW_TOKEN" \
+                --header="Content-Type: application/json" \
+                --header="X-GoClaw-User-Id: system" \
+                --body-data="$body_data" \
+                "$url" 2>/dev/null
         else
             local body_data="${1:-{\}}"
             docker exec "$CONTAINER" wget -qO- \
@@ -570,11 +578,16 @@ create_telegram_channel() {
 
     if [[ -z "$agent_id" || -z "$token" ]]; then return; fi
 
+    local config_json='{"group_policy":"open","dm_policy":"open","mention_mode":"yield","require_mention":true,"reaction_level":"full","history_limit":50}'
+
     # Check if already exists
     local existing
     existing=$(run_sql "SELECT id FROM channel_instances WHERE name = '$channel_name' AND tenant_id = '$TENANT_ID' LIMIT 1") || true
     if [[ -n "$existing" ]]; then
-        warn "$channel_name already exists ($existing)"
+        step "Updating $channel_name config ($existing)..."
+        local update_payload
+        update_payload=$(jq -n --argjson cfg "$config_json" '{config:$cfg}')
+        api PUT "/v1/channels/instances/$existing" "$update_payload" >/dev/null && info "Updated $channel_name" || warn "Failed to update $channel_name"
         return 0
     fi
 
@@ -585,7 +598,8 @@ create_telegram_channel() {
         --arg display "$display" \
         --arg agent_id "$agent_id" \
         --arg token "$token" \
-        '{name:$name, display_name:$display, channel_type:"telegram", agent_id:$agent_id, credentials:{token:$token}, config:{group_policy:"open", dm_policy:"open", mention_mode:"yield", require_mention:true, reaction_level:"full", history_limit:50}}')
+        --argjson cfg "$config_json" \
+        '{name:$name, display_name:$display, channel_type:"telegram", agent_id:$agent_id, credentials:{token:$token}, config:$cfg}')
 
     api POST "/v1/channels/instances" "$payload" >/dev/null && info "Created $channel_name" || warn "Failed to create $channel_name"
 }
