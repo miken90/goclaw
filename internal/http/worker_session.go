@@ -190,6 +190,13 @@ func (ws *WorkerSession) handleLine(raw json.RawMessage) {
 		return
 	}
 
+	// Debug: log every incoming message type.
+	truncated := string(raw)
+	if len(truncated) > 200 {
+		truncated = truncated[:200] + "..."
+	}
+	slog.Info("worker.stream.recv", "type", envelope.Type, "subtype", envelope.Subtype, "task_id", ws.taskID, "raw", truncated)
+
 	// Store in ring buffer.
 	ws.mu.Lock()
 	ws.seq++
