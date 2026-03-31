@@ -837,6 +837,13 @@ func (mb *mockBackend) FollowupDelayMinutes(_ *store.TeamData) int  { return 30 
 func (mb *mockBackend) FollowupMaxReminders(_ *store.TeamData) int  { return 0 }
 func (mb *mockBackend) DataDir() string                             { return "/tmp/test" }
 
+func (mb *mockBackend) InterruptWorkerSession(_ context.Context, _ uuid.UUID) error {
+	return fmt.Errorf("no active worker session")
+}
+func (mb *mockBackend) InjectWorkerMessage(_ context.Context, _ uuid.UUID, _ string) error {
+	return fmt.Errorf("no active worker session")
+}
+
 // ============================================================
 // newTestTeamSetup — standard test fixture
 // ============================================================

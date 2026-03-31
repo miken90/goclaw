@@ -156,7 +156,15 @@ func buildTeamMD(team *store.TeamData, members []store.TeamMemberData, selfID uu
 		sb.WriteString("5. Review result: `team_tasks(action=\"get\", task_id=\"...\")`\n")
 		sb.WriteString("6. Approve: `team_tasks(action=\"approve\")` or Reject: `team_tasks(action=\"reject\", text=\"feedback\")`\n\n")
 		sb.WriteString("IMPORTANT: Only use release_to_worker for tasks that need local code execution.\n")
-		sb.WriteString("For research, specs, or VPS-only work, complete the task directly.\n")
+		sb.WriteString("For research, specs, or VPS-only work, complete the task directly.\n\n")
+
+		sb.WriteString("## Live Worker Supervision\n\n")
+		sb.WriteString("When a worker task is executing (stream mode), you can:\n")
+		sb.WriteString("- **Stop execution**: `team_tasks(action=\"interrupt_worker\", text=\"reason for stopping\")`\n")
+		sb.WriteString("  Sends an interrupt signal to Claude Code on the worker. Task will be marked failed.\n")
+		sb.WriteString("- **Inject context**: `team_tasks(action=\"inject_message\", text=\"also check src/auth.go\")`\n")
+		sb.WriteString("  Sends a follow-up message into the running Claude Code session.\n")
+		sb.WriteString("  Use this to add context, correct approach, or answer questions.\n")
 	}
 
 	// Telegram group interaction guidance — only if any member has a Telegram bot username in frontmatter.

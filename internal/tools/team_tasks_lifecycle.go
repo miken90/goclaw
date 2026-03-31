@@ -387,3 +387,77 @@ func (t *TeamTasksTool) executeReleaseToWorker(ctx context.Context, args map[str
 	}
 	return NewResult(msg + ".")
 }
+
+func (t *TeamTasksTool) executeInterruptWorker(ctx context.Context, args map[string]any) *Result {
+	team, agentID, taskID, err := t.resolveTeamAndTask(ctx, args)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+
+	task, err := t.manager.Store().GetTask(ctx, taskID)
+	if err != nil {
+		return ErrorResult("task not found: " + err.Error())
+	}
+	if task.TeamID != team.ID {
+		return ErrorResult("task does not belong to your team")
+	}
+	if task.OwnerAgentID == nil || *task.OwnerAgentID != agentID {
+		return ErrorResult("only the task owner can interrupt the worker")
+	}
+
+	reason, _ := args["text"].(string)
+	if reason == "" {
+		reason = "Interrupted by agent"
+	}
+
+	if err := t.manager.InterruptWorkerSession(ctx, taskID); err != nil {
+		return ErrorResult("no active worker session for this task: " + err.Error())
+	}
+
+	t.manager.Store().AddTaskComment(ctx, &store.TeamTaskCommentData{
+		TaskID:      taskID,
+		AgentID:     &agentID,
+		Content:     "Worker interrupted: " + reason,
+		CommentType: "note",
+		CreatedAt:   time.Now(),
+	})
+
+	ownerKey := t.manager.AgentKeyFromID(ctx, agentID)
+	t.manager.BroadcastTeamEvent(ctx, protocol.EventTeamTaskUpdated, BuildTaskEventPayload(
+		team.ID.String(), taskID.String(),
+		task.Status,
+		"agent", ownerKey,
+		WithContextInfo(ctx),
+	))
+
+	return NewResult(fmt.Sprintf("Worker session for task %s interrupted. Claude CLI will terminate.", taskID))
+}
+
+func (t *TeamTasksTool) executeInjectMessage(ctx context.Context, args map[string]any) *Result {
+	team, agentID, taskID, err := t.resolveTeamAndTask(ctx, args)
+	if err != nil {
+		return ErrorResult(err.Error())
+	}
+
+	task, err := t.manager.Store().GetTask(ctx, taskID)
+	if err != nil {
+		return ErrorResult("task not found: " + err.Error())
+	}
+	if task.TeamID != team.ID {
+		return ErrorResult("task does not belong to your team")
+	}
+	if task.OwnerAgentID == nil || *task.OwnerAgentID != agentID {
+		return ErrorResult("only the task owner can inject messages")
+	}
+
+	text, _ := args["text"].(string)
+	if text == "" {
+		return ErrorResult("text is required for inject_message action")
+	}
+
+	if err := t.manager.InjectWorkerMessage(ctx, taskID, text); err != nil {
+		return ErrorResult("failed to inject message: " + err.Error())
+	}
+
+	return NewResult(fmt.Sprintf("Message injected into worker session for task %s.", taskID))
+}

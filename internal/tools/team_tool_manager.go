@@ -1,8 +1,13 @@
 package tools
 
 import (
+	"context"
+	"fmt"
+	"strconv"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/store"
@@ -35,6 +40,7 @@ type TeamToolManager struct {
 	teamCache     sync.Map // agentID (uuid.UUID) → *teamCacheEntry
 	agentCache    sync.Map // agentID (uuid.UUID) → *agentCacheEntry
 	agentKeyCache sync.Map // agentKey (string) → *agentCacheEntry
+	workerStreams WorkerStreamController // optional; set via SetWorkerStreamController
 }
 
 func NewTeamToolManager(teamStore store.TeamStore, agentStore store.AgentStore, msgBus *bus.MessageBus, dataDir string) *TeamToolManager {
@@ -55,4 +61,24 @@ func (m *TeamToolManager) TryPublishInbound(msg bus.InboundMessage) bool {
 		return false
 	}
 	return m.msgBus.TryPublishInbound(msg)
+}
+
+// SetWorkerStreamController sets the worker stream controller for interrupt/inject actions.
+func (m *TeamToolManager) SetWorkerStreamController(wsc WorkerStreamController) {
+	m.workerStreams = wsc
+}
+
+func (m *TeamToolManager) InterruptWorkerSession(_ context.Context, taskID uuid.UUID) error {
+	if m.workerStreams == nil {
+		return fmt.Errorf("worker stream controller not configured")
+	}
+	return m.workerStreams.Interrupt(taskID)
+}
+
+func (m *TeamToolManager) InjectWorkerMessage(_ context.Context, taskID uuid.UUID, content string) error {
+	if m.workerStreams == nil {
+		return fmt.Errorf("worker stream controller not configured")
+	}
+	msg := []byte(`{"type":"user","message":{"role":"user","content":` + strconv.Quote(content) + `},"parent_tool_use_id":null}` + "\n")
+	return m.workerStreams.InjectMessage(taskID, msg)
 }

@@ -9,6 +9,13 @@ import (
 	"github.com/nextlevelbuilder/goclaw/internal/store"
 )
 
+// WorkerStreamController abstracts worker session management for the tools package.
+// Implemented by http.WorkerSessionManager to avoid circular imports (tools → http).
+type WorkerStreamController interface {
+	Interrupt(taskID uuid.UUID) error
+	InjectMessage(taskID uuid.UUID, msg []byte) error
+}
+
 // TeamToolBackend abstracts the TeamToolManager for action handlers.
 // This interface enables unit testing of action handlers with a mock backend.
 // WorkspaceInterceptor and PostTurnProcessor continue to use *TeamToolManager directly.
@@ -46,6 +53,10 @@ type TeamToolBackend interface {
 
 	// Data directory for workspace resolution
 	DataDir() string
+
+	// Worker stream session management
+	InterruptWorkerSession(ctx context.Context, taskID uuid.UUID) error
+	InjectWorkerMessage(ctx context.Context, taskID uuid.UUID, content string) error
 }
 
 // Compile-time check: *TeamToolManager must satisfy TeamToolBackend.
