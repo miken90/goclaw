@@ -389,6 +389,10 @@ func (m *TeamToolManager) DispatchUnblockedTasks(ctx context.Context, teamID uui
 			continue
 		}
 		dispatched[ownerID] = true
+		taskPeerKind := ""
+		if pk, ok := task.Metadata[TaskMetaPeerKind].(string); ok {
+			taskPeerKind = pk
+		}
 		m.broadcastTeamEvent(ctx, protocol.EventTeamTaskDispatched, BuildTaskEventPayload(
 			teamID.String(), task.ID.String(),
 			store.TeamTaskStatusInProgress,
@@ -397,6 +401,7 @@ func (m *TeamToolManager) DispatchUnblockedTasks(ctx context.Context, teamID uui
 			WithOwnerAgentKey(m.agentKeyFromID(ctx, ownerID)),
 			WithChannel(task.Channel),
 			WithChatID(task.ChatID),
+			WithPeerKind(taskPeerKind),
 		))
 
 		// Append completed blocker results so the member agent has context.
