@@ -4,6 +4,137 @@ All notable changes to GoClaw Gateway are documented here. Format follows [Keep 
 
 ---
 
+## [v2.24.0] — 2026-03-27
+
+### Added
+
+#### Multi-Tenant Isolation (Complete)
+- **Tenant foundation**: Full multi-tenant isolation with `tenants` table, per-tenant configs, membership checks
+- **QueryScope abstraction**: Composable multi-level isolation for all store queries
+- **RunContext**: Typed context injection replacing raw `context.Value` for consolidated tenant/agent/user propagation
+- **System Settings modal**: Per-tenant system configs via `system_configs` DB table + web UI
+- **Tenants admin page**: Tenant management UI with detail views
+- **Strict enforcement**: Removed cross-tenant bypass, all endpoints enforce tenant membership
+
+#### Chat & Conversation
+- **Chat redesign**: Real-time event handling, canonical WS session key format, channel filter
+- **Auto-generate titles**: Lightweight LLM call generates conversation titles
+- **Image gallery**: Conversation-wide image gallery with blob-cached media URLs
+- **Task panel**: Realtime comment/attachment counters with toggleable task panel
+- **Session state restore**: Restore active tasks on session switch via `teams.tasks.active-by-session` RPC
+- **Delete conversations**: Delete chat from sidebar
+
+#### Agent Loop Improvements
+- **Read-only streak detector**: Detects stuck loops + excludes MCP bridge tools
+- **Tool call prefix stripping**: For proxy provider compatibility
+- **Extractive memory fallback**: When LLM flush fails, falls back to extractive memory
+- **Intent classify hardening**: Stricter quickClassify, steer vs newTask split
+- **Loop refactoring**: Split into loop_context.go, loop_tools.go, loop_finalize.go with runState struct
+
+#### Agent Teams
+- **Smart post-turn decisions**: Stale detection, notification guardrails
+- **Blocker escalation**: Audit events, review workflow
+- **Task hints**: Improved prompting for weak models
+- **Attachments refactor**: Semantic search for team attachments
+- **Active task restore**: `teams.tasks.active-by-session` RPC
+
+#### Knowledge Graph & Memory
+- **KG semantic search**: pgvector semantic search for KG entities
+- **Team KG sharing**: Shared knowledge graphs across team members
+- **Embedding cache**: `embedding_cache` table wired into IndexDocument hot path
+- **Chunk overlap**: Memory chunk overlap support with per-agent config
+- **Multi-provider embeddings**: Data-driven dimension config
+
+#### Providers
+- **Azure OpenAI**: Native Azure OpenAI and Foundry header support
+- **Ollama**: In-memory registration on HTTP create, Docker localhost rewrite
+- **MiniMax-M2.7**: New model + custom model input
+- **Gemini**: Robust thought_signature detection and history mapping
+
+#### Tools & Web Fetch
+- **Defuddle extractor chain**: Cleaner web content extraction for web_fetch
+- **Semantic media filenames**: LLM-provided hints for meaningful file names
+- **Sandbox hints**: LLM notified when tool/binary missing in container
+- **Extractor chain retry/timeout**: Improved reliability
+
+#### Channels
+- **Telegram yield mention**: Multi-bot group support
+- **Telegram voiceguard**: Error sanitization + STT concurrency control
+- **Discord writer commands**: Writer management via bot
+- **Slack thread isolation**: Thread-based session isolation for DMs (AI Panel)
+- **Lark image extraction**: Extract and download images from Lark post messages
+- **MediaMaxBytes**: Enforce per-channel outbound media upload limits
+- **Pending message sweep**: Periodic sweep for pending message compaction
+
+#### Browser
+- **Safety mechanisms**: Timeout, idle auto-close, max-pages limits
+- **Tenant isolation**: Per-tenant browser instances
+
+#### UI/UX
+- **Provider/Cron/Channels pages**: Refactored with modern UX (detail pages, headers, advanced dialogs)
+- **Drag-and-drop**: File/folder move in Storage and Workspace (migrated to @dnd-kit)
+- **File upload**: Upload to Team Workspace and Storage pages
+- **Toast notifications**: Loading spinners on all save/mutation buttons
+- **About dialog**: GoClaw version info in user menu
+- **Theme toggle**: On login page
+- **Trace stop button**: Stop running traces from UI
+- **Server version**: Shown in sidebar connection status
+- **Version update checker**: Gateway checks for new releases
+- **Combobox UX**: Custom model input, mobile font-size audit
+- **MCP user credentials**: Admin can set credentials on behalf of users
+- **Per-tenant skill config**: HTTP endpoints + UI for skill toggles per tenant
+
+#### Security & Stability
+- **Panic recovery**: `safego` package for tool, cron, and summarization goroutines
+- **Shell deny hardening**: Close gaps for halt, su, doas, pkexec, runuser
+- **MCP bridge auth**: Hardened auth with startup security warnings
+- **defusedxml**: Replaced stdlib XML parser
+- **File URL signing**: Sign file URLs in run.completed events
+- **Windows deployment**: Fix broken symlinks, missing packages, dep scanner false positives
+
+#### Store Refactoring
+- **Interface splits**: AgentStore, SessionStore, TeamStore split into focused sub-interfaces
+- **QueryScope**: Composable multi-level isolation replacing tenantClauseN
+- **Goroutine safety**: Fixes across cron, sessions, skills, and gateway
+- **Workspace resolver**: Layered resolver pipeline for workspace path computation
+
+#### Database Migrations
+- `000024` — Team attachments refactor
+- `000025` — KG entity embeddings
+- `000026` — API key user binding
+- `000027` — Tenant foundation (major)
+- `000028` — Comment type
+- `000029` — System configs
+
+#### Documentation
+- Added `23-multi-tenant-architecture.md` — Complete multi-tenant architecture doc
+- Added `model-steering-system.md` — Model steering system (English translation)
+- README restructured with hub-and-spoke pattern + multi-language translations
+
+### Changed
+- **Gateway router**: Consolidated 27 handler fields into routeRegistrar slice
+- **Session keys**: Canonical `ws:direct:{ts}` format with auto-migration from legacy keys
+- **Docker network**: Renamed "shared" to "goclaw-net"
+- **Docker credentials**: Auto-sync host Claude CLI credentials with overlay mount
+- **Upload limit**: Storage upload bumped to 50MB
+- **UI sidebar**: API Docs replaced with Documents header link, notification bell removed
+
+### Fixed
+- Zalo QR panic on `sync.Map.CompareAndDelete` with uncomparable CancelFunc
+- Telegram long-poll timeout race, duplicate messages on high-latency connections
+- Duplicate tool call IDs in OpenAI-compatible transcripts
+- Cron cold-cache session clearing after restart
+- Agent loop "..." fallback when iteration budget exhausted
+- Leader self-assignment causing dual-session loop
+- WS chat event isolation by channel and session key
+- Media URL double `/v1/files/` prefix, stale ft= token stripping
+- Identity markdown corrupting display names in summoning
+- Nested button error and stale agentId in chat
+- IsError propagation in parallel tool execution path
+- Tool calling error status display in chat history
+
+---
+
 ## [Unreleased]
 
 ### Added
