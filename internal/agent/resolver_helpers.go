@@ -159,6 +159,21 @@ func buildTeamMD(team *store.TeamData, members []store.TeamMemberData, selfID uu
 		sb.WriteString("For research, specs, or VPS-only work, complete the task directly.\n")
 	}
 
+	// Telegram group interaction guidance — only if any member has a Telegram bot username in frontmatter.
+	var hasTelegramBots bool
+	for _, m := range members {
+		if strings.Contains(m.Frontmatter, "Telegram: @") {
+			hasTelegramBots = true
+			break
+		}
+	}
+	if hasTelegramBots {
+		sb.WriteString("\n## Telegram Group\n\n")
+		sb.WriteString("When responding in a Telegram group, you can @mention teammates to ask for their input.\n")
+		sb.WriteString("Use their Telegram username (shown in the member list above) — the mentioned bot will receive your message and respond in the same group.\n")
+		sb.WriteString("Only @mention a teammate when you genuinely need their expertise on the current topic.\n")
+	}
+
 	return sb.String()
 }
 
