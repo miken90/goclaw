@@ -391,6 +391,10 @@ func runGateway() {
 	}
 	if teamWorkerH != nil {
 		server.SetTeamWorkerHandler(teamWorkerH)
+		// Wire worker session manager into TeamToolManager for interrupt/inject actions.
+		if pt, ok := postTurn.(*tools.TeamToolManager); ok {
+			pt.SetWorkerStreamController(teamWorkerH.SessionManager())
+		}
 	}
 	if pgStores != nil && pgStores.Teams != nil {
 		server.SetTeamAttachmentsHandler(httpapi.NewTeamAttachmentsHandler(pgStores.Teams, workspace))

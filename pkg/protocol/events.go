@@ -66,6 +66,16 @@ const (
 	// Workspace events (team file changes).
 	EventWorkspaceFileChanged = "workspace.file.changed"
 
+	// Worker stream events (real-time Claude CLI execution on external workers).
+	EventWorkerStreamInit       = "worker.stream.init"
+	EventWorkerStreamText       = "worker.stream.text"
+	EventWorkerStreamTool       = "worker.stream.tool"
+	EventWorkerStreamToolResult = "worker.stream.tool_result"
+	EventWorkerStreamProgress   = "worker.stream.progress"
+	EventWorkerStreamResult     = "worker.stream.result"
+	EventWorkerStreamError      = "worker.stream.error"
+	EventWorkerDisconnected     = "worker.disconnected"
+
 	// Agent link events (admin operations).
 	EventAgentLinkCreated = "agent_link.created"
 	EventAgentLinkUpdated = "agent_link.updated"

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 
 	"github.com/nextlevelbuilder/goclaw/internal/bus"
 	"github.com/nextlevelbuilder/goclaw/internal/i18n"
@@ -24,10 +25,27 @@ type TeamWorkerHandler struct {
 	teamStore  store.TeamStore
 	agentStore store.AgentStore
 	msgBus     *bus.MessageBus
+	sessionMgr *WorkerSessionManager
+	upgrader   websocket.Upgrader
 }
 
 func NewTeamWorkerHandler(teamStore store.TeamStore, agentStore store.AgentStore, msgBus *bus.MessageBus) *TeamWorkerHandler {
-	return &TeamWorkerHandler{teamStore: teamStore, agentStore: agentStore, msgBus: msgBus}
+	return &TeamWorkerHandler{
+		teamStore:  teamStore,
+		agentStore: agentStore,
+		msgBus:     msgBus,
+		sessionMgr: NewWorkerSessionManager(),
+		upgrader: websocket.Upgrader{
+			ReadBufferSize:  4096,
+			WriteBufferSize: 4096,
+			CheckOrigin:     func(r *http.Request) bool { return true },
+		},
+	}
+}
+
+// SessionManager returns the worker session manager (for use by team_tasks tool).
+func (h *TeamWorkerHandler) SessionManager() *WorkerSessionManager {
+	return h.sessionMgr
 }
 
 func (h *TeamWorkerHandler) RegisterRoutes(mux *http.ServeMux) {
@@ -40,6 +58,8 @@ func (h *TeamWorkerHandler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/teams/{teamId}/worker/tasks/{taskId}/submit", h.workerAuth(h.handleSubmit))
 	mux.HandleFunc("POST /v1/teams/{teamId}/worker/tasks/{taskId}/fail", h.workerAuth(h.handleFail))
 	mux.HandleFunc("POST /v1/teams/{teamId}/worker/heartbeat", h.workerAuth(h.handleHeartbeat))
+	// WebSocket: Claude CLI connects via --sdk-url for real-time streaming
+	mux.HandleFunc("GET /v1/teams/{teamId}/worker/stream/{taskId}", h.workerAuth(h.handleStream))
 }
 
 func (h *TeamWorkerHandler) workerAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -562,4 +582,148 @@ func isConflictError(err error) bool {
 		strings.Contains(msg, "not found") ||
 		strings.Contains(msg, "conflict") ||
 		strings.Contains(msg, "already")
+}
+
+// handleStream upgrades an HTTP request to a WebSocket connection for Claude CLI --sdk-url streaming.
+// Claude CLI connects as a WS client; the VPS acts as server.
+//
+// GET /v1/teams/{teamId}/worker/stream/{taskId}
+func (h *TeamWorkerHandler) handleStream(w http.ResponseWriter, r *http.Request) {
+	if !h.checkStore(w, r) {
+		return
+	}
+	teamID, ok := h.parseTeamID(w, r)
+	if !ok {
+		return
+	}
+	taskID, ok := h.parseTaskID(w, r)
+	if !ok {
+		return
+	}
+
+	// Fetch task — must be in_progress with external execution target.
+	task, err := h.teamStore.GetTask(r.Context(), taskID)
+	if err != nil || task == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		return
+	}
+	if task.TeamID != teamID {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "task does not belong to this team"})
+		return
+	}
+	if task.Status != store.TeamTaskStatusInProgress {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "task must be in_progress (current: " + task.Status + ")"})
+		return
+	}
+	et, _ := task.Metadata["execution_target"].(string)
+	if et == "" || et == "agent" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "task is not targeted at an external worker"})
+		return
+	}
+
+	// Check for existing session.
+	if existing := h.sessionMgr.Get(taskID); existing != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "stream session already active for this task"})
+		return
+	}
+
+	// Build prompt from brief_markdown or description.
+	prompt, _ := task.Metadata["brief_markdown"].(string)
+	if prompt == "" {
+		prompt = task.Description
+	}
+	if prompt == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "task has no brief or description"})
+		return
+	}
+
+	// Upgrade HTTP → WebSocket.
+	conn, err := h.upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		slog.Warn("worker.stream.upgrade_failed", "task_id", taskID, "error", err)
+		return
+	}
+
+	slog.Info("worker.stream.connected", "task_id", taskID, "team_id", teamID, "remote", r.RemoteAddr)
+
+	// Create session.
+	session := NewWorkerSession(taskID, teamID, conn, prompt, h.msgBus)
+	h.sessionMgr.Register(taskID, session)
+
+	// Send initialize control_request immediately.
+	if err := session.sendInitialize(); err != nil {
+		slog.Warn("worker.stream.init_failed", "task_id", taskID, "error", err)
+		session.Close()
+		h.sessionMgr.Unregister(taskID)
+		return
+	}
+
+	// Start read/write goroutines.
+	go session.writeLoop()
+	go func() {
+		session.readLoop()
+
+		// readLoop exited — session is done or disconnected.
+		h.sessionMgr.Unregister(taskID)
+
+		// Check if we got a result.
+		session.mu.Lock()
+		subtype := session.ResultSubtype
+		resultText := session.ResultText
+		costUSD := session.CostUSD
+		numTurns := session.NumTurns
+		durationMs := session.DurationMs
+		isError := session.ResultIsError
+		session.mu.Unlock()
+
+		if subtype == "" {
+			// No result received — worker disconnected prematurely.
+			slog.Warn("worker.stream.disconnected_no_result", "task_id", taskID)
+			return
+		}
+
+		// Enrich task metadata with cost/usage info.
+		meta := task.Metadata
+		if meta == nil {
+			meta = make(map[string]any)
+		}
+		meta["stream_cost_usd"] = costUSD
+		meta["stream_num_turns"] = numTurns
+		meta["stream_duration_ms"] = durationMs
+		meta["stream_completed_at"] = time.Now().UTC().Format(time.RFC3339)
+		meta["stream_model"] = session.model
+
+		ctx := r.Context()
+
+		if isError || subtype != "success" {
+			reason := "Claude CLI error: " + subtype
+			if resultText != "" {
+				reason += "\n" + resultText
+			}
+			slog.Info("worker.stream.task_failed", "task_id", taskID, "subtype", subtype)
+			_ = h.teamStore.UpdateTask(ctx, taskID, map[string]any{"metadata": meta})
+			_ = h.teamStore.FailTask(ctx, taskID, teamID, reason)
+			return
+		}
+
+		// Success — update metadata and transition to in_review.
+		if resultText != "" {
+			meta["stream_result"] = resultText
+		}
+		updates := map[string]any{"metadata": meta}
+		if resultText != "" {
+			updates["result"] = resultText
+		}
+		if err := h.teamStore.UpdateTask(ctx, taskID, updates); err != nil {
+			slog.Warn("worker.stream.update_task_error", "task_id", taskID, "error", err)
+		}
+		if err := h.teamStore.ReviewTask(ctx, taskID, teamID); err != nil {
+			slog.Warn("worker.stream.review_task_error", "task_id", taskID, "error", err)
+			return
+		}
+		slog.Info("worker.stream.task_submitted", "task_id", taskID, "cost_usd", costUSD, "turns", numTurns)
+
+		// Notify owner agent for review.
+		h.notifyOwnerAgentInReview(ctx, task, teamID)
+	}()
 }
