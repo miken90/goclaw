@@ -717,7 +717,8 @@ func (h *TeamWorkerHandler) handleStream(w http.ResponseWriter, r *http.Request)
 		meta["stream_completed_at"] = time.Now().UTC().Format(time.RFC3339)
 		meta["stream_model"] = session.model
 
-		ctx := r.Context()
+		// Use background context — r.Context() is cancelled after WS upgrade.
+		ctx := context.Background()
 
 		if isError || subtype != "success" {
 			reason := "Claude CLI error: " + subtype
