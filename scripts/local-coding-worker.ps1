@@ -49,6 +49,7 @@ Create $configPath with:
   "team_id": "uuid-of-team",
   "worker_id": "windows-pc-01",
   "default_repo": "goclaw",
+  "stream_mode": true,
   "allowed_repos": {
     "goclaw": {
       "path": "D:\\WORKSPACES\\PERSONAL\\goclaw",
@@ -140,6 +141,8 @@ Write-Info "VPS: $($config.vps_url)"
 Write-Info "Team: $($config.team_id)"
 Write-Info "Worker: $($config.worker_id)"
 Write-Info "Repos: $($repoNames -join ', ') (default: $($config.default_repo))"
+$sm = Get-SafeProp $config 'stream_mode' $false
+Write-Info "Stream mode: $sm"
 Write-Info "Log: $logFile"
 
 # ── HTTP helper ────────────────────────────────────────────────
@@ -454,11 +457,8 @@ function Invoke-CodingTask {
         percent = 25; step = "worktree created, launching claude"
     } -AllowError | Out-Null
 
-    # 3. Write brief to temp file (ADR-9: file-based prompt passing)
-    $promptFile = Join-Path $env:TEMP "goclaw-task-$taskNumber.md"
-    Set-Content -Path $promptFile -Value $brief -Encoding UTF8
-
-    # 4. Launch Claude Code with timeout
+    # 3. Determine launch mode (stream vs pipe)
+    $streamMode = Get-SafeProp $config 'stream_mode' $false
     $outFile = Join-Path $runDir "stdout.txt"
     $errFile = Join-Path $runDir "stderr.txt"
 
@@ -468,171 +468,266 @@ function Invoke-CodingTask {
         $maxSeconds = $maxSecondsMap.$jobType
     }
 
-    # Use cmd /c to pipe prompt file to claude via stdin (ADR-9: file-based prompt passing)
-    $escapedPromptFile = $promptFile -replace '"', '\"'
-    $escapedWtPath = $wtPath -replace '"', '\"'
-    $cmdArgs = "/c `"cd /d `"$escapedWtPath`" && type `"$escapedPromptFile`" | claude --print --dangerously-skip-permissions --output-format text`""
-
     Write-Debug2 "Claude timeout: ${maxSeconds}s"
     Write-Debug2 "Working dir: $wtPath"
+    Write-Debug2 "Stream mode: $streamMode"
 
     $timedOut = $false
     $claudeExitCode = -1
-    try {
-        $process = Start-Process -FilePath "cmd.exe" -ArgumentList $cmdArgs `
-            -WorkingDirectory $wtPath -PassThru -NoNewWindow `
-            -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+    $startTime2 = Get-Date
 
-        # Heartbeat during execution
-        $elapsed = 0
-        $halfProgress = $false
-        while (-not $process.HasExited) {
-            Start-Sleep -Seconds 10
-            $elapsed += 10
-            Send-Heartbeat -TaskId $taskId
+    if ($streamMode) {
+        # ── Stream mode: launch claude with --sdk-url ──────────────
+        # Build WS URL for --sdk-url
+        $streamWsPath = Get-SafeProp $config 'stream_ws_path' '/worker/stream'
+        $base = $config.vps_url -replace '^https?://', ''
+        $scheme = if ($config.vps_url -match '^https://') { "wss" } else { "ws" }
+        $wsUrl = "${scheme}://${base}/v1/teams/$($config.team_id)${streamWsPath}/${taskId}?token=${ApiKey}"
 
-            # Progress at ~50%
-            if (-not $halfProgress -and $elapsed -gt ($maxSeconds / 2)) {
-                Invoke-WorkerAPI -Method POST -Path "/tasks/$taskId/progress" -Body @{
-                    percent = 50; step = "claude running ($elapsed`s elapsed)"
-                } -AllowError | Out-Null
-                $halfProgress = $true
-            }
+        Write-Step "Launching claude --sdk-url (stream mode)..."
+        Write-Log "INFO" "Stream mode: claude --sdk-url $($wsUrl.Substring(0, [math]::Min(80, $wsUrl.Length)))..."
 
-            # Timeout check
-            if ($elapsed -ge $maxSeconds) {
-                Write-Warn "Claude timed out after ${maxSeconds}s — killing process tree"
-                $timedOut = $true
-                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-                Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-                    Where-Object { $_.ParentProcessId -eq $process.Id } |
-                    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-                break
-            }
-        }
-        if (-not $timedOut) {
-            $process.WaitForExit()
-            $claudeExitCode = $process.ExitCode
-            if ($null -eq $claudeExitCode) { $claudeExitCode = 0 }
-        }
-    } catch {
-        Write-Err "Claude launch failed: $_"
-        $timedOut = $false
-        $claudeExitCode = -1
-    }
+        $claudeArgs = @(
+            "--sdk-url", $wsUrl,
+            "--print",
+            "--output-format", "stream-json",
+            "--input-format", "stream-json",
+            "--dangerously-skip-permissions",
+            "-p", '""'
+        )
 
-    # 5. Report progress
-    Invoke-WorkerAPI -Method POST -Path "/tasks/$taskId/progress" -Body @{
-        percent = 75; step = "claude completed, collecting results"
-    } -AllowError | Out-Null
+        # Optional: add --max-turns from task metadata
+        $maxTurns = Get-SafeProp $meta 'max_turns'
+        if ($maxTurns) { $claudeArgs += @("--max-turns", "$maxTurns") }
 
-    # 6. Collect results
-    $claudeOutput = ""
-    if (Test-Path $outFile) {
-        $claudeOutput = Get-Content $outFile -Raw -ErrorAction SilentlyContinue
-        if (-not $claudeOutput) { $claudeOutput = "" }
-        if ($claudeOutput.Length -gt 4000) {
-            $claudeOutput = $claudeOutput.Substring(0, 4000) + "`n... (truncated)"
-        }
-    }
+        try {
+            $process = Start-Process -FilePath "claude" -ArgumentList $claudeArgs `
+                -WorkingDirectory $wtPath -PassThru -NoNewWindow `
+                -RedirectStandardOutput $outFile -RedirectStandardError $errFile
 
-    $changedFiles = @()
-    try {
-        $ErrorActionPreference = "Continue"
-        $changedFiles = @(git -C $wtPath diff --name-only HEAD 2>&1 | Where-Object { $_ -is [string] })
-        $ErrorActionPreference = "Stop"
-        if (-not $changedFiles) { $changedFiles = @() }
-    } catch { $changedFiles = @() }
+            $script:activeProcess = $process
 
-    $duration = [int]((Get-Date) - $startTime).TotalSeconds
+            # Heartbeat while Claude is running
+            $elapsed = 0
+            while (-not $process.HasExited) {
+                Start-Sleep -Seconds 10
+                $elapsed += 10
+                Send-Heartbeat -TaskId $taskId
 
-    # 7. Build and post result
-    $taskStatus = "fail"
-    if (-not $timedOut -and $claudeExitCode -eq 0) { $taskStatus = "pass" }
-
-    $taskSummary = "(no output captured)"
-    if ($claudeOutput) { $taskSummary = $claudeOutput }
-
-    $blockerReason = ""
-    if ($timedOut) { $blockerReason = "Claude Code timed out after ${maxSeconds}s" }
-
-    $resultPayload = @{
-        task_id           = $taskId
-        status            = $taskStatus
-        summary           = $taskSummary
-        changed_files     = $changedFiles
-        commands_executed  = @("type brief.md | claude --print --dangerously-skip-permissions --output-format text")
-        test_results      = ""
-        branch            = "task/$taskNumber"
-        blocker_reason    = $blockerReason
-        duration_seconds  = $duration
-    }
-
-    # Save locally first (idempotency)
-    $resultPath = Join-Path $runDir "result.json"
-    $resultPayload | ConvertTo-Json -Depth 5 | Set-Content $resultPath -Encoding UTF8
-
-    $resultJson = $resultPayload | ConvertTo-Json -Depth 5 -Compress
-
-    if ($timedOut -or $claudeExitCode -ne 0) {
-        $reason = "Claude exit code: $claudeExitCode"
-        if ($timedOut) { $reason = "Timeout after ${maxSeconds}s" }
-        Write-Err "Task #$taskNumber FAILED: $reason"
-        for ($i = 0; $i -lt 3; $i++) {
-            try {
-                Invoke-WorkerAPI -Method POST -Path "/tasks/$taskId/fail" -Body @{
-                    reason   = "$reason`n`nOutput:`n$claudeOutput"
-                    agent_id = $agentId
-                }
-                Write-Debug2 "Fail POST succeeded"
-                break
-            } catch {
-                $httpStatus = $_.Exception.Response.StatusCode.value__
-                Write-Warn "Fail POST attempt $($i+1) failed: HTTP $httpStatus - $_"
-                if ($httpStatus -eq 409) {
-                    Write-Debug2 "Task already completed/failed — treating as success"
+                # Timeout check
+                if ($elapsed -ge $maxSeconds) {
+                    Write-Warn "Claude timed out after ${maxSeconds}s — killing process"
+                    $timedOut = $true
+                    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
                     break
                 }
-                Start-Sleep -Seconds ([math]::Pow(2, $i))
             }
+            if (-not $timedOut) {
+                $process.WaitForExit()
+                $claudeExitCode = $process.ExitCode
+                if ($null -eq $claudeExitCode) { $claudeExitCode = 0 }
+            }
+        } catch {
+            Write-Err "Claude stream launch failed: $_"
+            $claudeExitCode = -1
         }
+
+        $script:activeProcess = $null
+        $duration = [int]((Get-Date) - $startTime).TotalSeconds
+
+        # In stream mode, VPS auto-submits/fails the task via WS result message.
+        # Worker only needs to handle cases where VPS didn't get the result.
+        if ($timedOut) {
+            Write-Err "Task #$taskNumber TIMED OUT in stream mode (${maxSeconds}s)"
+            # VPS detects disconnect and may already mark it failed.
+            # Send fail as fallback in case VPS missed it.
+            Invoke-WorkerAPI -Method POST -Path "/tasks/$taskId/fail" -Body @{
+                reason   = "Timeout after ${maxSeconds}s (stream mode)"
+                agent_id = $agentId
+            } -AllowError | Out-Null
+        } elseif ($claudeExitCode -ne 0) {
+            Write-Warn "Claude exited with code $claudeExitCode in stream mode"
+            # VPS may have already handled via WS result — send fail as fallback
+            $stderrContent = ""
+            if (Test-Path $errFile) { $stderrContent = Get-Content $errFile -Raw -ErrorAction SilentlyContinue }
+            Invoke-WorkerAPI -Method POST -Path "/tasks/$taskId/fail" -Body @{
+                reason   = "Claude exit code: $claudeExitCode`n$stderrContent"
+                agent_id = $agentId
+            } -AllowError | Out-Null
+        } else {
+            Write-Info "Task #$taskNumber completed via stream mode ($duration`s)"
+        }
+
+        Write-Log "INFO" "Task #$taskNumber stream mode done: exit=$claudeExitCode timeout=$timedOut ($duration`s)"
+
     } else {
-        Write-Info "Task #$taskNumber PASSED ($duration`s, $(@($changedFiles).Count) files changed)"
-        # Sanitize summary for JSON: strip null bytes and limit size
-        $safeSummary = $taskSummary -replace '\x00', '' -replace '[^\x20-\x7E\x0A\x0D\t]', '?'
-        if ($safeSummary.Length -gt 2000) {
-            $safeSummary = $safeSummary.Substring(0, 2000) + "`n... (truncated for API)"
-        }
-        $submitted = $false
-        for ($i = 0; $i -lt 3; $i++) {
-            try {
-                Write-Debug2 "Submit POST attempt $($i+1)..."
-                Invoke-WorkerAPI -Method POST -Path "/tasks/$taskId/submit" -Body @{
-                    result        = $safeSummary
-                    agent_id      = $agentId
-                    worker_id     = $config.worker_id
-                    changed_files = $changedFiles
+        # ── Pipe mode (Phase 1 fallback) ──────────────────────────
+        # Write brief to temp file (ADR-9: file-based prompt passing)
+        $promptFile = Join-Path $env:TEMP "goclaw-task-$taskNumber.md"
+        Set-Content -Path $promptFile -Value $brief -Encoding UTF8
+
+        # Use cmd /c to pipe prompt file to claude via stdin
+        $escapedPromptFile = $promptFile -replace '"', '\"'
+        $escapedWtPath = $wtPath -replace '"', '\"'
+        $cmdArgs = "/c `"cd /d `"$escapedWtPath`" && type `"$escapedPromptFile`" | claude --print --dangerously-skip-permissions --output-format text`""
+
+        try {
+            $process = Start-Process -FilePath "cmd.exe" -ArgumentList $cmdArgs `
+                -WorkingDirectory $wtPath -PassThru -NoNewWindow `
+                -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+
+            # Heartbeat during execution
+            $elapsed = 0
+            $halfProgress = $false
+            while (-not $process.HasExited) {
+                Start-Sleep -Seconds 10
+                $elapsed += 10
+                Send-Heartbeat -TaskId $taskId
+
+                # Progress at ~50%
+                if (-not $halfProgress -and $elapsed -gt ($maxSeconds / 2)) {
+                    Invoke-WorkerAPI -Method POST -Path "/tasks/$taskId/progress" -Body @{
+                        percent = 50; step = "claude running ($elapsed`s elapsed)"
+                    } -AllowError | Out-Null
+                    $halfProgress = $true
                 }
-                Write-Info "Submitted for review"
-                $submitted = $true
-                break
-            } catch {
-                Write-Warn "Submit POST attempt $($i+1) failed: $_"
-                Write-Log "ERROR" "Submit POST attempt $($i+1): $_"
-                Start-Sleep -Seconds ([math]::Pow(2, $i))
+
+                # Timeout check
+                if ($elapsed -ge $maxSeconds) {
+                    Write-Warn "Claude timed out after ${maxSeconds}s — killing process tree"
+                    $timedOut = $true
+                    Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                        Where-Object { $_.ParentProcessId -eq $process.Id } |
+                        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+                    break
+                }
+            }
+            if (-not $timedOut) {
+                $process.WaitForExit()
+                $claudeExitCode = $process.ExitCode
+                if ($null -eq $claudeExitCode) { $claudeExitCode = 0 }
+            }
+        } catch {
+            Write-Err "Claude launch failed: $_"
+            $timedOut = $false
+            $claudeExitCode = -1
+        }
+
+        # 5. Report progress
+        Invoke-WorkerAPI -Method POST -Path "/tasks/$taskId/progress" -Body @{
+            percent = 75; step = "claude completed, collecting results"
+        } -AllowError | Out-Null
+
+        # 6. Collect results
+        $claudeOutput = ""
+        if (Test-Path $outFile) {
+            $claudeOutput = Get-Content $outFile -Raw -ErrorAction SilentlyContinue
+            if (-not $claudeOutput) { $claudeOutput = "" }
+            if ($claudeOutput.Length -gt 4000) {
+                $claudeOutput = $claudeOutput.Substring(0, 4000) + "`n... (truncated)"
             }
         }
-        if (-not $submitted) {
-            Write-Err "Failed to POST submit after 3 attempts"
+
+        $changedFiles = @()
+        try {
+            $ErrorActionPreference = "Continue"
+            $changedFiles = @(git -C $wtPath diff --name-only HEAD 2>&1 | Where-Object { $_ -is [string] })
+            $ErrorActionPreference = "Stop"
+            if (-not $changedFiles) { $changedFiles = @() }
+        } catch { $changedFiles = @() }
+
+        $duration = [int]((Get-Date) - $startTime).TotalSeconds
+
+        # 7. Build and post result
+        $taskStatus = "fail"
+        if (-not $timedOut -and $claudeExitCode -eq 0) { $taskStatus = "pass" }
+
+        $taskSummary = "(no output captured)"
+        if ($claudeOutput) { $taskSummary = $claudeOutput }
+
+        $blockerReason = ""
+        if ($timedOut) { $blockerReason = "Claude Code timed out after ${maxSeconds}s" }
+
+        $resultPayload = @{
+            task_id           = $taskId
+            status            = $taskStatus
+            summary           = $taskSummary
+            changed_files     = $changedFiles
+            commands_executed  = @("type brief.md | claude --print --dangerously-skip-permissions --output-format text")
+            test_results      = ""
+            branch            = "task/$taskNumber"
+            blocker_reason    = $blockerReason
+            duration_seconds  = $duration
         }
-    }
 
-    Write-Log "INFO" "Task #$taskNumber completed: $($resultPayload.status) ($duration`s)"
+        # Save locally first (idempotency)
+        $resultPath = Join-Path $runDir "result.json"
+        $resultPayload | ConvertTo-Json -Depth 5 | Set-Content $resultPath -Encoding UTF8
 
-    # 8. Cleanup
-    Remove-Item -Path $promptFile -Force -ErrorAction SilentlyContinue
+        $resultJson = $resultPayload | ConvertTo-Json -Depth 5 -Compress
+
+        if ($timedOut -or $claudeExitCode -ne 0) {
+            $reason = "Claude exit code: $claudeExitCode"
+            if ($timedOut) { $reason = "Timeout after ${maxSeconds}s" }
+            Write-Err "Task #$taskNumber FAILED: $reason"
+            for ($i = 0; $i -lt 3; $i++) {
+                try {
+                    Invoke-WorkerAPI -Method POST -Path "/tasks/$taskId/fail" -Body @{
+                        reason   = "$reason`n`nOutput:`n$claudeOutput"
+                        agent_id = $agentId
+                    }
+                    Write-Debug2 "Fail POST succeeded"
+                    break
+                } catch {
+                    $httpStatus = $_.Exception.Response.StatusCode.value__
+                    Write-Warn "Fail POST attempt $($i+1) failed: HTTP $httpStatus - $_"
+                    if ($httpStatus -eq 409) {
+                        Write-Debug2 "Task already completed/failed — treating as success"
+                        break
+                    }
+                    Start-Sleep -Seconds ([math]::Pow(2, $i))
+                }
+            }
+        } else {
+            Write-Info "Task #$taskNumber PASSED ($duration`s, $(@($changedFiles).Count) files changed)"
+            # Sanitize summary for JSON: strip null bytes and limit size
+            $safeSummary = $taskSummary -replace '\x00', '' -replace '[^\x20-\x7E\x0A\x0D\t]', '?'
+            if ($safeSummary.Length -gt 2000) {
+                $safeSummary = $safeSummary.Substring(0, 2000) + "`n... (truncated for API)"
+            }
+            $submitted = $false
+            for ($i = 0; $i -lt 3; $i++) {
+                try {
+                    Write-Debug2 "Submit POST attempt $($i+1)..."
+                    Invoke-WorkerAPI -Method POST -Path "/tasks/$taskId/submit" -Body @{
+                        result        = $safeSummary
+                        agent_id      = $agentId
+                        worker_id     = $config.worker_id
+                        changed_files = $changedFiles
+                    }
+                    Write-Info "Submitted for review"
+                    $submitted = $true
+                    break
+                } catch {
+                    Write-Warn "Submit POST attempt $($i+1) failed: $_"
+                    Write-Log "ERROR" "Submit POST attempt $($i+1): $_"
+                    Start-Sleep -Seconds ([math]::Pow(2, $i))
+                }
+            }
+            if (-not $submitted) {
+                Write-Err "Failed to POST submit after 3 attempts"
+            }
+        }
+
+        Write-Log "INFO" "Task #$taskNumber completed: $($resultPayload.status) ($duration`s)"
+
+        # Cleanup prompt file
+        Remove-Item -Path $promptFile -Force -ErrorAction SilentlyContinue
+    }  # end stream_mode if/else
+
+    # 8. Cleanup worktree
     Remove-TaskWorktree -TaskNumber $taskNumber -Repo $repo
-
     Write-Info "Worktree cleaned up for task #$taskNumber"
 }
 
