@@ -416,6 +416,18 @@ func (ws *WorkerSession) handleResult(raw json.RawMessage) {
 	default:
 		close(ws.doneCh)
 	}
+
+	// Send end_session so Claude CLI exits gracefully.
+	endMsg := map[string]any{
+		"type":       "control_request",
+		"request_id": uuid.NewString(),
+		"request": map[string]any{
+			"subtype": "end_session",
+		},
+	}
+	if err := ws.sendNDJSON(endMsg); err != nil {
+		slog.Warn("worker.stream.end_session_error", "task_id", ws.taskID, "error", err)
+	}
 }
 
 // handleControlRequest auto-approves can_use_tool requests.
