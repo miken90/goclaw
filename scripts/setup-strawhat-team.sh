@@ -289,6 +289,12 @@ EOF
 delete_all() {
     header "🗑️  Tearing down Straw Hat team..."
 
+    step "Deleting Telegram channel instances..."
+    for key in "${AGENT_KEYS[@]}"; do
+        run_sql "DELETE FROM channel_instances WHERE name = 'telegram/$key' AND tenant_id = '$TENANT_ID'" 2>/dev/null || true
+    done
+    info "Telegram channels removed"
+
     step "Deleting team members..."
     run_sql "DELETE FROM agent_team_members WHERE team_id IN (SELECT id FROM agent_teams WHERE name = '$TEAM_NAME' AND tenant_id = '$TENANT_ID')" && info "Members removed" || warn "No members to remove"
 
@@ -335,6 +341,16 @@ verify_all() {
 
     step "Checking skills..."
     run_sql_verbose "SELECT slug, version FROM skills WHERE slug LIKE 'strawhat%' ORDER BY slug"
+
+    step "Checking Telegram channels..."
+    run_sql_verbose "
+        SELECT ci.name, ci.display_name, ci.enabled, a.agent_key,
+               ci.config->>'mention_mode' AS mention_mode
+        FROM channel_instances ci
+        JOIN agents a ON a.id = ci.agent_id
+        WHERE ci.name LIKE 'telegram/%'
+          AND ci.tenant_id = '$TENANT_ID'
+        ORDER BY ci.name"
 
     step "Checking worker endpoint..."
     local team_id
@@ -510,6 +526,74 @@ add_member "sanji"   "member"
 add_member "nami"    "member"
 add_member "chopper" "member"
 
+# ── Step 6b: Set agent frontmatter (expertise + Telegram bot usernames) ──
+header "6️⃣b  Setting agent frontmatter"
+
+declare -A FRONTMATTER
+FRONTMATTER[luffy]="Team lead, orchestrator — Telegram: @aiat_luffyBot"
+FRONTMATTER[zoro]="Backend engineer, code review — Telegram: @aiat_zoroBot"
+FRONTMATTER[sanji]="Frontend engineer, UI/UX — Telegram: @aiat_sanjiBot"
+FRONTMATTER[nami]="Research, analysis, documentation — Telegram: @aiat_namiBot"
+FRONTMATTER[chopper]="Testing, QA, debugging — Telegram: @aiat_chopperBot"
+
+for key in "${AGENT_KEYS[@]}"; do
+    local_fm="${FRONTMATTER[$key]:-}"
+    if [[ -n "$local_fm" ]]; then
+        run_sql "UPDATE agents SET frontmatter = '$(echo "$local_fm" | sed "s/'/''/g")' WHERE id = '${AGENT_IDS[$key]}'" >/dev/null
+    fi
+done
+info "Frontmatter set for all agents"
+
+# ── Step 6c: Create Telegram channel instances ──────────────────
+header "6️⃣c  Creating Telegram channel instances"
+
+declare -A TELEGRAM_TOKENS
+TELEGRAM_TOKENS[luffy]="8675665340:AAH4qfNz59ovTgAZATUPwHsi3zdl0PSZMiQ"
+TELEGRAM_TOKENS[zoro]="8591204013:AAEwC5Iq43x-k-r-eXWg638EakKIJpXIWYc"
+TELEGRAM_TOKENS[sanji]="8627319701:AAHRyX5DpId5gWd8dZqZC8d1PCsh_RBHOaI"
+TELEGRAM_TOKENS[nami]="8705914132:AAEiljFL2tugnDQ-79otnT7rKKvx2YR61uM"
+TELEGRAM_TOKENS[chopper]="8740593903:AAF2gCD1gu9AHlPNU3oMAZhbDPOqzM0co9g"
+
+declare -A TELEGRAM_DISPLAY
+TELEGRAM_DISPLAY[luffy]="Luffy Bot"
+TELEGRAM_DISPLAY[zoro]="Zoro Bot"
+TELEGRAM_DISPLAY[sanji]="Sanji Bot"
+TELEGRAM_DISPLAY[nami]="Nami Bot"
+TELEGRAM_DISPLAY[chopper]="Chopper Bot"
+
+create_telegram_channel() {
+    local key=$1
+    local agent_id="${AGENT_IDS[$key]:-}"
+    local token="${TELEGRAM_TOKENS[$key]:-}"
+    local display="${TELEGRAM_DISPLAY[$key]:-}"
+    local channel_name="telegram/$key"
+
+    if [[ -z "$agent_id" || -z "$token" ]]; then return; fi
+
+    # Check if already exists
+    local existing
+    existing=$(run_sql "SELECT id FROM channel_instances WHERE name = '$channel_name' AND tenant_id = '$TENANT_ID' LIMIT 1") || true
+    if [[ -n "$existing" ]]; then
+        warn "$channel_name already exists ($existing)"
+        return 0
+    fi
+
+    step "Creating $channel_name..."
+    local payload
+    payload=$(jq -n \
+        --arg name "$channel_name" \
+        --arg display "$display" \
+        --arg agent_id "$agent_id" \
+        --arg token "$token" \
+        '{name:$name, display_name:$display, channel_type:"telegram", agent_id:$agent_id, credentials:{token:$token}, config:{group_policy:"open", dm_policy:"open", mention_mode:"yield", require_mention:true, reaction_level:"full", history_limit:50}}')
+
+    api POST "/v1/channels/instances" "$payload" >/dev/null && info "Created $channel_name" || warn "Failed to create $channel_name"
+}
+
+for key in "${AGENT_KEYS[@]}"; do
+    create_telegram_channel "$key"
+done
+
 # ── Step 7: Verify worker endpoint ─────────────────────────────
 header "7️⃣  Verifying worker endpoints"
 
@@ -548,4 +632,5 @@ echo ""
 echo "  Next steps:"
 echo "  1. Create API key (dashboard → API Keys → scope: operator.write)"
 echo "  2. Configure Windows worker (see scripts/local-coding-worker.ps1)"
-echo "  3. Run: bash scripts/setup-strawhat-team.sh --verify"
+echo "  3. Add bots to a Telegram group (all 5 as admin, mention_mode=yield)"
+echo "  4. Run: bash scripts/setup-strawhat-team.sh --verify"

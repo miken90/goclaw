@@ -285,6 +285,10 @@ func (c *Channel) ReasoningStreamEnabled() bool {
 // BlockReplyEnabled returns the per-channel block_reply override (nil = inherit gateway default).
 func (c *Channel) BlockReplyEnabled() *bool { return c.config.BlockReply }
 
+// BotUsername returns the Telegram bot's username (without @).
+// Implements channels.BotIdentityChannel for cross-bot relay.
+func (c *Channel) BotUsername() string { return c.bot.Username() }
+
 // SetPendingCompaction configures LLM-based auto-compaction for pending messages.
 func (c *Channel) SetPendingCompaction(cfg *channels.CompactionConfig) {
 	c.groupHistory.SetCompactionConfig(cfg)

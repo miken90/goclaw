@@ -65,6 +65,15 @@ const (
 	TypeZaloPersonal = "zalo_personal"
 )
 
+// BotIdentityChannel is implemented by channels whose bot has a platform username
+// (e.g. Telegram bots). Used by the cross-bot relay to detect @mentions in outbound
+// messages and route them to the mentioned bot's agent.
+type BotIdentityChannel interface {
+	Channel
+	// BotUsername returns the bot's platform username (without @).
+	BotUsername() string
+}
+
 // Channel defines the interface that all channel implementations must satisfy.
 type Channel interface {
 	// Name returns the channel instance name (e.g., "telegram", "discord", "slack").

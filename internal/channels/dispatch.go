@@ -88,6 +88,11 @@ func (m *Manager) dispatchOutbound(ctx context.Context) {
 							"channel", msg.Channel, "error", err2)
 					}
 				}
+			} else {
+				// Cross-bot relay: after successful send, check if the message
+				// mentions another bot in the same group. Telegram doesn't deliver
+				// bot-to-bot messages, so we relay internally via the message bus.
+				m.relayCrossBotMentions(msg)
 			}
 
 			// Clean up temp media files only. Workspace-generated files are preserved
