@@ -91,3 +91,4 @@ compose.d/*
 /mise.*.toml
 /mise
 /.mise
+.cocoindex_code/
