@@ -474,6 +474,28 @@ func (ws *WorkerSession) handleControlResponse(raw json.RawMessage, subtype stri
 	}
 
 	slog.Info("worker.stream.initialized", "task_id", ws.taskID, "models_count", len(msg.Response.Response.Models))
+
+	// Send the task prompt immediately after initialize succeeds.
+	// Per the protocol (confirmed by spike), the prompt must be sent BEFORE system/init.
+	// CLI waits for a user message to start processing; system/init arrives after.
+	ws.mu.Lock()
+	promptSent := ws.sessionID != "" // if sessionID set, prompt already sent via handleSystem
+	ws.mu.Unlock()
+	if !promptSent {
+		slog.Info("worker.stream.send_prompt_after_init", "task_id", ws.taskID)
+		userMsg := map[string]any{
+			"type": "user",
+			"message": map[string]any{
+				"role":    "user",
+				"content": ws.prompt,
+			},
+			"parent_tool_use_id": nil,
+			"session_id":         "",
+		}
+		if err := ws.sendNDJSON(userMsg); err != nil {
+			slog.Warn("worker.stream.send_prompt_error", "task_id", ws.taskID, "error", err)
+		}
+	}
 }
 
 // writeLoop reads from injectCh and sends messages to the WS connection.
