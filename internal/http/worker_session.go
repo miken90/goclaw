@@ -190,12 +190,7 @@ func (ws *WorkerSession) handleLine(raw json.RawMessage) {
 		return
 	}
 
-	// Debug: log every incoming message type.
-	truncated := string(raw)
-	if len(truncated) > 200 {
-		truncated = truncated[:200] + "..."
-	}
-	slog.Info("worker.stream.recv", "type", envelope.Type, "subtype", envelope.Subtype, "task_id", ws.taskID, "raw", truncated)
+	slog.Debug("worker.stream.recv", "type", envelope.Type, "subtype", envelope.Subtype, "task_id", ws.taskID)
 
 	// Store in ring buffer.
 	ws.mu.Lock()
@@ -230,7 +225,7 @@ func (ws *WorkerSession) handleLine(raw json.RawMessage) {
 	case "keep_alive":
 		// ignored
 	default:
-		slog.Info("worker.stream.unknown_type", "type", envelope.Type, "task_id", ws.taskID)
+		slog.Debug("worker.stream.unknown_type", "type", envelope.Type, "task_id", ws.taskID)
 	}
 }
 
@@ -449,7 +444,7 @@ func (ws *WorkerSession) handleControlRequest(raw json.RawMessage, subtype strin
 		return
 	}
 
-	slog.Info("worker.stream.auto_approve_tool", "tool", msg.Request.ToolName, "request_id", msg.RequestID, "task_id", ws.taskID)
+	slog.Debug("worker.stream.auto_approve_tool", "tool", msg.Request.ToolName, "request_id", msg.RequestID, "task_id", ws.taskID)
 
 	resp := map[string]any{
 		"type": "control_response",
