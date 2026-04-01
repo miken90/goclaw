@@ -737,20 +737,6 @@ $script:activeProcess = $null
 
 $null = Register-EngineEvent PowerShell.Exiting -Action {
     $script:running = $false
-    Write-Warn "Shutting down worker..."
-    try { Stop-Heartbeat } catch { }
-}
-
-trap {
-    $script:running = $false
-    Write-Warn "Interrupted — cleaning up..."
-    try { Stop-Heartbeat } catch { }
-    try {
-        if ($script:activeProcess -and -not $script:activeProcess.HasExited) {
-            Stop-Process -Id $script:activeProcess.Id -Force -ErrorAction SilentlyContinue
-        }
-    } catch { }
-    break
 }
 
 # ── Main loop ─────────────────────────────────────────────────
@@ -771,87 +757,103 @@ if (-not $pollInterval) { $pollInterval = 10 }
 Write-Info "Entering poll loop (interval: ${pollInterval}s)"
 Write-Host ""
 
-while ($script:running) {
-    try {
-        # Poll for pending tasks targeted at this worker
-        $response = Invoke-WorkerAPI -Method GET -Path "/tasks?status=pending&execution_target=windows-local" -AllowError
-        $rTasks = Get-SafeProp $response 'tasks'
-        $rCount = Get-SafeProp $response 'count' 0
-        if (-not $rTasks -or $rCount -eq 0) {
-            Start-Sleep -Seconds $pollInterval
-            continue
-        }
-
-        # Pick highest task_number (newest) to avoid stale tasks
-        $tasks = @($rTasks)
-        $task = $tasks[0]
-        foreach ($t in $tasks) {
-            $n = Get-SafeProp $t 'task_number' 0
-            if ($n -gt (Get-SafeProp $task 'task_number' 0)) { $task = $t }
-        }
-        $tNum = Get-SafeProp $task 'task_number'
-        $tId = Get-SafeProp $task 'id'
-        $tSubject = Get-SafeProp $task 'subject'
-        Write-Step "Found task #${tNum}: $tSubject"
-        Write-Debug2 "Task ID: $tId (from $($tasks.Count) pending tasks)"
-        Write-Log "INFO" "Picked task #$tNum id=$tId from $($tasks.Count) pending tasks"
-
-        # Validate trusted-task policy
-        $validationError = Test-TrustedTask -Task $task
-        if ($validationError) {
-            Write-Err "Task #$tNum rejected: $validationError"
-            Write-Log "WARN" "Rejected task #${tNum}: $validationError"
-            $failAgentId = Get-SafeProp $task 'owner_agent_id' ''
-            Invoke-WorkerAPI -Method POST -Path "/tasks/$tId/fail" -Body @{
-                reason   = "Worker validation failed: $validationError"
-                agent_id = $failAgentId
-            } -AllowError | Out-Null
-            Start-Sleep -Seconds $pollInterval
-            continue
-        }
-
-        # Claim the task
-        $agentId = Get-SafeProp $task 'owner_agent_id' ''
-        Write-Log "INFO" "Claiming task #$tNum id=$tId agent_id=$agentId"
+try {
+    while ($script:running) {
         try {
-            $claimed = Invoke-WorkerAPI -Method POST -Path "/tasks/$tId/claim" -Body @{
-                agent_id  = $agentId
-                worker_id = $config.worker_id
-            }
-            Write-Info "Claimed task #$tNum (id=$tId)"
-            Write-Log "INFO" "Claim response: $(($claimed | ConvertTo-Json -Depth 3 -Compress -ErrorAction SilentlyContinue))"
-        } catch {
-            $httpStatus = 0
-            if ($_.Exception.Data -and $_.Exception.Data.Contains("HttpStatus")) {
-                $httpStatus = $_.Exception.Data["HttpStatus"]
-            }
-            if ($httpStatus -eq 409) {
-                Write-Warn "Task #$tNum already claimed by another worker"
+            # Poll for pending tasks targeted at this worker
+            $response = Invoke-WorkerAPI -Method GET -Path "/tasks?status=pending&execution_target=windows-local" -AllowError
+            $rTasks = Get-SafeProp $response 'tasks'
+            $rCount = Get-SafeProp $response 'count' 0
+            if (-not $rTasks -or $rCount -eq 0) {
                 Start-Sleep -Seconds $pollInterval
                 continue
             }
-            if ($httpStatus -eq 404) {
-                Write-Warn "Task #$tNum not found on server (stale task?)"
+
+            # Pick highest task_number (newest) to avoid stale tasks
+            $tasks = @($rTasks)
+            $task = $tasks[0]
+            foreach ($t in $tasks) {
+                $n = Get-SafeProp $t 'task_number' 0
+                if ($n -gt (Get-SafeProp $task 'task_number' 0)) { $task = $t }
+            }
+            $tNum = Get-SafeProp $task 'task_number'
+            $tId = Get-SafeProp $task 'id'
+            $tSubject = Get-SafeProp $task 'subject'
+            Write-Step "Found task #${tNum}: $tSubject"
+            Write-Debug2 "Task ID: $tId (from $($tasks.Count) pending tasks)"
+            Write-Log "INFO" "Picked task #$tNum id=$tId from $($tasks.Count) pending tasks"
+
+            # Validate trusted-task policy
+            $validationError = Test-TrustedTask -Task $task
+            if ($validationError) {
+                Write-Err "Task #$tNum rejected: $validationError"
+                Write-Log "WARN" "Rejected task #${tNum}: $validationError"
+                $failAgentId = Get-SafeProp $task 'owner_agent_id' ''
+                Invoke-WorkerAPI -Method POST -Path "/tasks/$tId/fail" -Body @{
+                    reason   = "Worker validation failed: $validationError"
+                    agent_id = $failAgentId
+                } -AllowError | Out-Null
                 Start-Sleep -Seconds $pollInterval
                 continue
             }
-            throw
+
+            # Claim the task
+            $agentId = Get-SafeProp $task 'owner_agent_id' ''
+            Write-Log "INFO" "Claiming task #$tNum id=$tId agent_id=$agentId"
+            try {
+                $claimed = Invoke-WorkerAPI -Method POST -Path "/tasks/$tId/claim" -Body @{
+                    agent_id  = $agentId
+                    worker_id = $config.worker_id
+                }
+                Write-Info "Claimed task #$tNum (id=$tId)"
+                Write-Log "INFO" "Claim response: $(($claimed | ConvertTo-Json -Depth 3 -Compress -ErrorAction SilentlyContinue))"
+            } catch {
+                $httpStatus = 0
+                if ($_.Exception.Data -and $_.Exception.Data.Contains("HttpStatus")) {
+                    $httpStatus = $_.Exception.Data["HttpStatus"]
+                }
+                if ($httpStatus -eq 409) {
+                    Write-Warn "Task #$tNum already claimed by another worker"
+                    Start-Sleep -Seconds $pollInterval
+                    continue
+                }
+                if ($httpStatus -eq 404) {
+                    Write-Warn "Task #$tNum not found on server (stale task?)"
+                    Start-Sleep -Seconds $pollInterval
+                    continue
+                }
+                throw
+            }
+
+            # Execute the task
+            $taskData = $task
+            $claimedTask = Get-SafeProp $claimed 'task'
+            if ($claimedTask) { $taskData = $claimedTask }
+            Invoke-CodingTask -Task $taskData
+
+            Write-Host ""
         }
-
-        # Execute the task
-        $taskData = $task
-        $claimedTask = Get-SafeProp $claimed 'task'
-        if ($claimedTask) { $taskData = $claimedTask }
-        Invoke-CodingTask -Task $taskData
-
-        Write-Host ""
-    } catch {
-        Write-Err "Poll loop error: $_"
-        Write-Log "ERROR" "Poll loop: $_"
-        Start-Sleep -Seconds $pollInterval
+        catch [System.Management.Automation.PipelineStoppedException] {
+            # Ctrl+C triggers PipelineStoppedException — exit loop gracefully
+            $script:running = $false
+        }
+        catch {
+            Write-Err "Poll loop error: $_"
+            Write-Log "ERROR" "Poll loop: $_"
+            Start-Sleep -Seconds $pollInterval
+        }
     }
 }
-
-# Cleanup
-Stop-Heartbeat
-Write-Info "Worker stopped."
+finally {
+    Write-Warn "Shutting down worker..."
+    try { Stop-Heartbeat } catch { }
+    try {
+        if ($null -ne $script:activeProcess -and -not $script:activeProcess.HasExited) {
+            Stop-Process -Id $script:activeProcess.Id -Force -ErrorAction SilentlyContinue
+        }
+    } catch { }
+    try {
+        Unregister-Event -SourceIdentifier PowerShell.Exiting -ErrorAction SilentlyContinue
+    } catch { }
+    Write-Info "Worker stopped."
+}
