@@ -682,6 +682,9 @@ func (h *TeamWorkerHandler) handleStream(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Capture tenant context before goroutine — r.Context() is cancelled after WS upgrade.
+	tenantID := store.TenantIDFromContext(r.Context())
+
 	// Start read/write goroutines.
 	go session.writeLoop()
 	go func() {
@@ -717,8 +720,8 @@ func (h *TeamWorkerHandler) handleStream(w http.ResponseWriter, r *http.Request)
 		meta["stream_completed_at"] = time.Now().UTC().Format(time.RFC3339)
 		meta["stream_model"] = session.model
 
-		// Use background context — r.Context() is cancelled after WS upgrade.
-		ctx := context.Background()
+		// Use background context with tenant_id — r.Context() is cancelled after WS upgrade.
+		ctx := store.WithTenantID(context.Background(), tenantID)
 
 		if isError || subtype != "success" {
 			reason := "Claude CLI error: " + subtype
