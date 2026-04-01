@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, lazy, Suspense } from "react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { ConfirmDialog } from "@/components/shared/confirm-dialog";
 import {
-  Trash2, ArrowUp, ArrowDown, ArrowRight, AlertTriangle,
+  Trash2, ArrowUp, ArrowDown, ArrowRight, AlertTriangle, Terminal,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { formatDate } from "@/lib/format";
@@ -20,6 +20,8 @@ import { TaskDetailContent } from "./task-detail-content";
 import { TaskDetailAttachments } from "./task-detail-attachments";
 import { TaskDetailComments } from "./task-detail-comments";
 import { TaskDetailTimeline } from "./task-detail-timeline";
+
+const WorkerStreamPanel = lazy(() => import("./worker-stream-panel"));
 
 /* ── Priority helpers (numeric: 1=low … 4=critical) ───────────── */
 
@@ -117,6 +119,9 @@ export function TaskDetailDialog({
     ? async (content: string) => { await onAddComment(teamId, task.id, content); await loadDetail(); }
     : undefined;
 
+  const showFollowupBanner = isTeamV2 === true && task.followup_at != null && task.status === "in_progress";
+  const isExternalWorkerTask = task.metadata?.execution_target != null && task.metadata.execution_target !== "agent";
+
   return (
     <Dialog open onOpenChange={() => onClose()}>
       <DialogContent className="max-h-[85vh] w-[95vw] flex flex-col sm:max-w-4xl">
@@ -154,7 +159,7 @@ export function TaskDetailDialog({
           })()}
 
           {/* Follow-up banner (V2) */}
-          {isTeamV2 && task.followup_at && task.status === "in_progress" && (
+          {showFollowupBanner && (
             <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
               <p className="mb-1 text-xs font-semibold text-amber-700 dark:text-amber-400">
                 {t("tasks.detail.followupStatus")}
@@ -206,6 +211,17 @@ export function TaskDetailDialog({
               <MetaItem label={t("tasks.detail.updated")}>{formatDate(task.updated_at)}</MetaItem>
             )}
           </dl>
+
+          {/* Worker stream (external tasks) */}
+          {isExternalWorkerTask && (
+            task.status === "in_progress" ? (
+              <Suspense fallback={null}>
+                <WorkerStreamPanel taskId={task.id} teamId={teamId} />
+              </Suspense>
+            ) : !!task.metadata?.stream_result ? (
+              <WorkerStreamResult metadata={task.metadata!} />
+            ) : null
+          )}
 
           {/* Blocked by */}
           {task.blocked_by && task.blocked_by.length > 0 && (
@@ -264,5 +280,45 @@ export function TaskDetailDialog({
         />
       </DialogContent>
     </Dialog>
+  );
+}
+
+/* ── Static stream result (post-completion) ───────────────────── */
+
+function WorkerStreamResult({ metadata }: { metadata: Record<string, unknown> }) {
+  const [open, setOpen] = useState(false);
+  const model = metadata.stream_model as string | undefined;
+  const costUSD = metadata.stream_cost_usd as number | undefined;
+  const numTurns = metadata.stream_num_turns as number | undefined;
+  const durationMs = metadata.stream_duration_ms as number | undefined;
+
+  const durationLabel = durationMs
+    ? durationMs >= 60000
+      ? `${Math.floor(durationMs / 60000)}m ${Math.round((durationMs % 60000) / 1000)}s`
+      : `${Math.round(durationMs / 1000)}s`
+    : null;
+
+  return (
+    <div className="rounded-lg border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/30">
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 px-3 py-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Terminal className="h-3.5 w-3.5" />
+        <span className="font-medium">Worker Execution</span>
+        <div className="ml-auto flex items-center gap-2 text-[11px]">
+          {model && <Badge variant="outline" className="text-[10px] px-1.5 py-0">{model}</Badge>}
+          {costUSD != null && <span>${costUSD.toFixed(2)}</span>}
+          {numTurns != null && <span>{numTurns}t</span>}
+          {durationLabel && <span>{durationLabel}</span>}
+        </div>
+      </button>
+      {open && !!metadata.stream_result && (
+        <div className="border-t px-3 py-2 text-xs font-mono text-muted-foreground whitespace-pre-wrap max-h-40 overflow-y-auto">
+          {String(metadata.stream_result)}
+        </div>
+      )}
+    </div>
   );
 }

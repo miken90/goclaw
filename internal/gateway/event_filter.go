@@ -82,8 +82,8 @@ func clientCanReceiveEvent(c *Client, event bus.Event) bool {
 		return true
 	}
 
-	// Team events: filter by TeamID.
-	if strings.HasPrefix(event.Name, "team.") || strings.HasPrefix(event.Name, "delegation.") {
+	// Team and worker stream events: filter by TeamID.
+	if strings.HasPrefix(event.Name, "team.") || strings.HasPrefix(event.Name, "delegation.") || strings.HasPrefix(event.Name, "worker.") {
 		if tid := extractTeamID(event); tid != "" {
 			return c.hasTeamAccess(tid)
 		}

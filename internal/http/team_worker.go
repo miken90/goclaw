@@ -670,8 +670,11 @@ func (h *TeamWorkerHandler) handleStream(w http.ResponseWriter, r *http.Request)
 
 	slog.Info("worker.stream.connected", "task_id", taskID, "team_id", teamID, "remote", r.RemoteAddr)
 
+	// Capture tenant context before goroutine — r.Context() is cancelled after WS upgrade.
+	tenantID := store.TenantIDFromContext(r.Context())
+
 	// Create session.
-	session := NewWorkerSession(taskID, teamID, conn, prompt, h.msgBus)
+	session := NewWorkerSession(taskID, teamID, tenantID, conn, prompt, h.msgBus)
 	h.sessionMgr.Register(taskID, session)
 
 	// Send initialize control_request immediately.
@@ -681,9 +684,6 @@ func (h *TeamWorkerHandler) handleStream(w http.ResponseWriter, r *http.Request)
 		h.sessionMgr.Unregister(taskID)
 		return
 	}
-
-	// Capture tenant context before goroutine — r.Context() is cancelled after WS upgrade.
-	tenantID := store.TenantIDFromContext(r.Context())
 
 	// Start read/write goroutines.
 	go session.writeLoop()

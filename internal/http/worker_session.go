@@ -57,6 +57,7 @@ type workerEvent struct {
 type WorkerSession struct {
 	taskID    uuid.UUID
 	teamID    uuid.UUID
+	tenantID  uuid.UUID
 	conn      *websocket.Conn
 	sessionID string // from system/init
 	model     string // from system/init
@@ -90,10 +91,11 @@ type WorkerSession struct {
 }
 
 // NewWorkerSession creates a new session for a Claude CLI --sdk-url connection.
-func NewWorkerSession(taskID, teamID uuid.UUID, conn *websocket.Conn, prompt string, eventPub bus.EventPublisher) *WorkerSession {
+func NewWorkerSession(taskID, teamID, tenantID uuid.UUID, conn *websocket.Conn, prompt string, eventPub bus.EventPublisher) *WorkerSession {
 	return &WorkerSession{
 		taskID:    taskID,
 		teamID:    teamID,
+		tenantID:  tenantID,
 		conn:      conn,
 		startedAt: time.Now(),
 		lastEvent: time.Now(),
@@ -623,7 +625,8 @@ func (ws *WorkerSession) broadcastEvent(eventType string, payload any) {
 		return
 	}
 	ws.eventPub.Broadcast(bus.Event{
-		Name:    eventType,
-		Payload: payload,
+		Name:     eventType,
+		Payload:  payload,
+		TenantID: ws.tenantID,
 	})
 }

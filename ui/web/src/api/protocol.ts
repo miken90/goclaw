@@ -255,6 +255,16 @@ export const Events = {
   SKILL_DEPS_INSTALLING: "skill.deps.installing",
   SKILL_DEPS_INSTALLED: "skill.deps.installed",
 
+  // Worker stream (external worker execution)
+  WORKER_STREAM_INIT: "worker.stream.init",
+  WORKER_STREAM_TEXT: "worker.stream.text",
+  WORKER_STREAM_TOOL: "worker.stream.tool",
+  WORKER_STREAM_TOOL_RESULT: "worker.stream.tool_result",
+  WORKER_STREAM_PROGRESS: "worker.stream.progress",
+  WORKER_STREAM_RESULT: "worker.stream.result",
+  WORKER_STREAM_ERROR: "worker.stream.error",
+  WORKER_DISCONNECTED: "worker.disconnected",
+
   HEARTBEAT: "heartbeat",
 } as const;
 
@@ -272,6 +282,10 @@ export const TEAM_RELATED_EVENTS: Set<string> = new Set([
   Events.AGENT_LINK_DELETED,
   Events.AGENT,
   Events.WORKSPACE_FILE_CHANGED,
+  Events.WORKER_STREAM_INIT, Events.WORKER_STREAM_TEXT,
+  Events.WORKER_STREAM_TOOL, Events.WORKER_STREAM_TOOL_RESULT,
+  Events.WORKER_STREAM_PROGRESS, Events.WORKER_STREAM_RESULT,
+  Events.WORKER_STREAM_ERROR, Events.WORKER_DISCONNECTED,
 ]);
 
 // Agent event subtypes (in payload.type)
