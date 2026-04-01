@@ -754,7 +754,7 @@ trap {
             Stop-Process -Id $script:activeProcess.Id -Force -ErrorAction SilentlyContinue
         }
     } catch { }
-    break
+    exit 0
 }
 
 # ── Main loop ─────────────────────────────────────────────────
