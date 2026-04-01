@@ -738,13 +738,21 @@ $script:activeProcess = $null
 $null = Register-EngineEvent PowerShell.Exiting -Action {
     $script:running = $false
     Write-Warn "Shutting down worker..."
-    Stop-Heartbeat
+    if ($script:heartbeatJob) {
+        Stop-Job -Job $script:heartbeatJob -ErrorAction SilentlyContinue
+        Remove-Job -Job $script:heartbeatJob -Force -ErrorAction SilentlyContinue
+        $script:heartbeatJob = $null
+    }
 }
 
 trap {
     $script:running = $false
     Write-Warn "Interrupted — cleaning up..."
-    Stop-Heartbeat
+    if ($script:heartbeatJob) {
+        Stop-Job -Job $script:heartbeatJob -ErrorAction SilentlyContinue
+        Remove-Job -Job $script:heartbeatJob -Force -ErrorAction SilentlyContinue
+        $script:heartbeatJob = $null
+    }
     if ($script:activeProcess -and -not $script:activeProcess.HasExited) {
         Stop-Process -Id $script:activeProcess.Id -Force -ErrorAction SilentlyContinue
     }
